@@ -1,10 +1,8 @@
 package io.iohk.metronome.storage
 
-import cats.data.State
 import cats.{~>}
-import io.iohk.metronome.storage.KVStoreOp.Put
-import io.iohk.metronome.storage.KVStoreOp.Get
-import io.iohk.metronome.storage.KVStoreOp.Delete
+import cats.data.State
+import io.iohk.metronome.storage.KVStoreOp.{Put, Get, Delete}
 
 /** A pure implementation of the Free interpreter using the State monad.
   *
@@ -36,7 +34,10 @@ class KVStoreState[N] {
                 // `KVCollection` which works with 1 kind of value;
                 // otherwise we could change the effect to allow errors:
                 // `State[Store, Either[Throwable, A]]`
-              } yield v.asInstanceOf[A]
+
+                // The following cast would work but it's not required:
+                // .asInstanceOf[A]
+              } yield v
             }
 
           case Delete(n, k) =>
@@ -49,7 +50,7 @@ class KVStoreState[N] {
 
   /** Compile a KVStore program to a State monad, which can be executed like:
     *
-    * `new InMemoryKVState[String].compile(program).run(Map.empty).value`
+    * `new KvStoreState[String].compile(program).run(Map.empty).value`
     */
   def compile[A](program: KVStore[N, A]): KVNamespacedState[A] =
     program.foldMap(stateCompiler)

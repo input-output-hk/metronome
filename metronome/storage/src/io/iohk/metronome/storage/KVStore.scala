@@ -18,15 +18,15 @@ sealed trait KVStoreOp[N, A]
 
 object KVStoreOp {
   case class Put[N, K, V](namespace: N, key: K, value: V)(implicit
-      val ck: Codec[K],
-      val cv: Codec[V]
+      val keyCodec: Codec[K],
+      val valueCodec: Codec[V]
   ) extends KVStoreOp[N, Unit]
 
   case class Get[N, K, V](namespace: N, key: K)(implicit
-      val ck: Codec[K],
-      val cv: Codec[V]
+      val keyCodec: Codec[K],
+      val valueCodec: Codec[V]
   ) extends KVStoreOp[N, Option[V]]
 
-  case class Delete[N, K](namespace: N, key: K)(implicit val ck: Codec[K])
+  case class Delete[N, K](namespace: N, key: K)(implicit val keyCodec: Codec[K])
       extends KVStoreOp[N, Unit]
 }
