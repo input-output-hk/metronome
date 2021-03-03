@@ -2,11 +2,17 @@ package io.iohk.metronome.rocksdb
 
 import cats._
 import cats.implicits._
-import cats.data.StateT
+import cats.data.ReaderT
 import cats.effect.{Resource, Sync}
 import io.iohk.metronome.storage.{KVStore, KVStoreOp}
 import io.iohk.metronome.storage.KVStoreOp.{Put, Get, Delete}
-import org.rocksdb._
+import org.rocksdb.{
+  RocksDB,
+  WriteBatch,
+  ColumnFamilyHandle,
+  WriteOptions,
+  ReadOptions
+}
 import scodec.Codec
 import scodec.bits.BitVector
 
@@ -17,8 +23,8 @@ class RocksDBStore[F[_]: Sync](
 ) {
   import RocksDBStore.{Namespace, DBQuery}
 
-  type BatchState        = (WriteOptions, WriteBatch)
-  type DBQueryState[A]   = ({ type L[A] = StateT[F, BatchState, A] })#L[A]
+  type BatchEnv          = (WriteOptions, WriteBatch)
+  type Batch[A]          = ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
   type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
 
   /** Collect writes in a batch, until we either get to the end, or there's a read.
@@ -27,56 +33,59 @@ class RocksDBStore[F[_]: Sync](
     * In the next version of RocksDB we can use transactions to make reads and writes
     * run in isolation.
     */
-  private val batchingCompiler: KVNamespacedOp ~> DBQueryState =
-    new (KVNamespacedOp ~> DBQueryState) {
-      def apply[A](fa: KVNamespacedOp[A]): DBQueryState[A] =
+  private val batchingCompiler: KVNamespacedOp ~> Batch =
+    new (KVNamespacedOp ~> Batch) {
+      def apply[A](fa: KVNamespacedOp[A]): Batch[A] =
         fa match {
           case op @ Put(n, k, v) =>
-            StateT.modifyF { case (opts, batch) =>
+            ReaderT { case (_, batch) =>
               for {
                 kbs <- encode(k)(op.keyCodec)
                 vbs <- encode(v)(op.valueCodec)
                 _ = batch.put(handles(n), kbs, vbs)
-              } yield (opts, batch)
+              } yield ()
             }
 
           case op @ Get(n, k) =>
-            StateT.modifyF(executeBatch).flatMap { _ =>
-              StateT.liftF {
-                for {
-                  kbs  <- encode(k)(op.keyCodec)
-                  mvbs <- Sync[F].delay(Option(db.get(handles(n), kbs)))
-                  mv <- mvbs match {
-                    case None =>
-                      none.pure[F]
+            val getV: ReaderT[F, BatchEnv, A] = ReaderT.liftF[F, BatchEnv, A] {
+              for {
+                kbs <- encode(k)(op.keyCodec)
+                mvbs <- Sync[F].delay[Option[Array[Byte]]] {
+                  Option(db.get(handles(n), kbs))
+                }
+                mv <- mvbs match {
+                  case None =>
+                    none.pure[F]
 
-                    case Some(bytes) =>
-                      decode(bytes)(op.valueCodec).map(_.some)
-                  }
-                } yield mv
-              }
+                  case Some(bytes) =>
+                    decode(bytes)(op.valueCodec).map(_.some)
+                }
+              } yield mv
             }
 
+            // Execute any pending deletes and puts before performing the read.
+            writeBatch >> getV
+
           case op @ Delete(n, k) =>
-            StateT.modifyF { case (opts, batch) =>
+            ReaderT { case (_, batch) =>
               for {
                 kbs <- encode(k)(op.keyCodec)
                 _ = batch.delete(handles(n), kbs)
-              } yield (opts, batch)
+              } yield ()
             }
         }
     }
 
-  private def executeBatch(state: BatchState): F[BatchState] = state match {
-    case (opts, batch) if batch.hasPut() || batch.hasDelete() =>
-      Sync[F].delay {
-        db.write(opts, batch)
-        batch.clear()
-        (opts, batch)
-      }
-    case unchanged =>
-      unchanged.pure[F]
-  }
+  private val writeBatch: ReaderT[F, BatchEnv, Unit] =
+    ReaderT {
+      case (opts, batch) if batch.hasPut() || batch.hasDelete() =>
+        Sync[F].delay {
+          db.write(opts, batch)
+          batch.clear()
+        }
+      case _ =>
+        ().pure[F]
+    }
 
   private def encode[T](value: T)(implicit ev: Codec[T]): F[Array[Byte]] =
     Sync[F].fromTry(ev.encode(value).map(_.toByteArray).toTry)
@@ -88,21 +97,21 @@ class RocksDBStore[F[_]: Sync](
     Resource.fromAutoCloseable[F, R](Sync[F].delay(mk))
 
   /** Execute a program that writes and potentially reads as well. */
-  def update[A](program: KVStore[Namespace, A]): F[A] = {
-    val compilerR = for {
+  def update[A](program: KVStore[Namespace, A]): DBQuery[F, A] = {
+    val env = for {
       opts  <- fromAutoCloseable(new WriteOptions())
       batch <- fromAutoCloseable(new WriteBatch())
     } yield (opts, batch)
 
-    compilerR.use { state =>
-      program.foldMap(batchingCompiler).run(state).flatMap { case (state, a) =>
-        executeBatch(state).as(a)
-      }
+    env.use {
+      (program.foldMap(batchingCompiler) <* writeBatch).run
     }
   }
 
-  /** Execute a program that only has reads. */
-  def query[A](program: KVStore[Namespace, A]): F[A] = ???
+  /** Execute a program that only has reads.
+    * If a write is found, the program switches to `update`.
+    */
+  def read[A](program: KVStore[Namespace, A]): DBQuery[F, A] = ???
 }
 
 object RocksDBStore {
