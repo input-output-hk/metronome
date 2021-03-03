@@ -66,10 +66,37 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.typelevel::cats-effect:${VersionOf.cats}"
     )
 
+    override def scalacOptions = Seq(
+      "-unchecked",
+      "-deprecation",
+      "-feature",
+      "-Xfatal-warnings",
+      "-encoding",
+      "utf-8"
+    ) ++ {
+      crossScalaVersion.take(4) match {
+        case "2.12" =>
+          // These options don't work well with 2.13
+          Seq(
+            "-Xlint:unsound-match",
+            "-Ywarn-inaccessible",
+            "-Ywarn-unused-import",
+            "-Ypartial-unification", // Required for the `>>` syntax.
+            "-Ywarn-value-discard",
+            "-language:higherKinds",
+            "-language:postfixOps"
+          )
+        case "2.13" => Nil
+      }
+    }
+
     // `extends Tests` uses the context of the module in which it's defined
     trait TestModule extends Tests {
       override def artifactName =
         removeCrossVersion(super.artifactName())
+
+      override def scalacOptions =
+        SubModule.this.scalacOptions
 
       override def testFrameworks =
         Seq("org.scalatest.tools.Framework")
