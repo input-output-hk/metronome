@@ -255,6 +255,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.rocksdb:rocksdbjni:${VersionOf.rocksdb}"
     )
 
-    object test extends TestModule
+    object test extends TestModule {
+      override def ivyDeps = super.ivyDeps() ++ Agg(
+        ivy"io.monix::monix:${VersionOf.monix}"
+      )
+    }
   }
 }
