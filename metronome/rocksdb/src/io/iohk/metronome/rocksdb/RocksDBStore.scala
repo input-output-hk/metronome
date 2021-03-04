@@ -27,6 +27,7 @@ import scodec.Codec
 import scodec.bits.BitVector
 import scala.collection.mutable
 import java.nio.file.Path
+import scala.annotation.nowarn
 
 class RocksDBStore[F[_]: Sync](
     db: RocksDB,
@@ -236,7 +237,16 @@ object RocksDBStore {
       config: Config,
       namespaces: Seq[Namespace]
   ): Resource[F, RocksDBStore[F]] = {
-    import scala.collection.JavaConverters._
+
+    @nowarn // JavaConverters are deprecated in 2.13
+    def open(
+        opts: DBOptions,
+        cfds: Seq[ColumnFamilyDescriptor],
+        cfhs: mutable.Buffer[ColumnFamilyHandle]
+    ): RocksDB = {
+      import scala.collection.JavaConverters._
+      RocksDB.open(opts, config.path.toString, cfds.asJava, cfhs.asJava)
+    }
 
     // There is a specific order for closing RocksDB with column families described in
     // https://github.com/facebook/rocksdb/wiki/RocksJava-Basics#opening-a-database-with-column-families
@@ -282,11 +292,10 @@ object RocksDBStore {
       columnFamilyHandleBuffer = mutable.Buffer.empty[ColumnFamilyHandle]
 
       db <- autoCloseableR[F, RocksDB] {
-        RocksDB.open(
+        open(
           dbOpts,
-          config.path.toString,
-          cfDescriptors.asJava,
-          columnFamilyHandleBuffer.asJava
+          cfDescriptors,
+          columnFamilyHandleBuffer
         )
       }
 

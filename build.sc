@@ -25,12 +25,14 @@ object VersionOf {
   val `scodec-bits` = "1.1.12"
 }
 
-object metronome extends Cross[MetronomeModule]("2.12.10", "2.13.4")
+// Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
+// warnings that come up in 2.13 but are too awkward to work around.
+object metronome extends Cross[MetronomeModule]("2.12.13", "2.13.4")
 
 class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
-  // Get rid of the `metronome-2.12.10-` part from the artifact name. The JAR name suffix will shows the Scala version.
-  // Check with `mill show metronome[2.12.10].__.artifactName` or `mill __.publishLocal`.
+  // Get rid of the `metronome-2.13.4-` part from the artifact name. The JAR name suffix will shows the Scala version.
+  // Check with `mill show metronome[2.13.4].__.artifactName` or `mill __.publishLocal`.
   private def removeCrossVersion(artifactName: String): String =
     "metronome-" + artifactName.split("-").drop(2).mkString("-")
 
@@ -86,7 +88,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
             "-language:higherKinds",
             "-language:postfixOps"
           )
-        case "2.13" => Nil
+        case "2.13" =>
+          Seq()
       }
     }
 

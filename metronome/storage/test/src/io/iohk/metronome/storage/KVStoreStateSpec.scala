@@ -1,6 +1,5 @@
 package io.iohk.metronome.storage
 
-import org.scalatest._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.codecs.implicits._
