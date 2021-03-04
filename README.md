@@ -28,3 +28,51 @@ The BFT service delegates checkpoint proposal and candidate validation to the Ch
 ![](docs/master-based.png)
 
 When a winner is elected a Checkpoint Certificate is compiled, comprising of the checkpointed data (a block identity, or something more complex) as well as a witness for the BFT agreement, which proves that the decision is final and cannot be rolled back. Because of the need for this proof, low latency BFT algorithms such as HotStuff are preferred.
+
+
+## Build
+
+The project is built using [mill](https://github.com/com-lihaoyi/mill), which works fine with [Metals](https://scalameta.org/metals/docs/build-tools/mill.html).
+
+To compile everything, use the `__` wildcard:
+
+```console
+mill __.compile
+```
+
+The project is set up to cross build to all Scala versions for downstream projects that need to import the libraries. To build any specific version, put them in square brackets:
+
+```console
+mill metronome[2.12.10].checkpointing.app.compile
+```
+
+To run tests, use the wild cards again and the `.test` postix:
+
+```console
+mill __.test
+mill metronome[2.12.10].checkpointing.app.test.test
+```
+
+To run a single test class, use the `.single` method with the full path to the spec:
+
+```console
+mill __.checkpointing.app.test.single io.iohk.metronome.app.config.ConfigSpec
+```
+
+### Formatting the codebase
+
+Please configure your editor to use `scalafmt` on save. CI will be configured to check formatting.
+
+
+## Publishing
+
+We're using the [VersionFile](https://com-lihaoyi.github.io/mill/page/contrib-modules.html#version-file) plugin to manage versions.
+
+The initial version has been written to the file without newlines:
+```console
+echo -n "0.1.0-SNAPSHOT" > versionFile/version
+```
+
+Builds on `develop` will publish the snapshot version to Sonatype, which can be overwritten if the version number isn't updated.
+
+During [publishing](https://com-lihaoyi.github.io/mill/page/common-project-layouts.html#publishing) on `master` we'll use `mill versionFile.setReleaseVersion` to remove the `-SNAPSHOT` postfix and make a release. After that the version number should be bumped on `develop`, e.g. `mill versionFile.setNextVersion --bump minor`.
