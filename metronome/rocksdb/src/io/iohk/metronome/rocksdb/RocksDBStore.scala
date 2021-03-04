@@ -7,6 +7,7 @@ import cats.effect.{Resource, Sync}
 import cats.free.Free.liftF
 import io.iohk.metronome.storage.{KVStore, KVStoreOp}
 import io.iohk.metronome.storage.KVStoreOp.{Put, Get, Delete}
+import java.util.concurrent.locks.ReentrantReadWriteLock
 import org.rocksdb.{
   RocksDB,
   WriteBatch,
@@ -20,13 +21,34 @@ import scodec.bits.BitVector
 class RocksDBStore[F[_]: Sync](
     db: RocksDB,
     handles: Map[RocksDBStore.Namespace, ColumnFamilyHandle],
-    readOptions: ReadOptions
+    readOptions: ReadOptions,
+    rwlock: ReentrantReadWriteLock
 ) {
   import RocksDBStore.{Namespace, DBQuery}
 
   type BatchEnv          = (WriteOptions, WriteBatch)
   type Batch[A]          = ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
   type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
+
+  private val lockRead    = Sync[F].delay(rwlock.readLock().lock())
+  private val unlockRead  = Sync[F].delay(rwlock.readLock().unlock())
+  private val lockWrite   = Sync[F].delay(rwlock.writeLock().lock())
+  private val unlockWrite = Sync[F].delay(rwlock.writeLock().unlock())
+
+  private def withReadLock[A](fa: F[A]): F[A] =
+    Sync[F].bracket(lockRead)(_ => fa)(_ => unlockRead)
+
+  private def withWriteLock[A](fa: F[A]): F[A] =
+    Sync[F].bracket(lockWrite)(_ => fa)(_ => unlockWrite)
+
+  // See here for the rules up upgrading/downgrading:
+  // https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
+  private def withLockUpgrade[A](fa: F[A]): F[A] =
+    Sync[F].bracket {
+      unlockRead >> lockWrite
+    }(_ => fa) { _ =>
+      lockRead >> unlockWrite
+    }
 
   /** Execute the accumulated write operations in a batch. */
   private val writeBatch: ReaderT[F, BatchEnv, Unit] =
@@ -98,8 +120,10 @@ class RocksDBStore[F[_]: Sync](
           case op @ Get(_, _) =>
             read(op)
           case op =>
-            runWithBatching {
-              liftF[KVNamespacedOp, A](op)
+            withLockUpgrade {
+              runWithBatchingNoLock {
+                liftF[KVNamespacedOp, A](op)
+              }
             }
         }
     }
@@ -113,11 +137,9 @@ class RocksDBStore[F[_]: Sync](
   private def fromAutoCloseable[R <: AutoCloseable](mk: => R): Resource[F, R] =
     Resource.fromAutoCloseable[F, R](Sync[F].delay(mk))
 
-  /** Execute a program that writes and potentially reads as well.
-    *
-    * Batches are executed atomically.
-    */
-  def runWithBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] = {
+  private def runWithBatchingNoLock[A](
+      program: KVStore[Namespace, A]
+  ): DBQuery[F, A] = {
     val env = for {
       opts  <- fromAutoCloseable(new WriteOptions())
       batch <- fromAutoCloseable(new WriteBatch())
@@ -128,10 +150,34 @@ class RocksDBStore[F[_]: Sync](
     }
   }
 
-  /** Mostly meant for reading, but if a write is found it's performed as a single element batch. */
-  def runWithoutBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] = {
+  private def runWithoutBatchingNoLock[A](
+      program: KVStore[Namespace, A]
+  ): DBQuery[F, A] =
     program.foldMap(nonBatchingCompiler)
-  }
+
+  /** Mostly meant for writing batches atomically.
+    *
+    * If a read is found the accumulated
+    * writes are performed, then the read happens, before batching carries on; this
+    * breaks the atomicity of writes.
+    *
+    * A write lock is taken out to make sure other reads are not interleaved.
+    */
+  def runWithBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
+    withWriteLock {
+      runWithBatchingNoLock(program)
+    }
+
+  /** Mostly meant for reading.
+    *
+    * If a write is found, it's performed as a single element batch.
+    *
+    * A read lock is taken out to make sure writes don't affect it.
+    */
+  def runWithoutBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
+    withReadLock {
+      runWithoutBatchingNoLock(program)
+    }
 }
 
 object RocksDBStore {
