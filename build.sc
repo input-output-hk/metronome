@@ -49,7 +49,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       versionControl = VersionControl.github("input-output-hk", "metronome"),
       // Add yourself if you make a PR!
       developers = Seq(
-        Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh")
+        Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh"),
+        Developer("lemastero", "Piotr Paradzinski", "https://github.com/lemastero")
       )
     )
   }
