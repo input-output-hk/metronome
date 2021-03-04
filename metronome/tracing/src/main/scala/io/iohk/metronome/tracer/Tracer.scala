@@ -11,10 +11,10 @@ trait Tracer[F[_], -A] extends Function[A, F[Unit]]
 object Tracer {
 
   /**
-   * If you know:
-   * - how to enrich type A that is traced
-   * - how to squeeze B's to create A's (possibly enrich B with extra stuff, or forget some details)
-   * then you have Tracer for B
+   * If you know how to trace A and
+   * - how to enrich A to get value B
+   * - how to forget some details about B to get A
+   * then you can create Tracer for B
    */
   implicit def contraTracer[F[_]]: Contravariant[Tracer[F, *]] =
     new Contravariant[Tracer[F, *]] {
@@ -78,7 +78,7 @@ object TracerSyntax {
 
   implicit class TracerOps[F[_], A](val tracer: Tracer[F, A]) extends AnyVal {
 
-    /** Trace value a using tracer tracer */
+    /** Trace value a using tracer */
     def trace(a: A): F[Unit] = tracer(a)
 
     /** contravariant Kleisli composition:
