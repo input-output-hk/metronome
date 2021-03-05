@@ -49,7 +49,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       versionControl = VersionControl.github("input-output-hk", "metronome"),
       // Add yourself if you make a PR!
       developers = Seq(
-        Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh")
+        Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh"),
+        Developer("lemastero", "Piotr Paradzinski", "https://github.com/lemastero")
       )
     )
   }
@@ -98,6 +99,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   object tracing extends SubModule with Publishing {
     override def description: String =
       "Abstractions for contravariant tracing."
+
+    def scalacPluginIvyDeps = Agg(ivy"org.typelevel:::kind-projector:0.11.3")
   }
 
   /** Additional crypto utilities such as threshold signature. */
