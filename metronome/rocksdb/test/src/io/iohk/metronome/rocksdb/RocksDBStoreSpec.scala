@@ -8,6 +8,7 @@ import monix.eval.Task
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Properties, Gen, Prop, Test, Arbitrary}
 import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.Prop.forAll
 import scala.util.{Try, Success}
 import scala.concurrent.duration._
 import scala.annotation.nowarn
@@ -23,8 +24,57 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
   override def overrideParameters(p: Test.Parameters): Test.Parameters =
     p.withMinSuccessfulTests(10).withMaxSize(100)
 
-  property("RocksDBStoreSpec") = RocksDBStoreCommands.property()
+  // Equivalent to the in-memory model.
+  property("equivalent") = RocksDBStoreCommands.property()
 
+  // Run two programs concurrently.
+  property("linearizable") = forAll {
+    import RocksDBStoreCommands._
+    for {
+      empty <- genInitialState
+      // Generate some initial data. Puts are the only useful op.
+      init <- Gen.listOfN(50, genPut(empty)).map { ops =>
+        RunProgram(batching = true, ops.toList.sequence)
+      }
+      state = init.nextState(empty)
+      // The first program is batching, it takes a write lock.
+      prog1 <- genProgram(state).map(_.copy(batching = true))
+      // The second program is not batching, it takes a read lock.
+      prog2 <- genProgram(state).map(_.copy(batching = false))
+    } yield (init, state, prog1, prog2)
+  } { case (init, state, prog1, prog2) =>
+    import RocksDBStoreCommands._
+
+    val sut = newSut(state)
+    try {
+      // Connect to the database.
+      ToggleConnected.run(sut)
+      // Initialize the database.
+      init.run(sut)
+
+      // Run them concurrently. They should be serialised.
+      val (result1, result2) = await {
+        Task.parMap2(Task(prog1.run(sut)), Task(prog2.run(sut)))((_, _))
+      }
+
+      // Overall the results should correspond to either prog1 ++ prog2, or prog2 ++ prog1.
+      val prog12 =
+        RunProgram(false, (prog1.program, prog2.program).mapN(_ ++ _))
+      val prog21 =
+        RunProgram(false, (prog2.program, prog1.program).mapN(_ ++ _))
+
+      // One of them should have run first.
+      val prop1 = prog1.postCondition(state, Success(result1))
+      val prop2 = prog2.postCondition(state, Success(result2))
+      // The other should run second, on top of the changes from the first.
+      val prop12 = prog12.postCondition(state, Success(result1 ++ result2))
+      val prop21 = prog21.postCondition(state, Success(result2 ++ result1))
+
+      (prop1 && prop12) || (prop2 && prop21)
+    } finally {
+      destroySut(sut)
+    }
+  }
 }
 
 object RocksDBStoreCommands extends Commands {
@@ -75,7 +125,7 @@ object RocksDBStoreCommands extends Commands {
   type State = Model
   type Sut   = Database
 
-  private def await[T](task: Task[T]): T = {
+  def await[T](task: Task[T]): T = {
     import monix.execution.Scheduler.Implicits.global
     task.runSyncUnsafe(timeout = 10.seconds)
   }
@@ -134,7 +184,7 @@ object RocksDBStoreCommands extends Commands {
   override def genInitialState: Gen[State] =
     for {
       n  <- Gen.choose(3, 10)
-      ns <- Gen.listOfN(n, arbitrary[Array[Byte]])
+      ns <- Gen.listOfN(n, arbitrary[Array[Byte]].suchThat(_.nonEmpty))
       namespaces = ns.map(_.toIndexedSeq).toIndexedSeq
     } yield Model(
       isConnected = false,
@@ -159,15 +209,17 @@ object RocksDBStoreCommands extends Commands {
   def genProgram(state: State): Gen[RunProgram] =
     for {
       batching <- arbitrary[Boolean]
-      n        <- Gen.choose(0, 10)
+      n        <- Gen.choose(0, 20)
       ops <- Gen.listOfN(
         n,
-        Gen.oneOf(
-          genPut(state),
-          genPutExisting(state),
-          genDel(state),
-          genGet(state),
-          genGetExisting(state)
+        Gen.frequency(
+          5 -> genPut(state),
+          1 -> genPutExisting(state),
+          1 -> genDel(state),
+          2 -> genDelExisting(state),
+          1 -> genGet(state),
+          5 -> genGetExisting(state),
+          1 -> genGetDeleted(state)
         )
       )
       program = ops.toList.sequence
@@ -185,7 +237,7 @@ object RocksDBStoreCommands extends Commands {
   implicit val arbTestRecord: Arbitrary[TestRecord] = Arbitrary {
     for {
       id    <- arbitrary[ByteVector]
-      name  <- arbitrary[String]
+      name  <- Gen.alphaNumStr
       value <- arbitrary[Int]
     } yield TestRecord(id, name, value)
   }
@@ -194,7 +246,7 @@ object RocksDBStoreCommands extends Commands {
     arbitrary[Coll] flatMap {
       case Coll0 =>
         for {
-          k <- arbitrary[String]
+          k <- Gen.alphaLowerStr.suchThat(_.nonEmpty)
           v <- arbitrary[Int]
         } yield state.coll0.put(k, v)
 
@@ -206,7 +258,7 @@ object RocksDBStoreCommands extends Commands {
 
       case Coll2 =>
         for {
-          k <- arbitrary[ByteVector]
+          k <- arbitrary[ByteVector].suchThat(_.nonEmpty)
           v <- arbitrary[TestRecord]
         } yield state.coll2.put(k, v)
     } map {
@@ -380,7 +432,10 @@ object RocksDBStoreCommands extends Commands {
     type Result = List[Any]
 
     def run(sut: Sut): Result = {
-      val db = sut.maybeConnection.get.value
+      val db = sut.maybeConnection
+        .getOrElse(sys.error("The database is not connected."))
+        .value
+
       await {
         if (batching) {
           db.runWithBatching(program)
