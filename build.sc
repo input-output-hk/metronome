@@ -72,9 +72,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       "-unchecked",
       "-deprecation",
       "-feature",
-      "-Xfatal-warnings",
       "-encoding",
-      "utf-8"
+      "utf-8",
+      "-Xfatal-warnings",
+      "-Ywarn-value-discard"
     ) ++ {
       crossScalaVersion.take(4) match {
         case "2.12" =>
@@ -84,7 +85,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
             "-Ywarn-inaccessible",
             "-Ywarn-unused-import",
             "-Ypartial-unification", // Required for the `>>` syntax.
-            "-Ywarn-value-discard",
             "-language:higherKinds",
             "-language:postfixOps"
           )
@@ -102,7 +102,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         SubModule.this.scalacOptions
 
       override def testFrameworks =
-        Seq("org.scalatest.tools.Framework")
+        Seq(
+          "org.scalatest.tools.Framework",
+          "org.scalacheck.ScalaCheckFramework"
+        )
 
       // It may be useful to see logs in tests.
       override def moduleDeps: Seq[JavaModule] =

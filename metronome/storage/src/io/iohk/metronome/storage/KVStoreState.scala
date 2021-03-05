@@ -11,7 +11,9 @@ import io.iohk.metronome.storage.KVStoreOp.{Put, Get, Delete}
 class KVStoreState[N] {
 
   // Ignoring the Codec for the in-memory use case.
-  type Store                = Map[N, Map[Any, Any]]
+  type Store = Map[N, Map[Any, Any]]
+  // Type aliases to support the `~>` transformation with types that
+  // only have 1 generic type argument `A`.
   type KVNamespacedState[A] = State[Store, A]
   type KVNamespacedOp[A]    = ({ type L[A] = KVStoreOp[N, A] })#L[A]
 

@@ -37,10 +37,21 @@ class RocksDBStore[F[_]: Sync](
 ) {
   import RocksDBStore.{Namespace, DBQuery, autoCloseableR}
 
-  type BatchEnv          = (WriteOptions, WriteBatch)
+  // Batch execution needs these variables for accumulating operations
+  // and executing them against the database. They are going to be
+  // passed along in a Reader monad to the Free compiler.
+  type BatchEnv = (WriteOptions, WriteBatch)
+  // Type aliases to support the `~>` transformation with types that
+  // only have 1 generic type argument `A`.
   type Batch[A]          = ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
   type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
 
+  // Batches can interleave multiple reads (and writes);
+  // to make sure they see a consistent view, writes are
+  // isolated from reads via locks, so for example if we
+  // read an ID, then retrieve the record from a different
+  // collection, we can be sure it hasn't been deleted in
+  // between the two operations.
   private val lockRead    = Sync[F].delay(rwlock.readLock().lock())
   private val unlockRead  = Sync[F].delay(rwlock.readLock().unlock())
   private val lockWrite   = Sync[F].delay(rwlock.writeLock().lock())
@@ -52,6 +63,9 @@ class RocksDBStore[F[_]: Sync](
   private def withWriteLock[A](fa: F[A]): F[A] =
     Sync[F].bracket(lockWrite)(_ => fa)(_ => unlockWrite)
 
+  // In case there's a write operation among the reads and we haven't
+  // taken out a write lock, we can upgrade the read lock for the duration
+  // of the write, then downgrade it back to read when we're done.
   // See here for the rules up upgrading/downgrading:
   // https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
   private def withLockUpgrade[A](fa: F[A]): F[A] =
@@ -271,9 +285,11 @@ object RocksDBStore {
           .setTableFormatConfig(tableConf)
       }
 
-      cfDescriptors =
-        new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts) +:
-          namespaces.map(n => new ColumnFamilyDescriptor(n.toArray, cfOpts))
+      allNamespaces = RocksDB.DEFAULT_COLUMN_FAMILY.toIndexedSeq +: namespaces
+
+      cfDescriptors = allNamespaces.map { n =>
+        new ColumnFamilyDescriptor(n.toArray, cfOpts)
+      }
 
       dbOpts <- autoCloseableR[F, DBOptions] {
         new DBOptions()
@@ -300,13 +316,18 @@ object RocksDBStore {
       }
 
       columnFamilyHandles <- Resource.make(
-        Sync[F].delay {
-          assert(columnFamilyHandleBuffer.size == namespaces.size)
-          (namespaces zip columnFamilyHandleBuffer).toMap
-        }
-      ) { handles =>
-        Sync[F].delay(handles.values.foreach(_.close()))
+        (allNamespaces zip columnFamilyHandleBuffer).toMap.pure[F]
+      ) { _ =>
+        // Make sure all handles are closed, and this happens before the DB is closed.
+        Sync[F].delay(columnFamilyHandleBuffer.foreach(_.close()))
       }
+
+      // Sanity check; if an exception is raised everything will be closed down.
+      _ = assert(
+        columnFamilyHandleBuffer.size == allNamespaces.size,
+        "Should have created a column family handle for each namespace." +
+          s" Expected ${allNamespaces.size}; got ${columnFamilyHandleBuffer.size}."
+      )
 
       store = new RocksDBStore[F](
         db,
