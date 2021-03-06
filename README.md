@@ -56,7 +56,7 @@ mill --watch metronome[2.13.4].rocksdb.test
 To run a single test class, use the `.single` method with the full path to the spec:
 
 ```console
-mill __.checkpointing.app.test.single io.iohk.metronome.app.config.ConfigSpec
+mill __.storage.test.single io.iohk.metronome.storage.KVStoreStateSpec
 ```
 
 ### Formatting the codebase

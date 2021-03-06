@@ -15,13 +15,15 @@ class KVStoreStateSpec extends AnyFlatSpec with Matchers {
     val collA = new KVCollection[Namespace, Int, RecordA](namespace = "a")
     val collB = new KVCollection[Namespace, String, RecordB](namespace = "b")
 
-    val program = for {
+    val program: KVStore[Namespace, Option[RecordA]] = for {
       _ <- collA.put(1, RecordA("one"))
       _ <- collB.put("two", RecordB(2))
-      _ <- collB.get("three")
+      b <- collB.get("three")
       _ <- collB.put("three", RecordB(3))
       _ <- collB.delete("two")
-      _ <- collA.put(4, RecordA("four"))
+      _ <-
+        if (b.isEmpty) collA.put(4, RecordA("four"))
+        else KVStore.unit[Namespace]
       a <- collA.get(1)
     } yield a
 

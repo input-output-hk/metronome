@@ -1,7 +1,5 @@
 package io.iohk.metronome.storage
 
-import cats.free.Free
-import cats.free.Free.liftF
 import scodec.Codec
 
 /** Storage for a specific type of data, e.g. blocks, in a given namespace.
@@ -11,32 +9,21 @@ import scodec.Codec
   */
 class KVCollection[N, K: Codec, V: Codec](namespace: N) {
 
-  import KVStoreOp._
-
-  type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[N, A] })#L[A]
+  private implicit val kvs = KVStore.instance[N]
 
   /** Put a value under a key. */
   def put(key: K, value: V): KVStore[N, Unit] =
-    liftF[KVNamespacedOp, Unit](
-      Put[N, K, V](namespace, key, value)
-    )
+    KVStore[N].put(namespace, key, value)
 
   /** Get a value by key, if it exists. */
   def get(key: K): KVStore[N, Option[V]] =
-    liftF[KVNamespacedOp, Option[V]](
-      Get[N, K, V](namespace, key)
-    )
+    KVStore[N].get(namespace, key)
 
   /** Delete a value by key. */
   def delete(key: K): KVStore[N, Unit] =
-    liftF[KVNamespacedOp, Unit](
-      Delete[N, K](namespace, key)
-    )
+    KVStore[N].delete(namespace, key)
 
   /** Update a key by getting the value and applying a function on it, if the value exists. */
   def update(key: K, f: V => V): KVStore[N, Unit] =
-    get(key).flatMap {
-      case None    => Free.pure[KVNamespacedOp, Unit](())
-      case Some(v) => put(key, f(v))
-    }
+    KVStore[N].update(namespace, key, f)
 }
