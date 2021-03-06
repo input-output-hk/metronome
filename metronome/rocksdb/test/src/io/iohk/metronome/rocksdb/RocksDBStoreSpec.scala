@@ -34,7 +34,7 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
       empty <- genInitialState
       // Generate some initial data. Puts are the only useful op.
       init <- Gen.listOfN(50, genPut(empty)).map { ops =>
-        RunProgram(batching = true, ops.toList.sequence)
+        RunProgram(ops.toList.sequence, batching = true)
       }
       state = init.nextState(empty)
       // The first program is batching, it takes a write lock.
@@ -59,9 +59,9 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
 
       // Overall the results should correspond to either prog1 ++ prog2, or prog2 ++ prog1.
       val prog12 =
-        RunProgram(false, (prog1.program, prog2.program).mapN(_ ++ _))
+        RunProgram((prog1.program, prog2.program).mapN(_ ++ _))
       val prog21 =
-        RunProgram(false, (prog2.program, prog1.program).mapN(_ ++ _))
+        RunProgram((prog2.program, prog1.program).mapN(_ ++ _))
 
       // One of them should have run first.
       val prop1 = prog1.postCondition(state, Success(result1))
@@ -205,7 +205,7 @@ object RocksDBStoreCommands extends Commands {
         (1, Gen.const(ToggleConnected))
       )
 
-  /** Generate a */
+  /** Generate a sequence of writes and reads. */
   def genProgram(state: State): Gen[RunProgram] =
     for {
       batching <- arbitrary[Boolean]
@@ -213,19 +213,18 @@ object RocksDBStoreCommands extends Commands {
       ops <- Gen.listOfN(
         n,
         Gen.frequency(
-          5 -> genPut(state),
-          1 -> genPutExisting(state),
-          1 -> genDel(state),
-          2 -> genDelExisting(state),
-          1 -> genGet(state),
-          5 -> genGetExisting(state),
-          1 -> genGetDeleted(state)
+          20 -> genPut(state),
+          20 -> genPutExisting(state),
+          5  -> genDel(state),
+          15 -> genDelExisting(state),
+          5  -> genGet(state),
+          30 -> genGetExisting(state),
+          5  -> genGetDeleted(state)
         )
       )
       program = ops.toList.sequence
-    } yield RunProgram(batching, program)
+    } yield RunProgram(program, batching)
 
-  /** Pick a collection. */
   implicit val arbColl: Arbitrary[Coll] = Arbitrary {
     Gen.oneOf(Coll0, Coll1, Coll2)
   }
@@ -279,12 +278,10 @@ object RocksDBStoreCommands extends Commands {
               arbitrary[Int].map { v =>
                 state.coll0.put(k.asInstanceOf[String], v)
               }
-
             case Coll1 =>
               arbitrary[ByteVector].map { v =>
                 state.coll1.put(k.asInstanceOf[Int], v)
               }
-
             case Coll2 =>
               arbitrary[TestRecord].map { v =>
                 state.coll2.put(k.asInstanceOf[ByteVector], v)
@@ -297,10 +294,8 @@ object RocksDBStoreCommands extends Commands {
     arbitrary[Coll] flatMap {
       case Coll0 =>
         arbitrary[String].map(state.coll0.delete)
-
       case Coll1 =>
         arbitrary[Int].map(state.coll1.delete)
-
       case Coll2 =>
         arbitrary[ByteVector].map(state.coll2.delete)
     } map {
@@ -319,10 +314,8 @@ object RocksDBStoreCommands extends Commands {
           op = c match {
             case Coll0 =>
               state.coll0.delete(k.asInstanceOf[String])
-
             case Coll1 =>
               state.coll1.delete(k.asInstanceOf[Int])
-
             case Coll2 =>
               state.coll2.delete(k.asInstanceOf[ByteVector])
           }
@@ -333,10 +326,8 @@ object RocksDBStoreCommands extends Commands {
     arbitrary[Coll] flatMap {
       case Coll0 =>
         arbitrary[String].map(state.coll0.get)
-
       case Coll1 =>
         arbitrary[Int].map(state.coll1.get)
-
       case Coll2 =>
         arbitrary[ByteVector].map(state.coll2.get)
     } map {
@@ -355,10 +346,8 @@ object RocksDBStoreCommands extends Commands {
           op = c match {
             case Coll0 =>
               state.coll0.get(k.asInstanceOf[String])
-
             case Coll1 =>
               state.coll1.get(k.asInstanceOf[Int])
-
             case Coll2 =>
               state.coll2.get(k.asInstanceOf[ByteVector])
           }
@@ -387,10 +376,8 @@ object RocksDBStoreCommands extends Commands {
           op = c match {
             case Coll0 =>
               state.coll0.get(k.asInstanceOf[String])
-
             case Coll1 =>
               state.coll1.get(k.asInstanceOf[Int])
-
             case Coll2 =>
               state.coll2.get(k.asInstanceOf[ByteVector])
           }
@@ -425,8 +412,8 @@ object RocksDBStoreCommands extends Commands {
   }
 
   case class RunProgram(
-      batching: Boolean,
-      program: KVStore[Namespace, List[Any]]
+      program: KVStore[Namespace, List[Any]],
+      batching: Boolean = false
   ) extends Command {
     // Collect all results from a batch of execution steps.
     type Result = List[Any]
