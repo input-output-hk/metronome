@@ -209,12 +209,12 @@ object RocksDBStoreCommands extends Commands {
   def genProgram(state: State): Gen[RunProgram] =
     for {
       batching <- arbitrary[Boolean]
-      n        <- Gen.choose(0, 20)
+      n        <- Gen.choose(0, 30)
       ops <- Gen.listOfN(
         n,
         Gen.frequency(
-          20 -> genPut(state),
-          20 -> genPutExisting(state),
+          10 -> genPut(state),
+          30 -> genPutExisting(state),
           5  -> genDel(state),
           15 -> genDelExisting(state),
           5  -> genGet(state),
