@@ -92,7 +92,7 @@ class RocksDBStore[F[_]: Sync](
     for {
       kbs <- encode(op.key)(op.keyCodec)
       mvbs <- Sync[F].delay[Option[Array[Byte]]] {
-        Option(db.get(handles(op.namespace), kbs))
+        Option(db.get(handles(op.namespace), readOptions, kbs))
       }
       mv <- mvbs match {
         case None =>
