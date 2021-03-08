@@ -26,7 +26,7 @@ import scodec.codecs.implicits._
 object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
 
   override def overrideParameters(p: Test.Parameters): Test.Parameters =
-    p.withMinSuccessfulTests(10).withMaxSize(100)
+    p.withMinSuccessfulTests(20).withMaxSize(100)
 
   // Equivalent to the in-memory model.
   property("equivalent") = RocksDBStoreCommands.property()
@@ -232,7 +232,7 @@ object RocksDBStoreCommands extends Commands {
       program = ops.toList.sequence
     } yield ProgramRW(program, batching)
 
-  /** Generate a sequence of writes and reads. */
+  /** Generate a read-only operations. */
   def genProgramRO(state: State): Gen[ProgramR] =
     for {
       n <- Gen.choose(0, 10)
@@ -409,11 +409,11 @@ object RocksDBStoreCommands extends Commands {
   def genRead(state: State): Gen[KVStoreRead[Namespace, Any]] =
     arbitrary[Coll] flatMap {
       case Coll0 =>
-        arbitrary[String].map(state.coll0.readonly.get)
+        arbitrary[String].map(state.coll0.read)
       case Coll1 =>
-        arbitrary[Int].map(state.coll1.readonly.get)
+        arbitrary[Int].map(state.coll1.read)
       case Coll2 =>
-        arbitrary[ByteVector].map(state.coll2.readonly.get)
+        arbitrary[ByteVector].map(state.coll2.read)
     } map {
       _.map(_.asInstanceOf[Any])
     }
@@ -429,11 +429,11 @@ object RocksDBStoreCommands extends Commands {
           k <- Gen.oneOf(state.storeOf(c).keySet)
           op = c match {
             case Coll0 =>
-              state.coll0.readonly.get(k.asInstanceOf[String])
+              state.coll0.read(k.asInstanceOf[String])
             case Coll1 =>
-              state.coll1.readonly.get(k.asInstanceOf[Int])
+              state.coll1.read(k.asInstanceOf[Int])
             case Coll2 =>
-              state.coll2.readonly.get(k.asInstanceOf[ByteVector])
+              state.coll2.read(k.asInstanceOf[ByteVector])
           }
         } yield op.map(_.asInstanceOf[Any])
     }

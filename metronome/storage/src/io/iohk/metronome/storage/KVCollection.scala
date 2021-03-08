@@ -12,21 +12,18 @@ class KVCollection[N, K: Codec, V: Codec](namespace: N) {
   private implicit val kvsRW = KVStore.instance[N]
   private implicit val kvsRO = KVStoreRead.instance[N]
 
-  class ReadOnly {
-
-    /** Get a value by key, if it exists. */
-    def get(key: K): KVStoreRead[N, Option[V]] =
-      KVStoreRead[N].get(namespace, key)
-  }
-
-  /** Project a read-only interface. */
-  val readonly = new ReadOnly
+  /** Get a value by key, if it exists, for a read-only operation. */
+  def read(key: K): KVStoreRead[N, Option[V]] =
+    KVStoreRead[N].read(namespace, key)
 
   /** Put a value under a key. */
   def put(key: K, value: V): KVStore[N, Unit] =
     KVStore[N].put(namespace, key, value)
 
-  /** Get a value by key, if it exists. */
+  /** Get a value by key, if it exists, for potentially doing
+    * updates based on its value, i.e. the result can be composed
+    * with `put` and `delete`.
+    */
   def get(key: K): KVStore[N, Option[V]] =
     KVStore[N].get(namespace, key)
 

@@ -24,7 +24,7 @@ class KVStoreStateSpec extends AnyFlatSpec with Matchers {
       _ <-
         if (b.isEmpty) collA.put(4, RecordA("four"))
         else KVStore.unit[Namespace]
-      a <- collA.get(1)
+      a <- collA.read(1).lift
     } yield a
 
     val compiler = new KVStoreState[Namespace]

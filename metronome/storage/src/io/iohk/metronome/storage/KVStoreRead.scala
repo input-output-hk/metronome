@@ -29,7 +29,7 @@ object KVStoreRead {
 
     def pure[A](a: A) = KVStore.pure[N, A](a)
 
-    def get[K: Codec, V: Codec](
+    def read[K: Codec, V: Codec](
         namespace: N,
         key: K
     ): KVStoreRead[N, Option[V]] =
