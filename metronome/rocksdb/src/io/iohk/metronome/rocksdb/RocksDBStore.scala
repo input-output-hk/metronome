@@ -30,8 +30,7 @@ import java.nio.file.Path
 import scala.annotation.nowarn
 
 class RocksDBStore[F[_]: Sync](
-    db: RocksDB,
-    readOptions: ReadOptions,
+    db: RocksDBStore.DBSupport[F],
     lock: RocksDBStore.LockSupport[F],
     handles: Map[RocksDBStore.Namespace, ColumnFamilyHandle]
 ) {
@@ -53,10 +52,10 @@ class RocksDBStore[F[_]: Sync](
   private val writeBatch: ReaderT[F, BatchEnv, Unit] =
     ReaderT {
       case (opts, batch) if batch.hasPut() || batch.hasDelete() =>
-        Sync[F].delay {
-          db.write(opts, batch)
-          batch.clear()
-        }
+        db.write(opts, batch) >>
+          Sync[F].delay {
+            batch.clear()
+          }
       case _ =>
         ().pure[F]
     }
@@ -64,10 +63,8 @@ class RocksDBStore[F[_]: Sync](
   /** Execute one `Get` operation. */
   private def read[K, V](op: Get[Namespace, K, V]): F[Option[V]] = {
     for {
-      kbs <- encode(op.key)(op.keyCodec)
-      mvbs <- Sync[F].delay[Option[Array[Byte]]] {
-        Option(db.get(handles(op.namespace), readOptions, kbs))
-      }
+      kbs  <- encode(op.key)(op.keyCodec)
+      mvbs <- db.read(handles(op.namespace), kbs)
       mv <- mvbs match {
         case None =>
           none.pure[F]
@@ -304,8 +301,7 @@ object RocksDBStore {
       )
 
       store = new RocksDBStore[F](
-        db,
-        readOpts,
+        new DBSupport(db, readOpts),
         new LockSupport(new ReentrantReadWriteLock()),
         columnFamilyHandles
       )
@@ -313,6 +309,7 @@ object RocksDBStore {
     } yield store
   }
 
+  /** Remove the database directory. */
   def destroy[F[_]: Sync](
       config: Config
   ): F[Unit] = {
@@ -346,6 +343,7 @@ object RocksDBStore {
   ): Resource[F, R] =
     Resource.fromAutoCloseable[F, R](Sync[F].delay(mk))
 
+  /** Help run reads and writes isolated from each other. */
   private class LockSupport[F[_]: Sync](rwlock: ReentrantReadWriteLock) {
 
     // Batches can interleave multiple reads (and writes);
@@ -376,5 +374,25 @@ object RocksDBStore {
       }(_ => fa) { _ =>
         lockRead >> unlockWrite
       }
+  }
+
+  /** Wrap a RocksDB instance. */
+  private class DBSupport[F[_]: Sync](
+      db: RocksDB,
+      readOptions: ReadOptions
+  ) {
+    def read(
+        handle: ColumnFamilyHandle,
+        key: Array[Byte]
+    ): F[Option[Array[Byte]]] = Sync[F].delay {
+      Option(db.get(handle, readOptions, key))
+    }
+
+    def write(
+        options: WriteOptions,
+        batch: WriteBatch
+    ): F[Unit] = Sync[F].delay {
+      db.write(options, batch)
+    }
   }
 }
