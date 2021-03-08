@@ -42,7 +42,7 @@ class RocksDBStore[F[_]: Sync](
   // Batch execution needs these variables for accumulating operations
   // and executing them against the database. They are going to be
   // passed along in a Reader monad to the Free compiler.
-  type BatchEnv = (WriteOptions, WriteBatch)
+  type BatchEnv = WriteBatch
   // Type aliases to support the `~>` transformation with types that
   // only have 1 generic type argument `A`.
   type Batch[A]          = ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
@@ -50,13 +50,13 @@ class RocksDBStore[F[_]: Sync](
 
   /** Execute the accumulated write operations in a batch. */
   private val writeBatch: ReaderT[F, BatchEnv, Unit] =
-    ReaderT {
-      case (opts, batch) if batch.hasPut() || batch.hasDelete() =>
-        db.write(opts, batch) >>
+    ReaderT { batch =>
+      if (batch.hasPut() || batch.hasDelete())
+        db.write(batch) >>
           Sync[F].delay {
             batch.clear()
           }
-      case _ =>
+      else
         ().pure[F]
     }
 
@@ -86,7 +86,7 @@ class RocksDBStore[F[_]: Sync](
       def apply[A](fa: KVNamespacedOp[A]): Batch[A] =
         fa match {
           case op @ Put(n, k, v) =>
-            ReaderT { case (_, batch) =>
+            ReaderT { batch =>
               for {
                 kbs <- encode(k)(op.keyCodec)
                 vbs <- encode(v)(op.valueCodec)
@@ -99,7 +99,7 @@ class RocksDBStore[F[_]: Sync](
             writeBatch >> ReaderT.liftF(read(op))
 
           case op @ Delete(n, k) =>
-            ReaderT { case (_, batch) =>
+            ReaderT { batch =>
               for {
                 kbs <- encode(k)(op.keyCodec)
                 _ = batch.delete(handles(n), kbs)
@@ -133,12 +133,7 @@ class RocksDBStore[F[_]: Sync](
   private def runWithBatchingNoLock[A](
       program: KVStore[Namespace, A]
   ): DBQuery[F, A] = {
-    val env = for {
-      opts  <- autoCloseableR(new WriteOptions())
-      batch <- autoCloseableR(new WriteBatch())
-    } yield (opts, batch)
-
-    env.use {
+    autoCloseableR(new WriteBatch()).use {
       (program.foldMap(batchingCompiler) <* writeBatch).run
     }
   }
@@ -274,6 +269,9 @@ object RocksDBStore {
       readOpts <- autoCloseableR[F, ReadOptions] {
         new ReadOptions().setVerifyChecksums(config.verifyChecksums)
       }
+      writeOptions <- autoCloseableR[F, WriteOptions] {
+        new WriteOptions()
+      }
 
       // The handles will be filled as the database is opened.
       columnFamilyHandleBuffer = mutable.Buffer.empty[ColumnFamilyHandle]
@@ -301,7 +299,7 @@ object RocksDBStore {
       )
 
       store = new RocksDBStore[F](
-        new DBSupport(db, readOpts),
+        new DBSupport(db, readOpts, writeOptions),
         new LockSupport(new ReentrantReadWriteLock()),
         columnFamilyHandles
       )
@@ -379,7 +377,8 @@ object RocksDBStore {
   /** Wrap a RocksDB instance. */
   private class DBSupport[F[_]: Sync](
       db: RocksDB,
-      readOptions: ReadOptions
+      readOptions: ReadOptions,
+      writeOptions: WriteOptions
   ) {
     def read(
         handle: ColumnFamilyHandle,
@@ -389,10 +388,9 @@ object RocksDBStore {
     }
 
     def write(
-        options: WriteOptions,
         batch: WriteBatch
     ): F[Unit] = Sync[F].delay {
-      db.write(options, batch)
+      db.write(writeOptions, batch)
     }
   }
 }
