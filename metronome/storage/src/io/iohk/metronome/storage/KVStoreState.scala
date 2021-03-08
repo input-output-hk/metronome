@@ -1,7 +1,7 @@
 package io.iohk.metronome.storage
 
 import cats.{~>}
-import cats.data.State
+import cats.data.{State, Reader}
 import io.iohk.metronome.storage.KVStoreOp.{Put, Get, Delete}
 
 /** A pure implementation of the Free interpreter using the State monad.
@@ -16,6 +16,9 @@ class KVStoreState[N] {
   // only have 1 generic type argument `A`.
   type KVNamespacedState[A] = State[Store, A]
   type KVNamespacedOp[A]    = ({ type L[A] = KVStoreOp[N, A] })#L[A]
+
+  type KVNamespacedReader[A] = Reader[Store, A]
+  type KVNamespacedReadOp[A] = ({ type L[A] = KVStoreReadOp[N, A] })#L[A]
 
   private val stateCompiler: KVNamespacedOp ~> KVNamespacedState =
     new (KVNamespacedOp ~> KVNamespacedState) {
@@ -50,10 +53,27 @@ class KVStoreState[N] {
         }
     }
 
+  private val readerCompiler: KVNamespacedReadOp ~> KVNamespacedReader =
+    new (KVNamespacedReadOp ~> KVNamespacedReader) {
+      def apply[A](fa: KVNamespacedReadOp[A]): KVNamespacedReader[A] =
+        fa match {
+          case Get(n, k) =>
+            Reader { nkvs =>
+              for {
+                kvs <- nkvs.get(n)
+                v   <- kvs.get(k)
+              } yield v
+            }
+        }
+    }
+
   /** Compile a KVStore program to a State monad, which can be executed like:
     *
     * `new KvStoreState[String].compile(program).run(Map.empty).value`
     */
   def compile[A](program: KVStore[N, A]): KVNamespacedState[A] =
     program.foldMap(stateCompiler)
+
+  def compile[A](program: KVStoreRead[N, A]): KVNamespacedReader[A] =
+    program.foldMap(readerCompiler)
 }

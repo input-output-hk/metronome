@@ -9,7 +9,18 @@ import scodec.Codec
   */
 class KVCollection[N, K: Codec, V: Codec](namespace: N) {
 
-  private implicit val kvs = KVStore.instance[N]
+  private implicit val kvsRW = KVStore.instance[N]
+  private implicit val kvsRO = KVStoreRead.instance[N]
+
+  class ReadOnly {
+
+    /** Get a value by key, if it exists. */
+    def get(key: K): KVStoreRead[N, Option[V]] =
+      KVStoreRead[N].get(namespace, key)
+  }
+
+  /** Project a read-only interface. */
+  val readonly = new ReadOnly
 
   /** Put a value under a key. */
   def put(key: K, value: V): KVStore[N, Unit] =

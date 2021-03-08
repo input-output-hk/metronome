@@ -2,7 +2,12 @@ package io.iohk.metronome.rocksdb
 
 import cats.implicits._
 import cats.effect.Resource
-import io.iohk.metronome.storage.{KVStoreState, KVStore}
+import io.iohk.metronome.storage.{
+  KVStoreState,
+  KVStore,
+  KVCollection,
+  KVStoreRead
+}
 import java.nio.file.Files
 import monix.eval.Task
 import org.scalacheck.commands.Commands
@@ -12,7 +17,6 @@ import org.scalacheck.Prop.forAll
 import scala.util.{Try, Success}
 import scala.concurrent.duration._
 import scala.annotation.nowarn
-import io.iohk.metronome.storage.KVCollection
 import scodec.bits.ByteVector
 import scodec.codecs.implicits._
 
@@ -27,20 +31,20 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
   // Equivalent to the in-memory model.
   property("equivalent") = RocksDBStoreCommands.property()
 
-  // Run two programs concurrently.
+  // Run reads and writes concurrently.
   property("linearizable") = forAll {
     import RocksDBStoreCommands._
     for {
       empty <- genInitialState
       // Generate some initial data. Puts are the only useful op.
       init <- Gen.listOfN(50, genPut(empty)).map { ops =>
-        RunProgram(ops.toList.sequence, batching = true)
+        ProgramRW(ops.toList.sequence, batching = true)
       }
       state = init.nextState(empty)
-      // The first program is batching, it takes a write lock.
-      prog1 <- genProgram(state).map(_.copy(batching = true))
-      // The second program is not batching, it takes a read lock.
-      prog2 <- genProgram(state).map(_.copy(batching = false))
+      // The first program is read/write, it takes a write lock.
+      prog1 <- genProgramRW(state).map(_.copy(batching = true))
+      // The second progra is read-only, it takes a read lock.
+      prog2 <- genProgramRO(state)
     } yield (init, state, prog1, prog2)
   } { case (init, state, prog1, prog2) =>
     import RocksDBStoreCommands._
@@ -57,20 +61,22 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
         Task.parMap2(Task(prog1.run(sut)), Task(prog2.run(sut)))((_, _))
       }
 
+      // Need to chain together Read-Write and Read-Only ops to test them as one program.
+      val liftedRO =
+        KVStore.instance[RocksDBStore.Namespace].lift(prog2.program)
+
       // Overall the results should correspond to either prog1 ++ prog2, or prog2 ++ prog1.
-      val prog12 =
-        RunProgram((prog1.program, prog2.program).mapN(_ ++ _))
-      val prog21 =
-        RunProgram((prog2.program, prog1.program).mapN(_ ++ _))
+      val prog12 = ProgramRW((prog1.program, liftedRO).mapN(_ ++ _))
+      val prog21 = ProgramRW((liftedRO, prog1.program).mapN(_ ++ _))
 
       // One of them should have run first.
       val prop1 = prog1.postCondition(state, Success(result1))
       val prop2 = prog2.postCondition(state, Success(result2))
       // The other should run second, on top of the changes from the first.
       val prop12 = prog12.postCondition(state, Success(result1 ++ result2))
-      val prop21 = prog21.postCondition(state, Success(result2 ++ result1))
+      val prope1 = prog21.postCondition(state, Success(result2 ++ result1))
 
-      (prop1 && prop12) || (prop2 && prop21)
+      (prop1 && prop12) || (prop2 && prop1)
     } finally {
       destroySut(sut)
     }
@@ -201,12 +207,13 @@ object RocksDBStoreCommands extends Commands {
     if (!state.isConnected) Gen.const(ToggleConnected)
     else
       Gen.frequency(
-        (10, genProgram(state)),
+        (10, genProgramRW(state)),
+        (3, genProgramRO(state)),
         (1, Gen.const(ToggleConnected))
       )
 
   /** Generate a sequence of writes and reads. */
-  def genProgram(state: State): Gen[RunProgram] =
+  def genProgramRW(state: State): Gen[ProgramRW] =
     for {
       batching <- arbitrary[Boolean]
       n        <- Gen.choose(0, 30)
@@ -223,7 +230,21 @@ object RocksDBStoreCommands extends Commands {
         )
       )
       program = ops.toList.sequence
-    } yield RunProgram(program, batching)
+    } yield ProgramRW(program, batching)
+
+  /** Generate a sequence of writes and reads. */
+  def genProgramRO(state: State): Gen[ProgramR] =
+    for {
+      n <- Gen.choose(0, 10)
+      ops <- Gen.listOfN(
+        n,
+        Gen.frequency(
+          1 -> genRead(state),
+          4 -> genReadExisting(state)
+        )
+      )
+      program = ops.toList.sequence
+    } yield ProgramR(program)
 
   implicit val arbColl: Arbitrary[Coll] = Arbitrary {
     Gen.oneOf(Coll0, Coll1, Coll2)
@@ -385,6 +406,38 @@ object RocksDBStoreCommands extends Commands {
     }
   }
 
+  def genRead(state: State): Gen[KVStoreRead[Namespace, Any]] =
+    arbitrary[Coll] flatMap {
+      case Coll0 =>
+        arbitrary[String].map(state.coll0.readonly.get)
+      case Coll1 =>
+        arbitrary[Int].map(state.coll1.readonly.get)
+      case Coll2 =>
+        arbitrary[ByteVector].map(state.coll2.readonly.get)
+    } map {
+      _.map(_.asInstanceOf[Any])
+    }
+
+  def genReadExisting(state: State): Gen[KVStoreRead[Namespace, Any]] =
+    state.nonEmptyColls match {
+      case Nil =>
+        genRead(state)
+
+      case colls =>
+        for {
+          c <- Gen.oneOf(colls)
+          k <- Gen.oneOf(state.storeOf(c).keySet)
+          op = c match {
+            case Coll0 =>
+              state.coll0.readonly.get(k.asInstanceOf[String])
+            case Coll1 =>
+              state.coll1.readonly.get(k.asInstanceOf[Int])
+            case Coll2 =>
+              state.coll2.readonly.get(k.asInstanceOf[ByteVector])
+          }
+        } yield op.map(_.asInstanceOf[Any])
+    }
+
   /** Open or close the database. */
   case object ToggleConnected extends UnitCommand {
     def run(sut: Sut) = {
@@ -411,7 +464,8 @@ object RocksDBStoreCommands extends Commands {
     def postCondition(state: State, succeeded: Boolean) = succeeded
   }
 
-  case class RunProgram(
+  /** Read/Write program. */
+  case class ProgramRW(
       program: KVStore[Namespace, List[Any]],
       batching: Boolean = false
   ) extends Command {
@@ -454,6 +508,33 @@ object RocksDBStoreCommands extends Commands {
 
     def postCondition(state: Model, result: Try[Result]): Prop = {
       val expected = InMemoryKVS.compile(program).runA(state.store).value
+      result == Success(expected)
+    }
+  }
+
+  /** Read/Write program. */
+  case class ProgramR(
+      program: KVStoreRead[Namespace, List[Any]]
+  ) extends Command {
+    // Collect all results from a batch of execution steps.
+    type Result = List[Any]
+
+    def run(sut: Sut): Result = {
+      val db = sut.maybeConnection
+        .getOrElse(sys.error("The database is not connected."))
+        .value
+
+      await {
+        db.runReadOnly(program)
+      }
+    }
+
+    def preCondition(state: State): Boolean = state.isConnected
+
+    def nextState(state: State): State = state
+
+    def postCondition(state: Model, result: Try[Result]): Prop = {
+      val expected = InMemoryKVS.compile(program).run(state.store)
       result == Success(expected)
     }
   }

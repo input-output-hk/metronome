@@ -5,7 +5,12 @@ import cats.implicits._
 import cats.data.ReaderT
 import cats.effect.{Resource, Sync}
 import cats.free.Free.liftF
-import io.iohk.metronome.storage.{KVStore, KVStoreOp}
+import io.iohk.metronome.storage.{
+  KVStore,
+  KVStoreOp,
+  KVStoreRead,
+  KVStoreReadOp
+}
 import io.iohk.metronome.storage.KVStoreOp.{Put, Get, Delete}
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import org.rocksdb.{
@@ -37,16 +42,23 @@ class RocksDBStore[F[_]: Sync](
 
   import RocksDBStore.{Namespace, DBQuery, autoCloseableR}
 
-  protected val syncF: Sync[F] = implicitly[Sync[F]]
+  private val kvs = KVStore.instance[Namespace]
 
   // Batch execution needs these variables for accumulating operations
   // and executing them against the database. They are going to be
   // passed along in a Reader monad to the Free compiler.
   type BatchEnv = WriteBatch
+
   // Type aliases to support the `~>` transformation with types that
   // only have 1 generic type argument `A`.
-  type Batch[A]          = ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
-  type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
+  type Batch[A] =
+    ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
+
+  type KVNamespacedOp[A] =
+    ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
+
+  type KVNamespacedReadOp[A] =
+    ({ type L[A] = KVStoreReadOp[Namespace, A] })#L[A]
 
   /** Execute the accumulated write operations in a batch. */
   private val writeBatch: ReaderT[F, BatchEnv, Unit] =
@@ -138,18 +150,13 @@ class RocksDBStore[F[_]: Sync](
     }
   }
 
-  private def runWithoutBatchingNoLock[A](
-      program: KVStore[Namespace, A]
-  ): DBQuery[F, A] =
-    program.foldMap(nonBatchingCompiler)
-
   /** Mostly meant for writing batches atomically.
     *
-    * If a read is found the accumulated
-    * writes are performed, then the read happens, before batching carries on; this
-    * breaks the atomicity of writes.
-    *
     * A write lock is taken out to make sure other reads are not interleaved.
+    *
+    * If a read is found the accumulated writes are performed,
+    * then the read happens, before batching carries on;
+    * this breaks the atomicity of writes.
     */
   def runWithBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
     lock.withWriteLock {
@@ -158,13 +165,24 @@ class RocksDBStore[F[_]: Sync](
 
   /** Mostly meant for reading.
     *
-    * If a write is found, it's performed as a single element batch.
-    *
     * A read lock is taken out to make sure writes don't affect it.
+    *
+    * If a write is found, it's performed as a single element batch.
+    * This breaks the isolation of reads because before the write happens,
+    * other threads waiting on the write lock can get in.
     */
   def runWithoutBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
     lock.withReadLock {
-      runWithoutBatchingNoLock(program)
+      program.foldMap(nonBatchingCompiler)
+    }
+
+  /** For strictly read-only programs.
+    *
+    * A read lock is taken out to make sure writes don't affect it.
+    */
+  def runReadOnly[A](program: KVStoreRead[Namespace, A]): DBQuery[F, A] =
+    runWithoutBatching {
+      kvs.lift(program)
     }
 }
 

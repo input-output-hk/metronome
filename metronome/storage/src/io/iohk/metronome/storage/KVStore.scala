@@ -1,9 +1,11 @@
 package io.iohk.metronome.storage
 
+import cats.{~>}
 import cats.free.Free
 import cats.free.Free.liftF
 import scodec.Codec
 
+/** Helper methods to read/write a key-value store. */
 object KVStore {
 
   def unit[N]: KVStore[N, Unit] =
@@ -22,7 +24,8 @@ object KVStore {
   trait Ops[N] {
     import KVStoreOp._
 
-    type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[N, A] })#L[A]
+    type KVNamespacedOp[A]     = ({ type L[A] = KVStoreOp[N, A] })#L[A]
+    type KVNamespacedReadOp[A] = ({ type L[A] = KVStoreReadOp[N, A] })#L[A]
 
     def unit: KVStore[N, Unit] = KVStore.unit[N]
 
@@ -55,6 +58,16 @@ object KVStore {
       get[K, V](namespace, key).flatMap {
         case None        => unit
         case Some(value) => put(namespace, key, f(value))
+      }
+
+    /** Lift a read-only operation into a read-write one, so that we can chain them together. */
+    def lift[A](read: KVStoreRead[N, A]): KVStore[N, A] =
+      read.mapK(liftCompiler)
+
+    private val liftCompiler: KVNamespacedReadOp ~> KVNamespacedOp =
+      new (KVNamespacedReadOp ~> KVNamespacedOp) {
+        def apply[A](fa: KVNamespacedReadOp[A]): KVNamespacedOp[A] =
+          fa
       }
   }
 }
