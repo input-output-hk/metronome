@@ -38,13 +38,13 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
       empty <- genInitialState
       // Generate some initial data. Puts are the only useful op.
       init <- Gen.listOfN(50, genPut(empty)).map { ops =>
-        ProgramRW(ops.toList.sequence, batching = true)
+        ReadWriteProgram(ops.toList.sequence, batching = true)
       }
       state = init.nextState(empty)
       // The first program is read/write, it takes a write lock.
-      prog1 <- genProgramRW(state).map(_.copy(batching = true))
-      // The second progra is read-only, it takes a read lock.
-      prog2 <- genProgramRO(state)
+      prog1 <- genReadWriteProg(state).map(_.copy(batching = true))
+      // The second program is read-only, it takes a read lock.
+      prog2 <- genReadOnlyProg(state)
     } yield (init, state, prog1, prog2)
   } { case (init, state, prog1, prog2) =>
     import RocksDBStoreCommands._
@@ -66,8 +66,8 @@ object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
         KVStore.instance[RocksDBStore.Namespace].lift(prog2.program)
 
       // Overall the results should correspond to either prog1 ++ prog2, or prog2 ++ prog1.
-      val prog12 = ProgramRW((prog1.program, liftedRO).mapN(_ ++ _))
-      val prog21 = ProgramRW((liftedRO, prog1.program).mapN(_ ++ _))
+      val prog12 = ReadWriteProgram((prog1.program, liftedRO).mapN(_ ++ _))
+      val prog21 = ReadWriteProgram((liftedRO, prog1.program).mapN(_ ++ _))
 
       // One of them should have run first.
       val prop1 = prog1.postCondition(state, Success(result1))
@@ -207,13 +207,13 @@ object RocksDBStoreCommands extends Commands {
     if (!state.isConnected) Gen.const(ToggleConnected)
     else
       Gen.frequency(
-        (10, genProgramRW(state)),
-        (3, genProgramRO(state)),
+        (10, genReadWriteProg(state)),
+        (3, genReadOnlyProg(state)),
         (1, Gen.const(ToggleConnected))
       )
 
   /** Generate a sequence of writes and reads. */
-  def genProgramRW(state: State): Gen[ProgramRW] =
+  def genReadWriteProg(state: State): Gen[ReadWriteProgram] =
     for {
       batching <- arbitrary[Boolean]
       n        <- Gen.choose(0, 30)
@@ -230,10 +230,10 @@ object RocksDBStoreCommands extends Commands {
         )
       )
       program = ops.toList.sequence
-    } yield ProgramRW(program, batching)
+    } yield ReadWriteProgram(program, batching)
 
   /** Generate a read-only operations. */
-  def genProgramRO(state: State): Gen[ProgramR] =
+  def genReadOnlyProg(state: State): Gen[ReadOnlyProgram] =
     for {
       n <- Gen.choose(0, 10)
       ops <- Gen.listOfN(
@@ -244,7 +244,7 @@ object RocksDBStoreCommands extends Commands {
         )
       )
       program = ops.toList.sequence
-    } yield ProgramR(program)
+    } yield ReadOnlyProgram(program)
 
   implicit val arbColl: Arbitrary[Coll] = Arbitrary {
     Gen.oneOf(Coll0, Coll1, Coll2)
@@ -464,8 +464,7 @@ object RocksDBStoreCommands extends Commands {
     def postCondition(state: State, succeeded: Boolean) = succeeded
   }
 
-  /** Read/Write program. */
-  case class ProgramRW(
+  case class ReadWriteProgram(
       program: KVStore[Namespace, List[Any]],
       batching: Boolean = false
   ) extends Command {
@@ -512,8 +511,7 @@ object RocksDBStoreCommands extends Commands {
     }
   }
 
-  /** Read/Write program. */
-  case class ProgramR(
+  case class ReadOnlyProgram(
       program: KVStoreRead[Namespace, List[Any]]
   ) extends Command {
     // Collect all results from a batch of execution steps.
