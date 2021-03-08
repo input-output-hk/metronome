@@ -32,10 +32,13 @@ import scala.annotation.nowarn
 class RocksDBStore[F[_]: Sync](
     db: RocksDB,
     readOptions: ReadOptions,
-    rwlock: ReentrantReadWriteLock,
+    lock: RocksDBStore.LockSupport[F],
     handles: Map[RocksDBStore.Namespace, ColumnFamilyHandle]
 ) {
+
   import RocksDBStore.{Namespace, DBQuery, autoCloseableR}
+
+  protected val syncF: Sync[F] = implicitly[Sync[F]]
 
   // Batch execution needs these variables for accumulating operations
   // and executing them against the database. They are going to be
@@ -45,35 +48,6 @@ class RocksDBStore[F[_]: Sync](
   // only have 1 generic type argument `A`.
   type Batch[A]          = ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
   type KVNamespacedOp[A] = ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
-
-  // Batches can interleave multiple reads (and writes);
-  // to make sure they see a consistent view, writes are
-  // isolated from reads via locks, so for example if we
-  // read an ID, then retrieve the record from a different
-  // collection, we can be sure it hasn't been deleted in
-  // between the two operations.
-  private val lockRead    = Sync[F].delay(rwlock.readLock().lock())
-  private val unlockRead  = Sync[F].delay(rwlock.readLock().unlock())
-  private val lockWrite   = Sync[F].delay(rwlock.writeLock().lock())
-  private val unlockWrite = Sync[F].delay(rwlock.writeLock().unlock())
-
-  private def withReadLock[A](fa: F[A]): F[A] =
-    Sync[F].bracket(lockRead)(_ => fa)(_ => unlockRead)
-
-  private def withWriteLock[A](fa: F[A]): F[A] =
-    Sync[F].bracket(lockWrite)(_ => fa)(_ => unlockWrite)
-
-  // In case there's a write operation among the reads and we haven't
-  // taken out a write lock, we can upgrade the read lock for the duration
-  // of the write, then downgrade it back to read when we're done.
-  // See here for the rules up upgrading/downgrading:
-  // https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
-  private def withLockUpgrade[A](fa: F[A]): F[A] =
-    Sync[F].bracket {
-      unlockRead >> lockWrite
-    }(_ => fa) { _ =>
-      lockRead >> unlockWrite
-    }
 
   /** Execute the accumulated write operations in a batch. */
   private val writeBatch: ReaderT[F, BatchEnv, Unit] =
@@ -145,7 +119,7 @@ class RocksDBStore[F[_]: Sync](
           case op @ Get(_, _) =>
             read(op)
           case op =>
-            withLockUpgrade {
+            lock.withLockUpgrade {
               runWithBatchingNoLock {
                 liftF[KVNamespacedOp, A](op)
               }
@@ -186,7 +160,7 @@ class RocksDBStore[F[_]: Sync](
     * A write lock is taken out to make sure other reads are not interleaved.
     */
   def runWithBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
-    withWriteLock {
+    lock.withWriteLock {
       runWithBatchingNoLock(program)
     }
 
@@ -197,7 +171,7 @@ class RocksDBStore[F[_]: Sync](
     * A read lock is taken out to make sure writes don't affect it.
     */
   def runWithoutBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
-    withReadLock {
+    lock.withReadLock {
       runWithoutBatchingNoLock(program)
     }
 }
@@ -332,7 +306,7 @@ object RocksDBStore {
       store = new RocksDBStore[F](
         db,
         readOpts,
-        new ReentrantReadWriteLock(),
+        new LockSupport(new ReentrantReadWriteLock()),
         columnFamilyHandles
       )
 
@@ -371,4 +345,36 @@ object RocksDBStore {
       mk: => R
   ): Resource[F, R] =
     Resource.fromAutoCloseable[F, R](Sync[F].delay(mk))
+
+  private class LockSupport[F[_]: Sync](rwlock: ReentrantReadWriteLock) {
+
+    // Batches can interleave multiple reads (and writes);
+    // to make sure they see a consistent view, writes are
+    // isolated from reads via locks, so for example if we
+    // read an ID, then retrieve the record from a different
+    // collection, we can be sure it hasn't been deleted in
+    // between the two operations.
+    private val lockRead    = Sync[F].delay(rwlock.readLock().lock())
+    private val unlockRead  = Sync[F].delay(rwlock.readLock().unlock())
+    private val lockWrite   = Sync[F].delay(rwlock.writeLock().lock())
+    private val unlockWrite = Sync[F].delay(rwlock.writeLock().unlock())
+
+    def withReadLock[A](fa: F[A]): F[A] =
+      Sync[F].bracket(lockRead)(_ => fa)(_ => unlockRead)
+
+    def withWriteLock[A](fa: F[A]): F[A] =
+      Sync[F].bracket(lockWrite)(_ => fa)(_ => unlockWrite)
+
+    // In case there's a write operation among the reads and we haven't
+    // taken out a write lock, we can upgrade the read lock for the duration
+    // of the write, then downgrade it back to read when we're done.
+    // See here for the rules up upgrading/downgrading:
+    // https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
+    def withLockUpgrade[A](fa: F[A]): F[A] =
+      Sync[F].bracket {
+        unlockRead >> lockWrite
+      }(_ => fa) { _ =>
+        lockRead >> unlockWrite
+      }
+  }
 }
