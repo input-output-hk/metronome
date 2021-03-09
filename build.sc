@@ -11,16 +11,20 @@ import mill.contrib.versionfile.VersionFileModule
 object versionFile extends VersionFileModule
 
 object VersionOf {
-  val cats         = "2.3.1"
-  val config       = "1.4.1"
-  val logback      = "1.2.3"
-  val monix        = "3.3.0"
-  val prometheus   = "0.10.0"
-  val rocksdb      = "6.15.2"
-  val scalacheck   = "1.15.2"
-  val scalalogging = "3.9.2"
-  val scalatest    = "3.2.5"
-  val scalanet     = "0.7.0"
+  val cats             = "2.3.1"
+  val config           = "1.4.1"
+  val `kind-projector` = "0.11.3"
+  val logback          = "1.2.3"
+  val monix            = "3.3.0"
+  val prometheus       = "0.10.0"
+  val rocksdb          = "6.15.2"
+  val scalacheck       = "1.15.2"
+  val scalalogging     = "3.9.2"
+  val scalatest        = "3.2.5"
+  val scalanet         = "0.7.0"
+  val shapeless        = "2.3.3"
+  val `scodec-core`    = "1.11.7"
+  val `scodec-bits`    = "1.1.12"
 }
 
 object metronome extends Cross[MetronomeModule]("2.12.10", "2.13.4")
@@ -50,7 +54,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       // Add yourself if you make a PR!
       developers = Seq(
         Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh"),
-        Developer("lemastero", "Piotr Paradzinski", "https://github.com/lemastero")
+        Developer(
+          "lemastero",
+          "Piotr Paradzinski",
+          "https://github.com/lemastero"
+        )
       )
     )
   }
@@ -89,6 +97,16 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
+  /** Data models shared between all modules. */
+  object core extends SubModule with Publishing {
+    override def description: String =
+      "Common data models."
+
+    override def ivyDeps = Agg(
+      ivy"com.chuusai::shapeless:${VersionOf.shapeless}"
+    )
+  }
+
   /** Storage abstractions, e.g. a generic key-value store. */
   object storage extends SubModule
 
@@ -100,7 +118,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def description: String =
       "Abstractions for contravariant tracing."
 
-    def scalacPluginIvyDeps = Agg(ivy"org.typelevel:::kind-projector:0.11.3")
+    def scalacPluginIvyDeps = Agg(
+      ivy"org.typelevel:::kind-projector:${VersionOf.`kind-projector`}"
+    )
   }
 
   /** Additional crypto utilities such as threshold signature. */
@@ -117,6 +137,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
     /** Pure consensus models. */
     object consensus extends SubModule {
+      override def moduleDeps: Seq[PublishModule] =
+        Seq(core, crypto)
+
       object test extends TestModule
     }
 
