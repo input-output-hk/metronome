@@ -411,11 +411,20 @@ object RocksDBStore {
     def withWriteLock[A](fa: F[A]): F[A] =
       Sync[F].bracket(lockWrite)(_ => fa)(_ => unlockWrite)
 
-    // In case there's a write operation among the reads and we haven't
-    // taken out a write lock, we can upgrade the read lock for the duration
-    // of the write, then downgrade it back to read when we're done.
-    // See here for the rules up upgrading/downgrading:
-    // https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
+    /*
+     * In case there's a write operation among the reads and we haven't
+     * taken out a write lock, we can replace the the read lock we have
+     * with a write lock, for the duration of the operation, then downgrade
+     * it back to when we're done.
+     *
+     * Note that *technically* this is not an upgrade: to acquire the write
+     * lock, the read lock has to be released first, therefore other threads
+     * may get the write lock first. It works in the other direction though:
+     * the write lock can be turned into a read.
+     *
+     * See here for the rules up (non-)upgrading and downgrading:
+     * https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
+     */
     def withLockUpgrade[A](fa: F[A]): F[A] =
       Sync[F].bracket {
         unlockRead >> lockWrite
