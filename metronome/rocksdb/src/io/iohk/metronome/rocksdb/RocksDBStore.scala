@@ -34,6 +34,16 @@ import scala.collection.mutable
 import java.nio.file.Path
 import scala.annotation.nowarn
 
+/** Implementation of intepreters for `KVStore[N, A]` and `KVStoreRead[N, A]`operations
+  * with various semantics. Application code is not expected to interact with this class
+  * directly. Instead, some middle layer should be passed as a dependency to code that
+  * delegates to the right interpreter in this class.
+  *
+  * For example if our data schema is append-only, there's no need to pay the performance
+  * penalty for using locking, or if two parts of the application are isolated from each other,
+  * locking could be performed in their respective middle-layers, before they forward the
+  * query for execution to this class.
+  */
 class RocksDBStore[F[_]: Sync](
     db: RocksDBStore.DBSupport[F],
     lock: RocksDBStore.LockSupport[F],
@@ -142,7 +152,17 @@ class RocksDBStore[F[_]: Sync](
   private def decode[T](bytes: Array[Byte])(implicit ev: Codec[T]): F[T] =
     Sync[F].fromTry(ev.decodeValue(BitVector(bytes)).toTry)
 
-  private def runWithBatchingNoLock[A](
+  /** Mostly meant for writing batches atomically.
+    *
+    * If a read is found the accumulated writes are performed,
+    * then the read happens, before batching carries on;
+    * this breaks the atomicity of writes.
+    *
+    * This version doesn't use any locking, so it's suitable for
+    * append-only data stores, or writing to independent stores
+    * in parallel.
+    */
+  def runWithBatchingNoLock[A](
       program: KVStore[Namespace, A]
   ): DBQuery[F, A] = {
     autoCloseableR(new WriteBatch()).use {
@@ -150,39 +170,51 @@ class RocksDBStore[F[_]: Sync](
     }
   }
 
-  /** Mostly meant for writing batches atomically.
+  /** Same as `runWithBatchingNoLock`, but write lock is taken out
+    * to make sure concurrent reads are not affected.
     *
-    * A write lock is taken out to make sure other reads are not interleaved.
-    *
-    * If a read is found the accumulated writes are performed,
-    * then the read happens, before batching carries on;
-    * this breaks the atomicity of writes.
+    * This version is suitable for cases where data may be deleted,
+    * which could result for example in foreign key references
+    * becoming invalid after they are read, before the data they
+    * point to is retrieved.
     */
   def runWithBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
     lock.withWriteLock {
       runWithBatchingNoLock(program)
     }
 
-  /** Mostly meant for reading.
+  /** Similar to `runWithBatching` in that it can contain both reads
+    * and writes, but the expectation is that it will mostly be reads.
     *
-    * A read lock is taken out to make sure writes don't affect it.
-    *
-    * If a write is found, it's performed as a single element batch.
-    * This breaks the isolation of reads because before the write happens,
-    * other threads waiting on the write lock can get in.
+    * A read lock is taken out to make sure writes don't affect reads;
+    * if a write is found, it is executed as an individual operation,
+    * while a write lock is taken out to protect other reads. Note that
+    * this breaks the isolation of reads, because to acquire a write lock,
+    * the read lock has to be released, which gives a chance for other
+    * threads to get in before the write statement runs.
     */
   def runWithoutBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
     lock.withReadLock {
       program.foldMap(nonBatchingCompiler)
     }
 
-  /** For strictly read-only programs.
+  /** For strictly read-only operations.
     *
-    * A read lock is taken out to make sure writes don't affect it.
+    * Doesn't use locking, so most suitable for append-only data schemas
+    * where reads don't need isolation from writes.
+    */
+  def runReadOnlyNoLock[A](program: KVStoreRead[Namespace, A]): DBQuery[F, A] =
+    kvs.lift(program).foldMap(nonBatchingCompiler)
+
+  /** Same as `runReadOnlyNoLock`, but a read lock is taken out
+    * to make sure concurrent writes cannot affect the results.
+    *
+    * This version is suitable for use cases where destructive
+    * updates are happening.
     */
   def runReadOnly[A](program: KVStoreRead[Namespace, A]): DBQuery[F, A] =
-    runWithoutBatching {
-      kvs.lift(program)
+    lock.withReadLock {
+      runReadOnlyNoLock(program)
     }
 }
 
