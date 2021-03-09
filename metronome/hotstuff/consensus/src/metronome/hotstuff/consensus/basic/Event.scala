@@ -7,12 +7,18 @@ sealed trait Event[A <: Agreement]
 
 object Event {
 
+  /** A scheduled timeout for the round, initiating the next view. */
+  case class NextView(viewNumber: ViewNumber) extends Event[Nothing]
+
   /** A message received from a federation member. */
   case class MessageReceived[A <: Agreement](
       sender: A#PKey,
       message: Message[A]
   ) extends Event[A]
 
-  /** A scheduled timeout for the round, initiating the next view. */
-  case class NextView(viewNumber: ViewNumber) extends Event[Nothing]
+  /** The block the leader asked to be created is ready. */
+  case class BlockCreated[A <: Agreement](
+      viewNumber: ViewNumber,
+      block: A#Block
+  ) extends Event[A]
 }

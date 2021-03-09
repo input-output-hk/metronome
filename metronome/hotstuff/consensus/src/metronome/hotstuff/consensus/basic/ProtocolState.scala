@@ -20,6 +20,7 @@ case class ProtocolState[A <: Agreement](
     timeout: FiniteDuration
 ) {
 
+  /** Return an initial set of effects; at the minimum the timeout for the first round. */
   def init: List[Effect[A]] = ???
 
   /** Handle an input event, such as an incoming message.
