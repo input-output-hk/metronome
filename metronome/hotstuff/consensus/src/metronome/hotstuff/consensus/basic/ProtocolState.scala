@@ -12,9 +12,9 @@ case class ProtocolState[A <: Agreement](
     phase: Phase,
     ownPublicKey: A#PKey,
     federation: Federation[A#PKey],
-    // Highest QC for which a replica voted Pre-Commit, because it received a PrepareQC from the leader.
+    // Highest QC for which a replica voted Pre-Commit, because it received a Prepare Q.C. from the leader.
     prepareQC: QuorumCertificate[A],
-    // Highest QC for which a replica voted Commit, because it received a PrepareQC from leader.
+    // Locked QC, for which a replica voted Commit, because it received a Pre-Commit Q.C. from leader.
     lockedQC: QuorumCertificate[A],
     lastExecutedBlockHash: A#Hash,
     timeout: FiniteDuration
