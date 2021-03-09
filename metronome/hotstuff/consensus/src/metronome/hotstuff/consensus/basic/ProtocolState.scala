@@ -17,7 +17,10 @@ case class ProtocolState[A <: Agreement](
     // Locked QC, for which a replica voted Commit, because it received a Pre-Commit Q.C. from leader.
     lockedQC: QuorumCertificate[A],
     lastExecutedBlockHash: A#Hash,
-    timeout: FiniteDuration
+    timeout: FiniteDuration,
+    // Votes gathered by the leader in this phase.
+    votes: Set[Message.Vote[A]]
+    // TODO: Gather stray messages to figure out who is leader?
 ) {
 
   /** Return an initial set of effects; at the minimum the timeout for the first round. */

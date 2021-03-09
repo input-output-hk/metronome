@@ -3,6 +3,7 @@ package metronome.hotstuff.consensus.basic
 import metronome.crypto.PartialSignature
 import metronome.hotstuff.consensus.ViewNumber
 
+/** Basic HotStuff protocol messages. */
 sealed trait Message[A <: Agreement] {
 
   /** Messages are only accepted if they match the node's current view number. */
