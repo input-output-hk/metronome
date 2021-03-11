@@ -164,57 +164,68 @@ case class ProtocolState[A <: Agreement: Block: Signing](
 
       case Phase.PreCommit =>
         matchingMsg(e) {
-          case v: Vote[_] if isLeader && matchingVote(v) =>
-            // Collect votes, broadcast Prepare Q.C.
-            addVoteAndMaybeBroadcastQC(v)
-
-          case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
-            // Save prepareQC, vote pre-commit, move to Commit.
-            val effects = Seq(
-              sendVote(Phase.PreCommit, m.quorumCertificate.blockHash)
-            )
-            val next = moveTo(Phase.Commit).copy(
-              prepareQC = m.quorumCertificate
-            )
-            next -> effects
+          // Collect votes, broadcast Prepare Q.C.
+          handleVotes orElse {
+            case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
+              // Save prepareQC, vote pre-commit, move to Commit.
+              val effects = Seq(
+                sendVote(Phase.PreCommit, m.quorumCertificate.blockHash)
+              )
+              val next = moveTo(Phase.Commit).copy(
+                prepareQC = m.quorumCertificate
+              )
+              next -> effects
+          }
         }
 
       case Phase.Commit =>
         matchingMsg(e) {
-          case v: Vote[_] if isLeader && matchingVote(v) =>
-            // Collect votes, broadcast Pre-Commit Q.C.
-            addVoteAndMaybeBroadcastQC(v)
-
-          case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
-            // Save locked QC, vote commit, move to Decide.
-            val effects = Seq(
-              sendVote(Phase.Commit, m.quorumCertificate.blockHash)
-            )
-            val next = moveTo(Phase.Decide).copy(
-              lockedQC = m.quorumCertificate
-            )
-            next -> effects
+          // Collect votes, broadcast Pre-Commit Q.C.
+          handleVotes orElse {
+            case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
+              // Save locked QC, vote commit, move to Decide.
+              val effects = Seq(
+                sendVote(Phase.Commit, m.quorumCertificate.blockHash)
+              )
+              val next = moveTo(Phase.Decide).copy(
+                lockedQC = m.quorumCertificate
+              )
+              next -> effects
+          }
         }
 
       case Phase.Decide =>
         matchingMsg(e) {
-          case v: Vote[_] if isLeader && matchingVote(v) =>
-            // Collect votes, broadcast Commit Q.C.
-            addVoteAndMaybeBroadcastQC(v)
+          // Collect votes, broadcast Commit Q.C.
+          handleVotes orElse {
+            case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
+              // Execute block, move to Prepare.
+              handleNextView(NextView(viewNumber)) match {
+                case (next, effects) =>
+                  val withExec = ExecuteBlocks(
+                    lastExecutedBlockHash,
+                    m.quorumCertificate
+                  ) +: effects
 
-          case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
-            // Execute block, move to Prepare.
-            handleNextView(NextView(viewNumber)) match {
-              case (next, effects) =>
-                val withExec = ExecuteBlocks(
-                  lastExecutedBlockHash,
-                  m.quorumCertificate
-                ) +: effects
-
-                next -> withExec
-            }
+                  next -> withExec
+              }
+          }
         }
     }
+
+  /** The leader's message handling is the same across all phases:
+    * add the vote to the list; if we reached `n-f` then combine
+    * into a Q.C. and broadcast.
+    */
+  private val handleVotes: PartialFunction[Message[A], Transition[A]] = {
+    case v: Vote[_] if isLeader && matchingVote(v) =>
+      addVoteAndMaybeBroadcastQC(v)
+
+    // Votes arriving for a previous phase, once the leader has already moved on.
+    case v: Vote[_]
+        if isLeader && v.viewNumber == viewNumber && preparedBlockHash == v.blockHash =>
+      stay
+  }
 
   /** Try to match a message to expectations, or return Unexpected. */
   private def matchingMsg(e: MessageReceived[A])(

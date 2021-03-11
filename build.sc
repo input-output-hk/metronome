@@ -229,7 +229,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
     /** Implements the checkpointing functionality, the ledger rules,
       * and state synchronisation, which is not an inherent part of
-      * HotStuff, but applies to the checkpointing use case
+      * HotStuff, but applies to the checkpointing use case.
       *
       * If it was published, it could be directly included in the checkpoint assisted blockchain application,
       * so the service and the interpreter can share data in memory.
