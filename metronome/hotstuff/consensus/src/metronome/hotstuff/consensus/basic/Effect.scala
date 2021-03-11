@@ -37,10 +37,12 @@ object Effect {
       highQC: QuorumCertificate[A]
   ) extends Effect[A]
 
-  /** Execute blocks after a decision, up to the last executed hash. */
+  /** Execute blocks after a decision, from the last executed hash
+    * up to the block included in the Quorum Certificate.
+    */
   case class ExecuteBlocks[A <: Agreement](
       lastExecutedBlockHash: A#Hash,
-      decidedBlockHash: A#Hash
+      quorumCertificate: QuorumCertificate[A]
   ) extends Effect[A]
 
 }

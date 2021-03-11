@@ -54,12 +54,10 @@ case class ProtocolState[A <: Agreement: Block](
   def handleNextView(e: NextView): Transition[A] =
     if (e.viewNumber == viewNumber) {
       val next = moveTo(Phase.Prepare)
-
       val effects = Seq(
         SendMessage(next.leader, NewView(viewNumber, prepareQC)),
         ScheduleNextView(next.viewNumber, next.timeout)
       )
-
       next -> effects
     } else stay
 
@@ -132,13 +130,13 @@ case class ProtocolState[A <: Agreement: Block](
 
           case m: Prepare[_] if matchingLeader(e) =>
             if (isSafe(m)) {
-              // Check safe extension, vote Prepare, move to pre-commit.
+              // Check safe extension, vote Prepare, move to PreCommit.
               val blockHash = Block[A].blockHash(m.block)
+              val effects = Seq(
+                sendVote(Phase.Prepare, blockHash)
+              )
               val next = moveTo(Phase.PreCommit).copy(
                 preparedBlockHash = blockHash
-              )
-              val effects = Seq(
-                SendMessage(leader, vote(Phase.Prepare, blockHash))
               )
               Right(next -> effects)
             } else {
@@ -150,24 +148,50 @@ case class ProtocolState[A <: Agreement: Block](
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
             ??? // Collect votes, broadcast Prepare Q.C.
+
           case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
-            ??? // Save prepareQC, vote pre-commit, move to commit
+            // Save prepareQC, vote pre-commit, move to Commit.
+            val effects = Seq(
+              sendVote(Phase.PreCommit, m.quorumCertificate.blockHash)
+            )
+            val next = moveTo(Phase.Commit).copy(
+              prepareQC = m.quorumCertificate
+            )
+            next -> effects
         }
 
       case Phase.Commit =>
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
             ??? // Collect votes, broadcast Pre-Commit Q.C.
+
           case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
-            ??? // Save locked QC, vote commit, move to decide
+            // Save locked QC, vote commit, move to Decide.
+            val effects = Seq(
+              sendVote(Phase.Commit, m.quorumCertificate.blockHash)
+            )
+            val next = moveTo(Phase.Decide).copy(
+              lockedQC = m.quorumCertificate
+            )
+            next -> effects
         }
 
       case Phase.Decide =>
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
             ??? // Collect votes, broadcast Commit Q.C.
+
           case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
-            ??? // Execute block, move to Prepare
+            // Execute block, move to Prepare.
+            handleNextView(NextView(viewNumber)) match {
+              case (next, effects) =>
+                val withExec = ExecuteBlocks(
+                  lastExecutedBlockHash,
+                  m.quorumCertificate
+                ) +: effects
+
+                next -> withExec
+            }
         }
     }
 
@@ -224,6 +248,9 @@ case class ProtocolState[A <: Agreement: Block](
       phase: VotingPhase,
       blockHash: A#Hash
   ): PartialSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#PSig] = ???
+
+  private def sendVote(phase: VotingPhase, blockHash: A#Hash): SendMessage[A] =
+    SendMessage(leader, vote(phase, blockHash))
 
   /** Check that the proposed new block extends the locked Q.C. (safety)
     * or that the Quorum Certificate is newer than the locked Q.C. (liveness).
