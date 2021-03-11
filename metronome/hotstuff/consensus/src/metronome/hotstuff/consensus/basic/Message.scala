@@ -8,16 +8,10 @@ sealed trait Message[A <: Agreement] {
 
   /** Messages are only accepted if they match the node's current view number. */
   def viewNumber: ViewNumber
-  def phase: Phase
 }
 
 /** Message from the leader to the replica. */
 sealed trait LeaderMessage[A <: Agreement] extends Message[A]
-
-/** Message carrying a Quorum Certificate. */
-sealed trait QuorumMessage[A <: Agreement] extends LeaderMessage[A] {
-  def certificate: QuorumCertificate[A]
-}
 
 /** Message from the replica to the leader. */
 sealed trait ReplicaMessage[A <: Agreement] extends Message[A]
@@ -31,51 +25,7 @@ object Message {
       viewNumber: ViewNumber,
       block: A#Block,
       highQC: QuorumCertificate[A]
-  ) extends LeaderMessage[A] {
-    override val phase: Phase = Phase.Prepare
-  }
-
-  /** Having collected enough `Prepare` votes from replicas,
-    * the leader combines the votes into a Prepare Q.C. and
-    * broadcasts it to replicas in a `PreCommit` message.
-    *
-    * The certificate contains the hash of the block to vote on.
-    */
-  case class PreCommit[A <: Agreement](
-      viewNumber: ViewNumber,
-      prepareQC: QuorumCertificate[A]
-  ) extends QuorumMessage[A] {
-    override val phase: Phase                      = Phase.PreCommit
-    override val certificate: QuorumCertificate[A] = prepareQC
-  }
-
-  /** Having collected enough `PreCommit` votes from replicas,
-    * the leader combines the votes into a Pre-Commit Q.C. and
-    * broadcasts it to replicas in a `Commit` message.
-    *
-    * The certificate contains the hash of the block to vote on.
-    */
-  case class Commit[A <: Agreement](
-      viewNumber: ViewNumber,
-      precommitQC: QuorumCertificate[A]
-  ) extends QuorumMessage[A] {
-    override val phase: Phase                      = Phase.Commit
-    override val certificate: QuorumCertificate[A] = precommitQC
-  }
-
-  /** Having collected enough `Commit` votes from replicas,
-    * the leader combines the votes into a Commit Q.C. and
-    * broadcasts it to replicas in a `Decide` message.
-    *
-    * The certificate contains the hash of the block to execute.
-    */
-  case class Decide[A <: Agreement](
-      viewNumber: ViewNumber,
-      commitQC: QuorumCertificate[A]
-  ) extends QuorumMessage[A] {
-    override val phase: Phase                      = Phase.Decide
-    override val certificate: QuorumCertificate[A] = commitQC
-  }
+  ) extends LeaderMessage[A]
 
   /** Having received one of the leader messages, the replica
     * casts its vote with its partical signature.
@@ -95,13 +45,25 @@ object Message {
       ]
   ) extends ReplicaMessage[A]
 
+  /** Having collected enough votes from replicas,
+    * the leader combines the votes into a Q.C. and
+    * broadcasts it to replicas:
+    *  - Prepare votes combine into a Prepare Q.C., expected in the PreCommit phase.
+    *  - PreCommit votes combine into a PreCommit Q.C., expected in the Commit phase.
+    *  - Commit votes combine into a Commit Q.C, expected in the Decide phase.
+    *
+    * The certificate contains the hash of the block to vote on.
+    */
+  case class Quorum[A <: Agreement](
+      viewNumber: ViewNumber,
+      quorumCertificate: QuorumCertificate[A]
+  ) extends LeaderMessage[A]
+
   /** At the end of the round, replicas send the `NewView` message
     * to the next leader with the last Prepare Q.C.
     */
   case class NewView[A <: Agreement](
       viewNumber: ViewNumber,
       prepareQC: QuorumCertificate[A]
-  ) extends ReplicaMessage[A] {
-    override def phase: Phase = Phase.Prepare
-  }
+  ) extends ReplicaMessage[A]
 }

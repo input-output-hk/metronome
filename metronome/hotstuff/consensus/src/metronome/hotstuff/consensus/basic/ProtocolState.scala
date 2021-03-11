@@ -150,8 +150,7 @@ case class ProtocolState[A <: Agreement: Block](
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
             ??? // Collect votes, broadcast Prepare Q.C.
-          case m: PreCommit[_]
-              if matchingLeader(e) && matchingQC(m.prepareQC) =>
+          case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
             ??? // Save prepareQC, vote pre-commit, move to commit
         }
 
@@ -159,7 +158,7 @@ case class ProtocolState[A <: Agreement: Block](
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
             ??? // Collect votes, broadcast Pre-Commit Q.C.
-          case m: Commit[_] if matchingLeader(e) && matchingQC(m.precommitQC) =>
+          case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
             ??? // Save locked QC, vote commit, move to decide
         }
 
@@ -167,7 +166,7 @@ case class ProtocolState[A <: Agreement: Block](
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
             ??? // Collect votes, broadcast Commit Q.C.
-          case m: Decide[_] if matchingLeader(e) && matchingQC(m.commitQC) =>
+          case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
             ??? // Execute block, move to Prepare
         }
     }
@@ -181,29 +180,19 @@ case class ProtocolState[A <: Agreement: Block](
   /** Check that a vote is compatible with our current expectations. */
   private def matchingVote(vote: Vote[A]): Boolean =
     viewNumber == vote.viewNumber &&
-      prevPhase.contains(vote.phase) &&
+      Phase.votingPhase(phase).contains(vote.phase) &&
       preparedBlockHash == vote.blockHash
 
   /** Check that a Q.C. is compatible with our current expectations. */
-  private def matchingQC(qc: QuorumCertificate[A]): Boolean =
-    viewNumber == qc.viewNumber &&
-      prevPhase.contains(qc.phase) &&
-      preparedBlockHash == qc.blockHash
+  private def matchingQC(m: Quorum[A]): Boolean =
+    viewNumber == m.quorumCertificate.viewNumber &&
+      Phase.votingPhase(phase).contains(m.quorumCertificate.phase) &&
+      preparedBlockHash == m.quorumCertificate.blockHash
 
   /** Check that a message is coming from the view leader and is for the current phase. */
   private def matchingLeader(e: MessageReceived[A]): Boolean =
     e.message.viewNumber == viewNumber &&
-      e.message.phase == phase &&
       e.sender == federation.leaderOf(viewNumber)
-
-  /** Which phase does the current one look for in votes and quorum certificates. */
-  private def prevPhase: Option[Phase] =
-    phase match {
-      case Phase.Prepare   => None
-      case Phase.PreCommit => Some(Phase.Prepare)
-      case Phase.Commit    => Some(Phase.PreCommit)
-      case Phase.Decide    => Some(Phase.Commit)
-    }
 }
 
 object ProtocolState {
