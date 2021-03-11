@@ -1,6 +1,8 @@
 package metronome.hotstuff.consensus.basic
 
+import cats.implicits._
 import metronome.core.Validated
+import metronome.crypto.PartialSignature
 import metronome.hotstuff.consensus.{ViewNumber, Federation}
 import scala.concurrent.duration.FiniteDuration
 
@@ -41,22 +43,10 @@ case class ProtocolState[A <: Agreement: Block](
 
   private def moveTo(phase: Phase): ProtocolState[A] =
     copy(
-      viewNumber = if (phase == Phase.Prepare) viewNumber + 1 else viewNumber,
+      viewNumber = if (phase == Phase.Prepare) viewNumber.next else viewNumber,
       phase = phase,
       votes = Set.empty[Vote[A]]
     )
-
-  /** Broadcast a message from the leader to all replicas.
-    *
-    * This includes the leader sending a message to itself,
-    * because the leader is a replica as well. The effect
-    * system should take care that these messages don't
-    * try to go over the network.
-    */
-  private def broadcast(message: Message[A]): Seq[Effect[A]] =
-    federation.publicKeys.map { pk =>
-      SendMessage(pk, message)
-    }
 
   /** The round has timed out; send `prepareQC` to the leader
     * of the next view and move to that view now.
@@ -78,13 +68,10 @@ case class ProtocolState[A <: Agreement: Block](
     */
   def handleBlockCreated(e: BlockCreated[A]): Transition[A] =
     if (e.viewNumber == viewNumber && isLeader && phase == Phase.Prepare) {
-      val next = copy(preparedBlockHash = Block[A].blockHash(e.block))
-
       val effects = broadcast {
         Prepare(viewNumber, e.block, e.highQC)
       }
-
-      next -> effects
+      this -> effects
     } else stay
 
   /** Filter out messages that are completely invalid,
@@ -136,14 +123,27 @@ case class ProtocolState[A <: Agreement: Block](
     */
   def handleMessage(
       e: Validated[MessageReceived[A]]
-  ): Either[ProtocolError[A], Transition[A]] =
+  ): TransitionAttempt[A] =
     phase match {
       case Phase.Prepare =>
-        matchingMsg(e) {
-          case m: NewView[_] if m.viewNumber == viewNumber - 1 && isLeader =>
+        matchingMsgAttempt(e) {
+          case m: NewView[_] if m.viewNumber == viewNumber.prev && isLeader =>
             ??? // Select Highest Q.C., create block.
+
           case m: Prepare[_] if matchingLeader(e) =>
-            ??? // Check safe extension, vote Prepare, move to pre-commit
+            if (isSafe(m)) {
+              // Check safe extension, vote Prepare, move to pre-commit.
+              val blockHash = Block[A].blockHash(m.block)
+              val next = moveTo(Phase.PreCommit).copy(
+                preparedBlockHash = blockHash
+              )
+              val effects = Seq(
+                SendMessage(leader, vote(Phase.Prepare, blockHash))
+              )
+              Right(next -> effects)
+            } else {
+              Left(UnsafeExtension(e.sender, m))
+            }
         }
 
       case Phase.PreCommit =>
@@ -174,8 +174,15 @@ case class ProtocolState[A <: Agreement: Block](
   /** Try to match a message to expectations, or return Unexpected. */
   private def matchingMsg(e: MessageReceived[A])(
       pf: PartialFunction[Message[A], Transition[A]]
-  ): Either[ProtocolError[A], Transition[A]] =
-    pf.lift(e.message).map(Right(_)).getOrElse(Left(Unexpected(e)))
+  ): TransitionAttempt[A] =
+    matchingMsgAttempt(e) {
+      pf.andThen(Right(_))
+    }
+
+  private def matchingMsgAttempt(e: MessageReceived[A])(
+      pf: PartialFunction[Message[A], TransitionAttempt[A]]
+  ): TransitionAttempt[A] =
+    pf.lift(e.message).getOrElse(Left(Unexpected(e)))
 
   /** Check that a vote is compatible with our current expectations. */
   private def matchingVote(vote: Vote[A]): Boolean =
@@ -193,6 +200,51 @@ case class ProtocolState[A <: Agreement: Block](
   private def matchingLeader(e: MessageReceived[A]): Boolean =
     e.message.viewNumber == viewNumber &&
       e.sender == federation.leaderOf(viewNumber)
+
+  /** Broadcast a message from the leader to all replicas.
+    *
+    * This includes the leader sending a message to itself,
+    * because the leader is a replica as well. The effect
+    * system should take care that these messages don't
+    * try to go over the network.
+    */
+  private def broadcast(m: Message[A]): Seq[Effect[A]] =
+    federation.publicKeys.map { pk =>
+      SendMessage(pk, m)
+    }
+
+  /** Produce a vote with the current view number. */
+  private def vote(phase: VotingPhase, blockHash: A#Hash): Vote[A] = {
+    val signature = sign(viewNumber, phase, blockHash)
+    Vote(viewNumber, phase, blockHash, signature)
+  }
+
+  private def sign(
+      viewNumber: ViewNumber,
+      phase: VotingPhase,
+      blockHash: A#Hash
+  ): PartialSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#PSig] = ???
+
+  /** Check that the proposed new block extends the locked Q.C. (safety)
+    * or that the Quorum Certificate is newer than the locked Q.C. (liveness).
+    */
+  private def isSafe(m: Prepare[A]): Boolean = {
+    val valid = isExtension(m.block, m.highQC)
+    val safe  = isExtension(m.block, lockedQC)
+    val live  = m.highQC.viewNumber > lockedQC.viewNumber
+
+    valid && (safe || live)
+  }
+
+  /** Check that a block extends from the one in the Q.C.
+    *
+    * Currently only allows direct parent-child relationship,
+    * which means each leader is expected to create max 1 block
+    * on top of the previous high Q.C.
+    */
+  private def isExtension(block: A#Block, qc: QuorumCertificate[A]): Boolean =
+    qc.blockHash == Block[A].parentBlockHash(block)
+
 }
 
 object ProtocolState {
@@ -201,6 +253,9 @@ object ProtocolState {
     * that can be carried out in parallel.
     */
   type Transition[A <: Agreement] = (ProtocolState[A], Seq[Effect[A]])
+
+  type TransitionAttempt[A <: Agreement] =
+    Either[ProtocolError[A], Transition[A]]
 
   /** Return an initial set of effects; at the minimum the timeout for the first round. */
   def init[A <: Agreement](state: ProtocolState[A]): Seq[Effect[A]] =

@@ -37,6 +37,12 @@ object ProtocolError {
       expected: Phase
   ) extends ProtocolError[A]
 
+  /** The block in the prepare message doesn't extend the previous Q.C. */
+  case class UnsafeExtension[A <: Agreement](
+      sender: A#PKey,
+      message: Message.Prepare[A]
+  ) extends ProtocolError[A]
+
   /** A message we didn't expect to receive in the given state. */
   case class Unexpected[A <: Agreement](
       event: Event.MessageReceived[A]

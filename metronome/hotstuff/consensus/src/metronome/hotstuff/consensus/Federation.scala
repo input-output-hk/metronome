@@ -17,5 +17,5 @@ case class Federation[K](
     publicKeySet.contains(publicKey)
 
   def leaderOf(viewNumber: ViewNumber): K =
-    publicKeys((viewNumber.value % size).toInt)
+    publicKeys((viewNumber % size).toInt)
 }
