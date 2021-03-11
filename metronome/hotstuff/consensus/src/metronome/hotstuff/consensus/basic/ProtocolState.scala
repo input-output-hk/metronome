@@ -26,7 +26,9 @@ case class ProtocolState[A <: Agreement: Block](
     // Timeout for the view, so that it can be adjusted next time if necessary.
     timeout: FiniteDuration,
     // Votes gathered by the leader in this phase. They are guarenteed to be over the same content.
-    votes: Set[Message.Vote[A]]
+    votes: Set[Message.Vote[A]],
+    // NewView messages gathered by the leader during the Prepare phase. Map so every sender can only give one.
+    newViews: Map[A#PKey, Message.NewView[A]]
 ) {
   import Message._
   import Effect._
@@ -38,7 +40,7 @@ case class ProtocolState[A <: Agreement: Block](
   val isLeader = leader == ownPublicKey
 
   /** The leader has to collect `n-f` signatures into a Q.C. */
-  def requiredSigs = federation.size - federation.maxFaulty
+  def quorumSize = federation.size - federation.maxFaulty
 
   /** No state transition. */
   private def stay: Transition[A] =
@@ -48,7 +50,8 @@ case class ProtocolState[A <: Agreement: Block](
     copy(
       viewNumber = if (phase == Phase.Prepare) viewNumber.next else viewNumber,
       phase = phase,
-      votes = Set.empty[Vote[A]]
+      votes = Set.empty,
+      newViews = Map.empty
     )
 
   /** The round has timed out; send `prepareQC` to the leader
@@ -129,7 +132,7 @@ case class ProtocolState[A <: Agreement: Block](
       case Phase.Prepare =>
         matchingMsgAttempt(e) {
           case m: NewView[_] if m.viewNumber == viewNumber.prev && isLeader =>
-            ??? // Select Highest Q.C., create block.
+            Right(addNewViewAndMaybeCreateBlock(e.sender, m))
 
           case m: Prepare[_] if matchingLeader(e) =>
             if (isSafe(m)) {
@@ -291,7 +294,7 @@ case class ProtocolState[A <: Agreement: Block](
     val next = copy(votes = votes + vote)
 
     // Only make the quorum certificate once.
-    val effects = if (next.votes.size == requiredSigs) {
+    val effects = if (next.votes.size == quorumSize) {
       val vs = votes.toSeq
       val qc = QuorumCertificate(
         phase = vs.head.phase,
@@ -305,6 +308,28 @@ case class ProtocolState[A <: Agreement: Block](
     } else Nil
 
     // The move to the next phase will be triggered when the Q.C. is delivered.
+    next -> effects
+  }
+
+  /** Register a NewView from a replica; if there are enough, select the High Q.C. and create a block. */
+  private def addNewViewAndMaybeCreateBlock(
+      sender: A#PKey,
+      newView: NewView[A]
+  ): Transition[A] = {
+    // We already checked that these are for the current view.
+    val next = copy(newViews = newViews.updated(sender, newView))
+
+    // Only make a block once.
+    val effects = if (next.newViews.size == quorumSize) {
+      List(
+        CreateBlock(
+          viewNumber,
+          highQC = next.newViews.values.maxBy(_.viewNumber).prepareQC
+        )
+      )
+    } else Nil
+
+    // The move to the next phase will be triggered when the block is created.
     next -> effects
   }
 }
