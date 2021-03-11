@@ -6,7 +6,7 @@ import metronome.crypto.{PartialSignature, GroupSignature}
 import metronome.hotstuff.consensus.{ViewNumber, Federation}
 import scala.concurrent.duration.FiniteDuration
 
-/** Basic HotStuff protocol state with the following generic parameters:
+/** Basic HotStuff protocol state machine.
   *
   * See https://arxiv.org/pdf/1803.05069.pdf
   */
@@ -221,9 +221,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     case v: Vote[_] if isLeader && matchingVote(v) =>
       addVoteAndMaybeBroadcastQC(v)
 
-    // Votes arriving for a previous phase, once the leader has already moved on.
-    case v: Vote[_]
-        if isLeader && v.viewNumber == viewNumber && preparedBlockHash == v.blockHash =>
+    case v: Vote[_] if isLeader && extravoteVote(v) =>
       stay
   }
 
@@ -245,6 +243,14 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     viewNumber == vote.viewNumber &&
       Phase.votingPhase(phase).contains(vote.phase) &&
       preparedBlockHash == vote.blockHash
+
+  /** Once the leader moves on to the next phase, it can still receive votes
+    * for the previous one. These can be ignored, they are not unexpected.
+    */
+  private def extravoteVote(vote: Vote[A]): Boolean =
+    viewNumber == vote.viewNumber &&
+      preparedBlockHash == vote.blockHash &&
+      !Phase.votingPhase(phase).contains(vote.phase)
 
   /** Check that a Q.C. is compatible with our current expectations. */
   private def matchingQC(m: Quorum[A]): Boolean =
