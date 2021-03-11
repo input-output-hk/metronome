@@ -19,6 +19,7 @@ object Event {
   /** The block the leader asked to be created is ready. */
   case class BlockCreated[A <: Agreement](
       viewNumber: ViewNumber,
-      block: A#Block
+      block: A#Block,
+      highQC: QuorumCertificate[A]
   ) extends Event[A]
 }

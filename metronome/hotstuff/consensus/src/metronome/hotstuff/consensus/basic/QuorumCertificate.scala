@@ -10,5 +10,5 @@ case class QuorumCertificate[A <: Agreement](
     phase: VotingPhase,
     viewNumber: ViewNumber,
     blockHash: A#Hash,
-    signature: GroupSignature[A#PKey, A#Hash, A#GSig]
+    signature: GroupSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#GSig]
 )

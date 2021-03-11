@@ -13,9 +13,24 @@ import shapeless.tag, tag.@@
   * val myThing: MyType = MyType(ByteVector.empty)
   * ```
   */
-protected[metronome] trait Tagger[U] {
+trait Tagger[U] {
   trait Tag
   type Tagged = U @@ Tag
   def apply(underlying: U): Tagged =
+    tag[Tag][U](underlying)
+}
+
+/** Helper class to tag not a specific raw type, but to apply a common tag to any type.
+  *
+  * ```
+  * object Validated extends GenericTagger
+  * type Validated[U] = Validated.Tagged[U]
+  * ```
+  */
+trait GenericTagger {
+  trait Tag
+  type Tagged[U] = U @@ Tag
+
+  def apply[U](underlying: U): Tagged[U] =
     tag[Tag][U](underlying)
 }

@@ -7,7 +7,7 @@ import metronome.hotstuff.consensus.ViewNumber
 /** Represent all possible effects that a protocol transition can
   * ask the host system to carry out, e.g. send messages to replicas.
   */
-sealed trait Effect[A <: Agreement]
+sealed trait Effect[+A <: Agreement]
 
 object Effect {
 
@@ -29,10 +29,12 @@ object Effect {
     * on top of the last prepared one. The host environment
     * should consult the mempool and create one, passing the
     * result as an event.
+    *
+    * The block must be built as a child of `highQC.blockHash`.
     */
   case class CreateBlock[A <: Agreement](
       viewNumber: ViewNumber,
-      parentBlockHash: A#Hash
+      highQC: QuorumCertificate[A]
   ) extends Effect[A]
 
   /** Execute blocks after a decision, up to the last executed hash. */

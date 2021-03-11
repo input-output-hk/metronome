@@ -1,5 +1,6 @@
 package metronome.hotstuff.consensus
 
-import metronome.core.Tagger
-
-object ViewNumber extends Tagger[Long]
+case class ViewNumber(val value: Long) extends AnyVal {
+  def `+`(i: Int): ViewNumber = ViewNumber(value + i)
+  def `-`(i: Int): ViewNumber = ViewNumber(value - i)
+}

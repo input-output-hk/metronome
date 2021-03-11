@@ -107,6 +107,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     )
   }
 
+  /** Generic Peer-to-Peer components that can multiplex protocols
+    * from different modules over a single authenticated TLS connection.
+    */
+  object networking extends SubModule
+
   /** Storage abstractions, e.g. a generic key-value store. */
   object storage extends SubModule
 
@@ -181,7 +186,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Seq(tracing, crypto)
     }
 
-    /** Implements the checkpointing functionality and the ledger rules.
+    /** Implements the checkpointing functionality, the ledger rules,
+      * and state synchronisation, which is not an inherent part of
+      * HotStuff, but applies to the checkpointing use case
       *
       * If it was published, it could be directly included in the checkpoint assisted blockchain application,
       * so the service and the interpreter can share data in memory.
