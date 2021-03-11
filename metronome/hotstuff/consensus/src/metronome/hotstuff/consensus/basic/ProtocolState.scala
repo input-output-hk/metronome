@@ -10,10 +10,11 @@ import scala.concurrent.duration.FiniteDuration
   *
   * See https://arxiv.org/pdf/1803.05069.pdf
   */
-case class ProtocolState[A <: Agreement: Block](
+case class ProtocolState[A <: Agreement: Block: Signing](
     viewNumber: ViewNumber,
     phase: Phase,
-    ownPublicKey: A#PKey,
+    publicKey: A#PKey,
+    signingKey: A#SKey,
     federation: Federation[A#PKey],
     // Highest QC for which a replica voted Pre-Commit, because it received a Prepare Q.C. from the leader.
     prepareQC: QuorumCertificate[A],
@@ -37,7 +38,7 @@ case class ProtocolState[A <: Agreement: Block](
   import ProtocolError._
 
   val leader   = federation.leaderOf(viewNumber)
-  val isLeader = leader == ownPublicKey
+  val isLeader = leader == publicKey
 
   /** The leader has to collect `n-f` signatures into a Q.C. */
   def quorumSize = federation.size - federation.maxFaulty
@@ -72,6 +73,8 @@ case class ProtocolState[A <: Agreement: Block](
     */
   def handleBlockCreated(e: BlockCreated[A]): Transition[A] =
     if (e.viewNumber == viewNumber && isLeader && phase == Phase.Prepare) {
+      // TODO: If the block is empty, we could just repeat the agreement on
+      // the previous Q.C. to simulate being idle, without timing out.
       val effects = broadcast {
         Prepare(viewNumber, e.block, e.highQC)
       }
@@ -98,12 +101,21 @@ case class ProtocolState[A <: Agreement: Block](
       case m: LeaderMessage[_] if e.sender != expectedLeader =>
         Left(NotFromLeader(e, expectedLeader))
 
-      case m: ReplicaMessage[_] if ownPublicKey != expectedLeader =>
+      case m: ReplicaMessage[_] if publicKey != expectedLeader =>
         Left(NotToLeader(e, expectedLeader))
 
-      // TODO: Check that Vote signature is correct
-      // TODO: Check that Quorum Certificate signature is correct
-      // TODO: Check that Quorum Certificate has the required number of sigs.
+      case m: Vote[_] if !Signing[A].validate(m) =>
+        // TODO: Do we need to check that the `sender` is the key that signed?
+        Left(InvalidVote(e.sender, m))
+
+      case m: Quorum[_] if !Signing[A].validate(m.quorumCertificate) =>
+        Left(InvalidQuorumCertificate(e.sender, m.quorumCertificate))
+
+      case m: NewView[_] if !Signing[A].validate(m.prepareQC) =>
+        Left(InvalidQuorumCertificate(e.sender, m.prepareQC))
+
+      case m: Prepare[_] if !Signing[A].validate(m.highQC) =>
+        Left(InvalidQuorumCertificate(e.sender, m.highQC))
 
       case _ =>
         Right(Validated[MessageReceived[A]](e))
@@ -248,19 +260,9 @@ case class ProtocolState[A <: Agreement: Block](
 
   /** Produce a vote with the current view number. */
   private def vote(phase: VotingPhase, blockHash: A#Hash): Vote[A] = {
-    val signature = sign(viewNumber, phase, blockHash)
+    val signature = Signing[A].sign(signingKey, phase, viewNumber, blockHash)
     Vote(viewNumber, phase, blockHash, signature)
   }
-
-  private def sign(
-      viewNumber: ViewNumber,
-      phase: VotingPhase,
-      blockHash: A#Hash
-  ): PartialSig[A] = ???
-
-  private def combine(
-      sigs: Seq[PartialSig[A]]
-  ): GroupSig[A] = ???
 
   private def sendVote(phase: VotingPhase, blockHash: A#Hash): SendMessage[A] =
     SendMessage(leader, vote(phase, blockHash))
@@ -300,7 +302,7 @@ case class ProtocolState[A <: Agreement: Block](
         phase = vs.head.phase,
         viewNumber = vs.head.viewNumber,
         blockHash = vs.head.blockHash,
-        signature = combine(vs.map(_.signature))
+        signature = Signing[A].combine(vs.map(_.signature))
       )
       broadcast {
         Quorum(viewNumber, qc)
@@ -344,14 +346,7 @@ object ProtocolState {
   type TransitionAttempt[A <: Agreement] =
     Either[ProtocolError[A], Transition[A]]
 
-  type PartialSig[A <: Agreement] =
-    PartialSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#PSig]
-
-  type GroupSig[A <: Agreement] =
-    GroupSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#GSig]
-
   /** Return an initial set of effects; at the minimum the timeout for the first round. */
   def init[A <: Agreement](state: ProtocolState[A]): Seq[Effect[A]] =
     List(Effect.ScheduleNextView(state.viewNumber, state.timeout))
-
 }

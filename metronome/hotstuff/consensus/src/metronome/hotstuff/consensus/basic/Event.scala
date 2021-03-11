@@ -20,6 +20,7 @@ object Event {
   case class BlockCreated[A <: Agreement](
       viewNumber: ViewNumber,
       block: A#Block,
+      // The certificate which the block extended.
       highQC: QuorumCertificate[A]
   ) extends Event[A]
 }

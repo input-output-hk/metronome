@@ -37,6 +37,18 @@ object ProtocolError {
       expected: Phase
   ) extends ProtocolError[A]
 
+  /** The vote signature doesn't match the content. */
+  case class InvalidVote[A <: Agreement](
+      sender: A#PKey,
+      message: Message.Vote[A]
+  ) extends ProtocolError[A]
+
+  /** The Q.C. signature doesn't match the content. */
+  case class InvalidQuorumCertificate[A <: Agreement](
+      sender: A#PKey,
+      quorumCertificate: QuorumCertificate[A]
+  ) extends ProtocolError[A]
+
   /** The block in the prepare message doesn't extend the previous Q.C. */
   case class UnsafeExtension[A <: Agreement](
       sender: A#PKey,

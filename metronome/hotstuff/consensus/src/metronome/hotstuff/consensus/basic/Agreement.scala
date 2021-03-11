@@ -21,4 +21,7 @@ trait Agreement {
 
   /** The public key identity of federation members. */
   type PKey
+
+  /** The secret key used for signing partial messages. */
+  type SKey
 }
