@@ -2,7 +2,7 @@ package metronome.hotstuff.consensus.basic
 
 import cats.implicits._
 import metronome.core.Validated
-import metronome.crypto.PartialSignature
+import metronome.crypto.{PartialSignature, GroupSignature}
 import metronome.hotstuff.consensus.{ViewNumber, Federation}
 import scala.concurrent.duration.FiniteDuration
 
@@ -25,7 +25,7 @@ case class ProtocolState[A <: Agreement: Block](
     preparedBlockHash: A#Hash,
     // Timeout for the view, so that it can be adjusted next time if necessary.
     timeout: FiniteDuration,
-    // Votes gathered by the leader in this phase.
+    // Votes gathered by the leader in this phase. They are guarenteed to be over the same content.
     votes: Set[Message.Vote[A]]
 ) {
   import Message._
@@ -36,6 +36,9 @@ case class ProtocolState[A <: Agreement: Block](
 
   val leader   = federation.leaderOf(viewNumber)
   val isLeader = leader == ownPublicKey
+
+  /** The leader has to collect `n-f` signatures into a Q.C. */
+  def requiredSigs = federation.size - federation.maxFaulty
 
   /** No state transition. */
   private def stay: Transition[A] =
@@ -97,7 +100,7 @@ case class ProtocolState[A <: Agreement: Block](
 
       // TODO: Check that Vote signature is correct
       // TODO: Check that Quorum Certificate signature is correct
-      // TODO: Check that the vote is about the block we are preparing
+      // TODO: Check that Quorum Certificate has the required number of sigs.
 
       case _ =>
         Right(Validated[MessageReceived[A]](e))
@@ -147,7 +150,8 @@ case class ProtocolState[A <: Agreement: Block](
       case Phase.PreCommit =>
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
-            ??? // Collect votes, broadcast Prepare Q.C.
+            // Collect votes, broadcast Prepare Q.C.
+            addVoteAndMaybeBroadcastQC(v)
 
           case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
             // Save prepareQC, vote pre-commit, move to Commit.
@@ -163,7 +167,8 @@ case class ProtocolState[A <: Agreement: Block](
       case Phase.Commit =>
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
-            ??? // Collect votes, broadcast Pre-Commit Q.C.
+            // Collect votes, broadcast Pre-Commit Q.C.
+            addVoteAndMaybeBroadcastQC(v)
 
           case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
             // Save locked QC, vote commit, move to Decide.
@@ -179,7 +184,8 @@ case class ProtocolState[A <: Agreement: Block](
       case Phase.Decide =>
         matchingMsg(e) {
           case v: Vote[_] if isLeader && matchingVote(v) =>
-            ??? // Collect votes, broadcast Commit Q.C.
+            // Collect votes, broadcast Commit Q.C.
+            addVoteAndMaybeBroadcastQC(v)
 
           case m: Quorum[_] if matchingLeader(e) && matchingQC(m) =>
             // Execute block, move to Prepare.
@@ -247,7 +253,11 @@ case class ProtocolState[A <: Agreement: Block](
       viewNumber: ViewNumber,
       phase: VotingPhase,
       blockHash: A#Hash
-  ): PartialSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#PSig] = ???
+  ): PartialSig[A] = ???
+
+  private def combine(
+      sigs: Seq[PartialSig[A]]
+  ): GroupSig[A] = ???
 
   private def sendVote(phase: VotingPhase, blockHash: A#Hash): SendMessage[A] =
     SendMessage(leader, vote(phase, blockHash))
@@ -272,6 +282,31 @@ case class ProtocolState[A <: Agreement: Block](
   private def isExtension(block: A#Block, qc: QuorumCertificate[A]): Boolean =
     qc.blockHash == Block[A].parentBlockHash(block)
 
+  /** Register a new vote; if there are enough to form a new Q.C.,
+    * do so and broadcast it.
+    */
+  private def addVoteAndMaybeBroadcastQC(vote: Vote[A]): Transition[A] = {
+    // `matchingVote` made sure all votes are for the same content,
+    // and `moveTo` clears the votes, so they should be uniform.
+    val next = copy(votes = votes + vote)
+
+    // Only make the quorum certificate once.
+    val effects = if (next.votes.size == requiredSigs) {
+      val vs = votes.toSeq
+      val qc = QuorumCertificate(
+        phase = vs.head.phase,
+        viewNumber = vs.head.viewNumber,
+        blockHash = vs.head.blockHash,
+        signature = combine(vs.map(_.signature))
+      )
+      broadcast {
+        Quorum(viewNumber, qc)
+      }
+    } else Nil
+
+    // The move to the next phase will be triggered when the Q.C. is delivered.
+    next -> effects
+  }
 }
 
 object ProtocolState {
@@ -283,6 +318,12 @@ object ProtocolState {
 
   type TransitionAttempt[A <: Agreement] =
     Either[ProtocolError[A], Transition[A]]
+
+  type PartialSig[A <: Agreement] =
+    PartialSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#PSig]
+
+  type GroupSig[A <: Agreement] =
+    GroupSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#GSig]
 
   /** Return an initial set of effects; at the minimum the timeout for the first round. */
   def init[A <: Agreement](state: ProtocolState[A]): Seq[Effect[A]] =
