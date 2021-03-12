@@ -129,17 +129,17 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       case m: ReplicaMessage[_] if publicKey != expectedLeader =>
         Left(NotToLeader(e, expectedLeader))
 
-      case m: Vote[_] if !Signing[A].validate(m) =>
-        // TODO: Do we need to check that the `sender` is the key that signed?
+      case m: Vote[_] if !Signing[A].validate(e.sender, m) =>
         Left(InvalidVote(e.sender, m))
 
-      case m: Quorum[_] if !Signing[A].validate(m.quorumCertificate) =>
+      case m: Quorum[_]
+          if !Signing[A].validate(federation, m.quorumCertificate) =>
         Left(InvalidQuorumCertificate(e.sender, m.quorumCertificate))
 
-      case m: NewView[_] if !Signing[A].validate(m.prepareQC) =>
+      case m: NewView[_] if !Signing[A].validate(federation, m.prepareQC) =>
         Left(InvalidQuorumCertificate(e.sender, m.prepareQC))
 
-      case m: Prepare[_] if !Signing[A].validate(m.highQC) =>
+      case m: Prepare[_] if !Signing[A].validate(federation, m.highQC) =>
         Left(InvalidQuorumCertificate(e.sender, m.highQC))
 
       case _ =>

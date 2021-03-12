@@ -1,7 +1,7 @@
 package metronome.hotstuff.consensus.basic
 
 import metronome.crypto.{PartialSignature, GroupSignature}
-import metronome.hotstuff.consensus.ViewNumber
+import metronome.hotstuff.consensus.{ViewNumber, Federation}
 
 trait Signing[A <: Agreement] {
 
@@ -16,11 +16,12 @@ trait Signing[A <: Agreement] {
       signatures: Seq[Signing.PartialSig[A]]
   ): Signing.GroupSig[A]
 
-  /** Validate a partial signature.
+  /** Validate that partial signature was created by a given public key.
     *
     * Check that the signer is part of the federation.
     */
   def validate(
+      publicKey: A#PKey,
       signature: Signing.PartialSig[A],
       phase: VotingPhase,
       viewNumber: ViewNumber,
@@ -33,17 +34,33 @@ trait Signing[A <: Agreement] {
     * and only the members.
     */
   def validate(
+      federation: Federation[A#PKey],
       signature: Signing.GroupSig[A],
       phase: VotingPhase,
       viewNumber: ViewNumber,
       blockHash: A#Hash
   ): Boolean
 
-  def validate(vote: Message.Vote[A]): Boolean =
-    validate(vote.signature, vote.phase, vote.viewNumber, vote.blockHash)
+  def validate(sender: A#PKey, vote: Message.Vote[A]): Boolean =
+    validate(
+      sender,
+      vote.signature,
+      vote.phase,
+      vote.viewNumber,
+      vote.blockHash
+    )
 
-  def validate(qc: QuorumCertificate[A]): Boolean =
-    validate(qc.signature, qc.phase, qc.viewNumber, qc.blockHash)
+  def validate(
+      federation: Federation[A#PKey],
+      quorumCertificate: QuorumCertificate[A]
+  ): Boolean =
+    validate(
+      federation,
+      quorumCertificate.signature,
+      quorumCertificate.phase,
+      quorumCertificate.viewNumber,
+      quorumCertificate.blockHash
+    )
 }
 
 object Signing {

@@ -1,8 +1,8 @@
 package metronome.hotstuff.consensus
 
 /** Collection of keys of the federation members. */
-case class Federation[K](
-    publicKeys: IndexedSeq[K]
+case class Federation[PKey](
+    publicKeys: IndexedSeq[PKey]
 ) {
   private val publicKeySet = publicKeys.toSet
 
@@ -13,9 +13,9 @@ case class Federation[K](
   /** Maximum number of Byzantine nodes, `f`, so that `n >= 3*f+1`. */
   val maxFaulty: Int = (size - 1) / 3
 
-  def contains(publicKey: K): Boolean =
+  def contains(publicKey: PKey): Boolean =
     publicKeySet.contains(publicKey)
 
-  def leaderOf(viewNumber: ViewNumber): K =
+  def leaderOf(viewNumber: ViewNumber): PKey =
     publicKeys((viewNumber % size).toInt)
 }
