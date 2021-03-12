@@ -8,6 +8,9 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.forAll
 import scala.annotation.nowarn
 import scala.concurrent.duration._
+import scala.util.Try
+import scala.util.Failure
+import scala.util.Success
 
 object HotStuffProtocolSpec extends Properties("Basic HotStuff") {
 
@@ -124,7 +127,9 @@ object HotStuffProtocolCommands extends Commands {
     def isLeader = viewNumber % n == ownIndex
   }
 
-  type Sut   = ProtocolState[TestAgreement]
+  class Protocol(var state: ProtocolState[TestAgreement])
+
+  type Sut   = Protocol
   type State = Model
 
   @nowarn
@@ -141,19 +146,21 @@ object HotStuffProtocolCommands extends Commands {
       state.voteCount == 0
 
   override def newSut(state: State): Sut =
-    ProtocolState[TestAgreement](
-      viewNumber = ViewNumber(state.viewNumber),
-      phase = state.phase,
-      publicKey = state.publicKey,
-      signingKey = state.signingKey,
-      federation = Federation(state.federation),
-      prepareQC = genesisQC,
-      lockedQC = genesisQC,
-      lastExecutedBlockHash = genesisQC.blockHash,
-      preparedBlockHash = genesisQC.blockHash,
-      timeout = 10.seconds,
-      votes = Set.empty,
-      newViews = Map.empty
+    new Protocol(
+      ProtocolState[TestAgreement](
+        viewNumber = ViewNumber(state.viewNumber),
+        phase = state.phase,
+        publicKey = state.publicKey,
+        signingKey = state.signingKey,
+        federation = Federation(state.federation),
+        prepareQC = genesisQC,
+        lockedQC = genesisQC,
+        lastExecutedBlockHash = genesisQC.blockHash,
+        preparedBlockHash = genesisQC.blockHash,
+        timeout = 10.seconds,
+        votes = Set.empty,
+        newViews = Map.empty
+      )
     )
 
   override def destroySut(sut: Sut): Unit = ()
@@ -183,6 +190,81 @@ object HotStuffProtocolCommands extends Commands {
       newViewCount = 0
     )
 
-  override def genCommand(state: State): Gen[Command] = ???
+  /** Generate valid and invalid commands depending on state.
+    *
+    * Invalid commands are marked as such, so we don't have to repeat validations here
+    * to tell what we expect the response to be. We can send invalid commands from up
+    * to `f` Bzyantine members of the federation. The rest should be honest, but they
+    * might still send commands which are delivered in a different state, e.g. because
+    * they didn't have the data available to validate a proposal.
+    */
+  override def genCommand(state: State): Gen[Command] =
+    Gen.frequency(
+      // 7 -> genValid,
+      // 3 -> genInvalid,
+      // 2 -> genUnexpected,
+      1 -> genTimeout(state)
+    )
 
+  def genTimeout(state: State): Gen[Command] =
+    Gen.const(NextViewCmd(state.viewNumber))
+
+  type Transition = ProtocolState.Transition[TestAgreement]
+
+  case class NextViewCmd(viewNumber: Int) extends Command {
+    type Result = Transition
+
+    def run(sut: Sut): Result = {
+      sut.state.handleNextView(Event.NextView(ViewNumber(viewNumber))) match {
+        case result @ (next, _) =>
+          sut.state = next
+          result
+      }
+    }
+
+    def nextState(state: State): State =
+      state.copy(
+        viewNumber = state.viewNumber + 1,
+        phase = Phase.Prepare,
+        voteCount = 0,
+        newViewCount = 0
+      )
+
+    def preCondition(state: State): Boolean =
+      viewNumber == state.viewNumber
+
+    def postCondition(state: Model, result: Try[Result]): Prop =
+      result match {
+        case Failure(exception) => false
+        case Success((next, effects)) =>
+          val propNewView = effects.collectFirst {
+            case Effect.SendMessage(
+                  recipient,
+                  Message.NewView(viewNumber, prepareQC)
+                ) =>
+              recipient == next.leader &&
+                viewNumber == state.viewNumber &&
+                prepareQC == next.prepareQC
+          }
+          val propSchedule = effects.collectFirst {
+            case Effect.ScheduleNextView(
+                  viewNumber,
+                  timeout
+                ) =>
+              viewNumber == next.viewNumber &&
+                timeout == next.timeout
+          }
+          val propNext =
+            next.phase == Phase.Prepare &&
+              next.viewNumber == state.viewNumber + 1 &&
+              next.votes.isEmpty &&
+              next.newViews.isEmpty
+
+          propNext &&
+          effects.size == 2 &&
+          propNewView == Some(true) &&
+          propSchedule == Some(true)
+      }
+
+  }
 }

@@ -207,9 +207,9 @@ object RocksDBStoreCommands extends Commands {
     if (!state.isConnected) Gen.const(ToggleConnected)
     else
       Gen.frequency(
-        (10, genReadWriteProg(state)),
-        (3, genReadOnlyProg(state)),
-        (1, Gen.const(ToggleConnected))
+        10 -> genReadWriteProg(state),
+        3  -> genReadOnlyProg(state),
+        1  -> Gen.const(ToggleConnected)
       )
 
   /** Generate a sequence of writes and reads. */
