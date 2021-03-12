@@ -7,6 +7,33 @@ import scala.concurrent.duration.FiniteDuration
 /** Basic HotStuff protocol state machine.
   *
   * See https://arxiv.org/pdf/1803.05069.pdf
+  *
+  * ```
+  *
+  * PHASE                  LEADER                         REPLICA
+  *                           |                              |
+  *                           | <--- NewView(prepareQC) ---- |
+  * # Prepare --------------- |                              |
+  *             select highQC |                              |
+  *             create block  |                              |
+  *                           | ------ Prepare(block) -----> |
+  *                           |                              | check safety
+  *                           | <----- Vote(Prepare) ------- |
+  * # PreCommit ------------- |                              |
+  *                           | ------ Prepare Q.C. -------> |
+  *                           |                              | save as prepareQC
+  *                           | <----- Vote(PreCommit) ----- |
+  * # Commit ---------------- |                              |
+  *                           | ------ PreCommit Q.C. -----> |
+  *                           |                              | save as lockedQC
+  *                           | <----- Vote(Commit) -------- |
+  * # Decide ---------------- |                              |
+  *                           | ------ Commit Q.C. --------> |
+  *                           |                              | execute block
+  *                           | <--- NewView(prepareQC) ---- |
+  *                           |                              |
+  *
+  * ```
   */
 case class ProtocolState[A <: Agreement: Block: Signing](
     viewNumber: ViewNumber,
