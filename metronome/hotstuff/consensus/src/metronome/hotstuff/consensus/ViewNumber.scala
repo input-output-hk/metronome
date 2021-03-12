@@ -7,4 +7,7 @@ object ViewNumber extends Tagger[Long] {
     def next: ViewNumber = ViewNumber(vn + 1)
     def prev: ViewNumber = ViewNumber(vn - 1)
   }
+
+  implicit val ord: Ordering[ViewNumber] =
+    Ordering.by(identity[Long])
 }

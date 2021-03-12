@@ -1,8 +1,6 @@
 package metronome.hotstuff.consensus.basic
 
-import cats.implicits._
 import metronome.core.Validated
-import metronome.crypto.{PartialSignature, GroupSignature}
 import metronome.hotstuff.consensus.{ViewNumber, Federation}
 import scala.concurrent.duration.FiniteDuration
 
