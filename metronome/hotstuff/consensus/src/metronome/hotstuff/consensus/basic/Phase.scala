@@ -11,15 +11,4 @@ object Phase {
   case object PreCommit extends VotingPhase
   case object Commit    extends VotingPhase
   case object Decide    extends Phase
-
-  /** In a given `phase`, what is the relative previous voting phase
-    * from which we're expecting to receive a quorum.
-    */
-  def votingPhase(phase: Phase): Option[VotingPhase] =
-    phase match {
-      case Phase.Prepare   => None
-      case Phase.PreCommit => Some(Phase.Prepare)
-      case Phase.Commit    => Some(Phase.PreCommit)
-      case Phase.Decide    => Some(Phase.Commit)
-    }
 }
