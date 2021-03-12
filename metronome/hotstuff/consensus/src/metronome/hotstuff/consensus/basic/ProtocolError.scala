@@ -23,20 +23,6 @@ object ProtocolError {
       event: Event.MessageReceived[A]
   ) extends ProtocolError[A]
 
-  /** A message was received from a different view. */
-  case class WrongViewNumber[A <: Agreement](
-      event: Event.MessageReceived[A],
-      expected: ViewNumber
-  ) extends ProtocolError[A]
-
-  /** A message was received from a different phase.
-    * This is normal for the leader, who after n-f votes moves to the next phase.
-    */
-  case class WrongPhase[A <: Agreement](
-      event: Event.MessageReceived[A],
-      expected: Phase
-  ) extends ProtocolError[A]
-
   /** The vote signature doesn't match the content. */
   case class InvalidVote[A <: Agreement](
       sender: A#PKey,

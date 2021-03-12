@@ -245,6 +245,9 @@ case class ProtocolState[A <: Agreement: Block: Signing](
   /** The leader's message handling is the same across all phases:
     * add the vote to the list; if we reached `n-f` then combine
     * into a Q.C. and broadcast.
+    *
+    * It can also receive messages beyond the `n-f` it needed,
+    * which it can ignore.
     */
   private def handleVotesFrom(
       phase: VotingPhase
@@ -253,6 +256,9 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       addVoteAndMaybeBroadcastQC(v)
 
     case v: Vote[_] if isLeader && extraVote(v, phase) =>
+      stay
+
+    case v: NewView[_] if isLeader && v.viewNumber == viewNumber - 1 =>
       stay
   }
 
