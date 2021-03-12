@@ -200,14 +200,29 @@ object HotStuffProtocolCommands extends Commands {
     */
   override def genCommand(state: State): Gen[Command] =
     Gen.frequency(
-      // 7 -> genValid,
+      7 -> genValid,
       // 3 -> genInvalid,
-      // 2 -> genUnexpected,
+      // 2 -> genUnexpected(state),
       1 -> genTimeout(state)
     )
 
   def genTimeout(state: State): Gen[Command] =
     Gen.const(NextViewCmd(state.viewNumber))
+
+  def genValid(state: State): Gen[Command] =
+    if (state.isLeader) genValidToLeader(state) else genValidFromLeader(state)
+
+  // def genInvalid(state: State): Gen[Command] =
+  //   Gen.oneOf(
+  //     genNotFromFederation(state),
+  //     genNotFromLeader(state),
+  //     genNotToLeader(state),
+  //     genInvalidVote(state),
+  //     genInvalidQuorumCertificate(state),
+  //     genUnsafeExtension(state)
+  //   )
+
+  //def genNotFromFederation(state: State): Gen[Command] =
 
   type Transition = ProtocolState.Transition[TestAgreement]
 
@@ -265,6 +280,6 @@ object HotStuffProtocolCommands extends Commands {
           propNewView == Some(true) &&
           propSchedule == Some(true)
       }
-
   }
+
 }
