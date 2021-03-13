@@ -236,22 +236,44 @@ object HotStuffProtocolCommands extends Commands {
   def genTimeout(state: State): Gen[Command] =
     Gen.const(NextViewCmd(state.viewNumber))
 
-  def genValid(state: State): Gen[Command] =
-    if (state.isLeader) {
-      //Gen.oneOf(
-      genValidNewView(state) //,
-      //genValidVote(state)
-      //)
-    } else {
-      genTimeout(state)
-    }
+  def genValid(state: State): Gen[Command] = {
+    val usables: List[Gen[Command]] =
+      List(
+        genValidNewView(state) -> state.isLeader,
+        genValidBlock(state)   -> state.isLeader,
+        genValidPrepare(state) -> true,
+        genValidVote(state)    -> state.isLeader,
+        genValidQuorum(state)  -> true
+      ).collect {
+        case (gen, usable) if usable => gen
+      }
 
+    usables match {
+      case Nil                => genTimeout(state)
+      case one :: Nil         => one
+      case one :: two :: rest => Gen.oneOf(one, two, rest: _*)
+    }
+  }
+
+  /** Replica sends a new view with an arbitrary prepare QC. */
   def genValidNewView(state: State): Gen[Command] =
     for {
       s  <- Gen.oneOf(state.federation)
       qc <- genPrepareQC(state)
       m = Message.NewView(ViewNumber(state.viewNumber - 1), qc)
     } yield NewViewCmd(s, m)
+
+  /** Leader creates a valid block on top of the saved High Q.C. */
+  def genValidBlock(state: State): Gen[Command] = genTimeout(state)
+
+  /** Leader sends a valid Prepare command with the generated block. */
+  def genValidPrepare(state: State): Gen[Command] = genTimeout(state)
+
+  /** Replica sends a valid vote for the current phase and prepared block. */
+  def genValidVote(state: State): Gen[Command] = genTimeout(state)
+
+  /** Leader sends a valid quorum from the collected votes. */
+  def genValidQuorum(state: State): Gen[Command] = genTimeout(state)
 
   // A positive hash, not the same as Genesis.
   val genHash: Gen[TestAgreement.Hash] =
@@ -384,6 +406,7 @@ object HotStuffProtocolCommands extends Commands {
           newViewsFrom = state.newViewsFrom + sender,
           newViewsMax =
             math.max(state.newViewsMax, message.prepareQC.viewNumber.toInt)
+          // TODO: if we reached n-f new views, then save the hiqh QC
         )
       } else state
 
