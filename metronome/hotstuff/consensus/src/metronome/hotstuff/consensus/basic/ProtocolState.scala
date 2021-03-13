@@ -117,17 +117,22 @@ case class ProtocolState[A <: Agreement: Block: Signing](
   def validateMessage(
       e: MessageReceived[A]
   ): Either[ProtocolError[A], Validated[MessageReceived[A]]] = {
-    val expectedLeader = federation.leaderOf(e.message.viewNumber)
+    val currLeader = federation.leaderOf(e.message.viewNumber)
+    val nextLeader = federation.leaderOf(e.message.viewNumber.next)
 
     e.message match {
       case _ if !federation.contains(e.sender) =>
         Left(NotFromFederation(e))
 
-      case m: LeaderMessage[_] if e.sender != expectedLeader =>
-        Left(NotFromLeader(e, expectedLeader))
+      case m: LeaderMessage[_] if e.sender != currLeader =>
+        Left(NotFromLeader(e, currLeader))
 
-      case m: ReplicaMessage[_] if publicKey != expectedLeader =>
-        Left(NotToLeader(e, expectedLeader))
+      case m: ReplicaMessage[_]
+          if !m.isInstanceOf[NewView[_]] && publicKey != currLeader =>
+        Left(NotToLeader(e, currLeader))
+
+      case m: NewView[_] if publicKey != nextLeader =>
+        Left(NotToLeader(e, nextLeader))
 
       case m: Vote[_] if !Signing[A].validate(e.sender, m) =>
         Left(InvalidVote(e.sender, m))
@@ -135,6 +140,9 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       case m: Quorum[_]
           if !Signing[A].validate(federation, m.quorumCertificate) =>
         Left(InvalidQuorumCertificate(e.sender, m.quorumCertificate))
+
+      case m: NewView[_] if m.prepareQC.phase != Phase.Prepare =>
+        Left(InvalidQuorumCertificate(e.sender, m.prepareQC))
 
       case m: NewView[_] if !Signing[A].validate(federation, m.prepareQC) =>
         Left(InvalidQuorumCertificate(e.sender, m.prepareQC))
