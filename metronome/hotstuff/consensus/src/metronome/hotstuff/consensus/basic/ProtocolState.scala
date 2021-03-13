@@ -381,14 +381,23 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       newView: NewView[A]
   ): Transition[A] = {
     // We already checked that these are for the current view.
-    val next = copy(newViews = newViews.updated(sender, newView))
+    val next = copy(newViews =
+      newViews.updated(
+        sender,
+        newViews.get(sender).fold(newView) { oldView =>
+          if (newView.prepareQC.viewNumber > oldView.prepareQC.viewNumber)
+            newView
+          else oldView
+        }
+      )
+    )
 
     // Only make a block once.
     val effects = if (next.newViews.size == quorumSize) {
       List(
         CreateBlock(
           viewNumber,
-          highQC = next.newViews.values.maxBy(_.viewNumber).prepareQC
+          highQC = next.newViews.values.map(_.prepareQC).maxBy(_.viewNumber)
         )
       )
     } else Nil
