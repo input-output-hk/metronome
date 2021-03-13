@@ -44,70 +44,88 @@ object HotStuffProtocolCommands extends Commands {
     override def parentBlockHash(b: TestBlock) = b.parentBlockHash
   }
 
+  // Going to use publicKey == -1 * signingKey.
+  def mockSigningKey(pk: TestAgreement.PKey): TestAgreement.SKey = -1 * pk
+
   // Mock signatures.
-  implicit val signing: Signing[TestAgreement] = new Signing[TestAgreement] {
+  implicit val mockSigning: Signing[TestAgreement] =
+    new Signing[TestAgreement] {
+      private def hash(
+          phase: VotingPhase,
+          viewNumber: ViewNumber,
+          blockHash: TestAgreement.Hash
+      ): TestAgreement.Hash =
+        (phase, viewNumber, blockHash).hashCode
 
-    // Going to use publicKey == -1 * signingKey.
-    // signature = hash * signingKey
-    // publicKey = -1 * signature / hash
-
-    private def hash(
-        phase: VotingPhase,
-        viewNumber: ViewNumber,
-        blockHash: TestAgreement#Hash
-    ): TestAgreement#Hash =
-      (phase, viewNumber, blockHash).hashCode
-
-    override def sign(
-        signingKey: TestAgreement#SKey,
-        phase: VotingPhase,
-        viewNumber: ViewNumber,
-        blockHash: TestAgreement#Hash
-    ): Signing.PartialSig[TestAgreement] = {
-      val h = hash(phase, viewNumber, blockHash)
-      PartialSignature(h * signingKey)
-    }
-
-    override def combine(
-        signatures: Seq[Signing.PartialSig[TestAgreement]]
-    ): Signing.GroupSig[TestAgreement] =
-      GroupSignature(signatures.map(_.sig))
-
-    override def validate(
-        publicKey: TestAgreement#PKey,
-        signature: Signing.PartialSig[TestAgreement],
-        phase: VotingPhase,
-        viewNumber: ViewNumber,
-        blockHash: TestAgreement#Hash
-    ): Boolean = {
-      val h = hash(phase, viewNumber, blockHash)
-      publicKey == -1 * signature.sig / h
-    }
-
-    override def validate(
-        federation: Federation[TestAgreement#PKey],
-        signature: Signing.GroupSig[TestAgreement],
-        phase: VotingPhase,
-        viewNumber: ViewNumber,
-        blockHash: TestAgreement#Hash
-    ): Boolean = {
-      if (
+      private def isGenesis(
+          phase: VotingPhase,
+          viewNumber: ViewNumber,
+          blockHash: TestAgreement.Hash
+      ): Boolean =
         phase == genesisQC.phase &&
-        viewNumber == genesisQC.viewNumber &&
-        blockHash == genesisQC.blockHash
-      ) {
-        signature.sig.isEmpty
-      } else {
+          viewNumber == genesisQC.viewNumber &&
+          blockHash == genesisQC.blockHash
+
+      private def sign(
+          sk: TestAgreement.SKey,
+          h: TestAgreement.Hash
+      ): TestAgreement.PSig =
+        h + sk
+
+      private def unsign(
+          s: TestAgreement.PSig,
+          h: TestAgreement.Hash
+      ): TestAgreement.PKey =
+        ((s - h) * -1).toInt
+
+      override def sign(
+          signingKey: TestAgreement#SKey,
+          phase: VotingPhase,
+          viewNumber: ViewNumber,
+          blockHash: TestAgreement.Hash
+      ): Signing.PartialSig[TestAgreement] = {
         val h = hash(phase, viewNumber, blockHash)
-        signature.sig.size == federation.size - federation.maxFaulty &&
-        signature.sig.forall { sig =>
-          federation.publicKeys.exists { publicKey =>
-            publicKey == sig - h
+        val s = sign(signingKey, h)
+        PartialSignature(s)
+      }
+
+      override def combine(
+          signatures: Seq[Signing.PartialSig[TestAgreement]]
+      ): Signing.GroupSig[TestAgreement] =
+        GroupSignature(signatures.map(_.sig))
+
+      override def validate(
+          publicKey: TestAgreement.PKey,
+          signature: Signing.PartialSig[TestAgreement],
+          phase: VotingPhase,
+          viewNumber: ViewNumber,
+          blockHash: TestAgreement.Hash
+      ): Boolean = {
+        val h = hash(phase, viewNumber, blockHash)
+        publicKey == unsign(signature.sig, h)
+      }
+
+      override def validate(
+          federation: Federation[TestAgreement.PKey],
+          signature: Signing.GroupSig[TestAgreement],
+          phase: VotingPhase,
+          viewNumber: ViewNumber,
+          blockHash: TestAgreement.Hash
+      ): Boolean = {
+        if (isGenesis(phase, viewNumber, blockHash)) {
+          signature.sig.isEmpty
+        } else {
+          val h = hash(phase, viewNumber, blockHash)
+
+          signature.sig.size == federation.size - federation.maxFaulty &&
+          signature.sig.forall { sig =>
+            federation.publicKeys.exists { publicKey =>
+              publicKey == unsign(sig, h)
+            }
           }
         }
       }
     }
-  }
 
   case class Model(
       n: Int,
@@ -116,15 +134,17 @@ object HotStuffProtocolCommands extends Commands {
       phase: Phase,
       federation: Vector[TestAgreement.PKey],
       ownIndex: Int,
-      voteCount: Int,
-      newViewCount: Int
+      votesFrom: Set[TestAgreement.PKey],
+      newViewsFrom: Set[TestAgreement.PKey]
   ) {
     def publicKey = federation(ownIndex)
 
     // Using a signing key that works with the mock validation.
-    def signingKey = -1 * publicKey
+    def signingKey = mockSigningKey(publicKey)
 
     def isLeader = viewNumber % n == ownIndex
+
+    def `n - f` = n - f
   }
 
   class Protocol(var state: ProtocolState[TestAgreement])
@@ -142,8 +162,8 @@ object HotStuffProtocolCommands extends Commands {
   override def initialPreCondition(state: State): Boolean =
     state.viewNumber == 1 &&
       state.phase == Phase.Prepare &&
-      state.newViewCount == 0 &&
-      state.voteCount == 0
+      state.votesFrom.isEmpty &&
+      state.newViewsFrom.isEmpty
 
   override def newSut(state: State): Sut =
     new Protocol(
@@ -175,9 +195,11 @@ object HotStuffProtocolCommands extends Commands {
 
       // Create unique keys.
       publicKeys <- Gen
-        .listOfN(n, arbitrary[Int])
-        .map(_.toSet)
-        .suchThat(_.size == n)
+        .listOfN(n, Gen.posNum[Int])
+        .map { ns =>
+          ns.tail.scan(ns.head)(_ + _)
+        }
+        .retryUntil(_.size == n)
 
     } yield Model(
       n,
@@ -186,8 +208,8 @@ object HotStuffProtocolCommands extends Commands {
       phase = Phase.Prepare,
       federation = publicKeys.toVector,
       ownIndex = ownIndex,
-      voteCount = 0,
-      newViewCount = 0
+      votesFrom = Set.empty,
+      newViewsFrom = Set.empty
     )
 
   /** Generate valid and invalid commands depending on state.
@@ -200,7 +222,7 @@ object HotStuffProtocolCommands extends Commands {
     */
   override def genCommand(state: State): Gen[Command] =
     Gen.frequency(
-      7 -> genValid,
+      7 -> genValid(state),
       // 3 -> genInvalid,
       // 2 -> genUnexpected(state),
       1 -> genTimeout(state)
@@ -210,7 +232,45 @@ object HotStuffProtocolCommands extends Commands {
     Gen.const(NextViewCmd(state.viewNumber))
 
   def genValid(state: State): Gen[Command] =
-    if (state.isLeader) genValidToLeader(state) else genValidFromLeader(state)
+    if (state.isLeader) {
+      //Gen.oneOf(
+      genValidNewView(state) //,
+      //genValidVote(state)
+      //)
+    } else {
+      genTimeout(state)
+    }
+
+  def genValidNewView(state: State): Gen[Command] =
+    for {
+      s  <- Gen.oneOf(state.federation)
+      qc <- genPrepareQC(state)
+      m = Message.NewView(ViewNumber(state.viewNumber - 1), qc)
+    } yield NewViewCmd(s, m)
+
+  // A positive hash, not the same as Genesis.
+  val genHash: Gen[TestAgreement.Hash] =
+    arbitrary[Int].map(math.abs(_) + 1)
+
+  def genPrepareQC(state: State): Gen[QuorumCertificate[TestAgreement]] =
+    for {
+      publicKeys <- Gen.pick(state.`n - f`, state.federation)
+      phase = Phase.Prepare
+      viewNumber <- Gen
+        .choose(1, 5)
+        .map(d => ViewNumber(math.max(0, state.viewNumber - d)))
+      blockHash <- genHash
+      partials = publicKeys.toList.map { pk =>
+        val sk = mockSigningKey(pk)
+        mockSigning.sign(sk, phase, viewNumber, blockHash)
+      }
+      signature = mockSigning.combine(partials)
+    } yield QuorumCertificate[TestAgreement](
+      phase,
+      viewNumber,
+      blockHash,
+      signature
+    )
 
   // def genInvalid(state: State): Gen[Command] =
   //   Gen.oneOf(
@@ -241,8 +301,8 @@ object HotStuffProtocolCommands extends Commands {
       state.copy(
         viewNumber = state.viewNumber + 1,
         phase = Phase.Prepare,
-        voteCount = 0,
-        newViewCount = 0
+        votesFrom = Set.empty,
+        newViewsFrom = Set.empty
       )
 
     def preCondition(state: State): Boolean =
@@ -280,6 +340,63 @@ object HotStuffProtocolCommands extends Commands {
           propNewView == Some(true) &&
           propSchedule == Some(true)
       }
+  }
+
+  trait MessageCmd extends Command {
+    type Result = ProtocolState.TransitionAttempt[TestAgreement]
+
+    def sender: TestAgreement.PKey
+    def message: Message[TestAgreement]
+
+    override def run(sut: Protocol): Result = {
+      val event = Event.MessageReceived(sender, message)
+      sut.state.validateMessage(event).flatMap(sut.state.handleMessage).map {
+        case result @ (next, _) =>
+          sut.state = next
+          result
+      }
+    }
+  }
+
+  case class NewViewCmd(
+      sender: TestAgreement.PKey,
+      message: Message.NewView[TestAgreement]
+  ) extends MessageCmd {
+    override def nextState(state: State): State =
+      if (state.phase == Phase.Prepare) {
+        state.copy(
+          newViewsFrom = state.newViewsFrom + sender
+        )
+      } else state
+
+    override def preCondition(state: State): Boolean =
+      state.isLeader && state.viewNumber == message.viewNumber + 1
+
+    override def postCondition(
+        state: Model,
+        result: Try[Result]
+    ): Prop =
+      if (
+        state.phase == Phase.Prepare && (state.newViewsFrom + sender).size == state.`n - f`
+      ) {
+        result match {
+          case Success(Right((next, effects))) =>
+            next.phase == state.phase &&
+              next.newViews.size == state.`n - f` &&
+              effects.size == 1 &&
+              effects.head.isInstanceOf[Effect.CreateBlock[_]]
+          case _ =>
+            false
+        }
+      } else {
+        result match {
+          case Success(Right((next, effects))) =>
+            next.phase == state.phase && effects.isEmpty
+          case _ =>
+            false
+        }
+      }
+
   }
 
 }
