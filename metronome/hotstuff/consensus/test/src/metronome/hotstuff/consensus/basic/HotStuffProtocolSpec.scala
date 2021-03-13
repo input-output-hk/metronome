@@ -5,12 +5,13 @@ import metronome.hotstuff.consensus.{ViewNumber, Federation}
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Properties, Gen, Prop, Test, Arbitrary}
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.Prop.forAll
+import org.scalacheck.Prop.{forAll, propBoolean, all, falsified}
 import scala.annotation.nowarn
 import scala.concurrent.duration._
 import scala.util.Try
 import scala.util.Failure
 import scala.util.Success
+import metronome.hotstuff.consensus.basic.Effect.CreateBlock
 
 object HotStuffProtocolSpec extends Properties("Basic HotStuff") {
 
@@ -135,7 +136,8 @@ object HotStuffProtocolCommands extends Commands {
       federation: Vector[TestAgreement.PKey],
       ownIndex: Int,
       votesFrom: Set[TestAgreement.PKey],
-      newViewsFrom: Set[TestAgreement.PKey]
+      newViewsFrom: Set[TestAgreement.PKey],
+      newViewsMax: Int
   ) {
     def publicKey = federation(ownIndex)
 
@@ -151,6 +153,8 @@ object HotStuffProtocolCommands extends Commands {
 
   type Sut   = Protocol
   type State = Model
+
+  private def fail(msg: String) = msg |: falsified
 
   @nowarn
   override def canCreateNewSut(
@@ -209,7 +213,8 @@ object HotStuffProtocolCommands extends Commands {
       federation = publicKeys.toVector,
       ownIndex = ownIndex,
       votesFrom = Set.empty,
-      newViewsFrom = Set.empty
+      newViewsFrom = Set.empty,
+      newViewsMax = 0
     )
 
   /** Generate valid and invalid commands depending on state.
@@ -302,7 +307,8 @@ object HotStuffProtocolCommands extends Commands {
         viewNumber = state.viewNumber + 1,
         phase = Phase.Prepare,
         votesFrom = Set.empty,
-        newViewsFrom = Set.empty
+        newViewsFrom = Set.empty,
+        newViewsMax = 0
       )
 
     def preCondition(state: State): Boolean =
@@ -310,35 +316,45 @@ object HotStuffProtocolCommands extends Commands {
 
     def postCondition(state: Model, result: Try[Result]): Prop =
       result match {
-        case Failure(exception) => false
+        case Failure(exception) =>
+          fail(s"unexpected $exception")
+
         case Success((next, effects)) =>
-          val propNewView = effects.collectFirst {
-            case Effect.SendMessage(
-                  recipient,
-                  Message.NewView(viewNumber, prepareQC)
-                ) =>
-              recipient == next.leader &&
-                viewNumber == state.viewNumber &&
-                prepareQC == next.prepareQC
-          }
-          val propSchedule = effects.collectFirst {
-            case Effect.ScheduleNextView(
-                  viewNumber,
-                  timeout
-                ) =>
-              viewNumber == next.viewNumber &&
-                timeout == next.timeout
-          }
-          val propNext =
+          val propNewView = effects
+            .collectFirst {
+              case Effect.SendMessage(
+                    recipient,
+                    Message.NewView(viewNumber, prepareQC)
+                  ) =>
+                "sends the new view to the next leader" |:
+                  recipient == next.leader &&
+                  viewNumber == state.viewNumber &&
+                  prepareQC == next.prepareQC
+            }
+            .getOrElse(fail("didn't send the new view"))
+
+          val propSchedule = effects
+            .collectFirst {
+              case Effect.ScheduleNextView(
+                    viewNumber,
+                    timeout
+                  ) =>
+                "schedules the next view" |:
+                  viewNumber == next.viewNumber &&
+                  timeout == next.timeout
+            }
+            .getOrElse(fail("didn't schedule the next view"))
+
+          val propNext = "goes to the next phase" |:
             next.phase == Phase.Prepare &&
-              next.viewNumber == state.viewNumber + 1 &&
-              next.votes.isEmpty &&
-              next.newViews.isEmpty
+            next.viewNumber == state.viewNumber + 1 &&
+            next.votes.isEmpty &&
+            next.newViews.isEmpty
 
           propNext &&
-          effects.size == 2 &&
-          propNewView == Some(true) &&
-          propSchedule == Some(true)
+          propNewView &&
+          propSchedule &&
+          ("only has the expected effects" |: effects.size == 2)
       }
   }
 
@@ -365,7 +381,9 @@ object HotStuffProtocolCommands extends Commands {
     override def nextState(state: State): State =
       if (state.phase == Phase.Prepare) {
         state.copy(
-          newViewsFrom = state.newViewsFrom + sender
+          newViewsFrom = state.newViewsFrom + sender,
+          newViewsMax =
+            math.max(state.newViewsMax, message.prepareQC.viewNumber.toInt)
         )
       } else state
 
@@ -381,22 +399,34 @@ object HotStuffProtocolCommands extends Commands {
       ) {
         result match {
           case Success(Right((next, effects))) =>
-            next.phase == state.phase &&
-              next.newViews.size == state.`n - f` &&
-              effects.size == 1 &&
-              effects.head.isInstanceOf[Effect.CreateBlock[_]]
-          case _ =>
-            false
+            val newViewsMax = math.max(
+              state.newViewsMax,
+              message.prepareQC.viewNumber.toInt
+            )
+            val highestView = effects.headOption match {
+              case Some(CreateBlock(_, highQC)) => highQC.viewNumber.toInt
+              case _                            => 0
+            }
+
+            all(
+              "stays in the phase" |: next.phase == state.phase,
+              "records newView" |: next.newViews.size == state.`n - f`,
+              "creates a block and nothing else" |: effects.size == 1 &&
+                effects.head.isInstanceOf[Effect.CreateBlock[_]],
+              s"selects the highest QC: $highestView ?= $newViewsMax" |: highestView == newViewsMax
+            )
+          case err =>
+            fail(s"unexpected $err")
         }
       } else {
         result match {
           case Success(Right((next, effects))) =>
-            next.phase == state.phase && effects.isEmpty
-          case _ =>
-            false
+            "stays in the phase and doesn't create more blocks" |:
+              next.phase == state.phase && effects.isEmpty
+          case err =>
+            fail(s"unexpected $err")
         }
       }
 
   }
-
 }
