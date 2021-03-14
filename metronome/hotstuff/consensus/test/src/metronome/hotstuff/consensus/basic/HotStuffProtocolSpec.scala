@@ -12,6 +12,8 @@ import scala.util.Try
 import scala.util.Failure
 import scala.util.Success
 import metronome.hotstuff.consensus.basic.Effect.CreateBlock
+import metronome.hotstuff.consensus.basic.Phase.PreCommit
+import metronome.hotstuff.consensus.basic.Effect.SendMessage
 
 object HotStuffProtocolSpec extends Properties("Basic HotStuff") {
 
@@ -256,7 +258,8 @@ object HotStuffProtocolCommands extends Commands {
           (state.isLeader && state.phase == Phase.Prepare),
         genValidPrepare(state) ->
           (state.maybeBlockCreated.isDefined && state.phase == Phase.Prepare),
-        genValidVote(state)   -> state.isLeader,
+        genValidVote(state) ->
+          (state.isLeader && state.maybeBlockCreated.isDefined && state.phase != Phase.Prepare),
         genValidQuorum(state) -> true
       ).collect {
         case (gen, usable) if usable => gen
@@ -306,7 +309,32 @@ object HotStuffProtocolCommands extends Commands {
     }
 
   /** Replica sends a valid vote for the current phase and prepared block. */
-  def genValidVote(state: State): Gen[Command] = genTimeout(state)
+  def genValidVote(state: State): Gen[Command] =
+    state.maybeBlockCreated match {
+      case None => genTimeout(state)
+      case Some(blockCreated) =>
+        for {
+          s <- Gen.oneOf(state.federation)
+          // The leader is expecting votes for the previous phase.
+          p = state.phase match {
+            case Phase.Prepare   => sys.error("Not expecting votes in Prepare.")
+            case Phase.PreCommit => Phase.Prepare
+            case Phase.Commit    => Phase.PreCommit
+            case Phase.Decide    => Phase.Commit
+          }
+          v = Message.Vote[TestAgreement](
+            state.viewNumber,
+            p,
+            blockCreated.block.blockHash,
+            signature = mockSigning.sign(
+              mockSigningKey(s),
+              p,
+              state.viewNumber,
+              blockCreated.block.blockHash
+            )
+          )
+        } yield VoteCmd(s, v)
+    }
 
   /** Leader sends a valid quorum from the collected votes. */
   def genValidQuorum(state: State): Gen[Command] = genTimeout(state)
@@ -461,7 +489,9 @@ object HotStuffProtocolCommands extends Commands {
       val nextS = nextState(state)
       "NewView" |: {
         if (
-          state.phase == Phase.Prepare && nextS.newViewsFrom.size == state.`n - f`
+          state.phase == Phase.Prepare &&
+          state.newViewsFrom.size != state.`n - f` &&
+          nextS.newViewsFrom.size == state.`n - f`
         ) {
           result match {
             case Success(Right((next, effects))) =>
@@ -587,4 +617,57 @@ object HotStuffProtocolCommands extends Commands {
     }
   }
 
+  /** A Vote from a replica to the leader. */
+  case class VoteCmd(
+      sender: TestAgreement.PKey,
+      message: Message.Vote[TestAgreement]
+  ) extends MessageCmd {
+    override def nextState(state: State): State =
+      state.copy(
+        votesFrom = state.votesFrom + sender
+      )
+
+    override def preCondition(state: State): Boolean =
+      state.isLeader && state.viewNumber == message.viewNumber && state.phase != Phase.Prepare
+
+    override def postCondition(state: Model, result: Try[Result]): Prop = {
+      "Vote" |: {
+        result match {
+          case Success(Right((next, effects))) =>
+            val nextS = nextState(state)
+            val maybeBroadcast =
+              if (
+                state.votesFrom.size < state.`n - f` &&
+                nextS.votesFrom.size == state.`n - f`
+              ) {
+                all(
+                  "broadcast to all" |: effects.size == state.federation.size,
+                  "all messages are quorums" |: all(
+                    effects.map {
+                      case Effect.SendMessage(_, Message.Quorum(_, qc)) =>
+                        all(
+                          "quorum is about the current phase" |: qc.phase == message.phase,
+                          "quorum is about the block" |: qc.blockHash == message.blockHash
+                        )
+                      case other =>
+                        fail(s"unexpected effect $other")
+                    }: _*
+                  )
+                )
+              } else {
+                "not broadcast" |: effects.isEmpty
+              }
+
+            all(
+              "stay in the same phase" |: next.phase == state.phase,
+              maybeBroadcast
+            )
+
+          case other =>
+            fail(s"unexpected result $other")
+        }
+      }
+    }
+
+  }
 }
