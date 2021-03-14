@@ -19,6 +19,12 @@ object HotStuffProtocolSpec extends Properties("Basic HotStuff") {
 
 }
 
+/** State machine tests for the Basic HotStuff protocol.
+  *
+  * The `Model` class has enough reflection of the state so that we can generate valid
+  * and invalid commands using `genCommand`. Each `Command`, has its individual post-condition
+  * check comparing the model state to the actual protocol results.
+  */
 object HotStuffProtocolCommands extends Commands {
 
   case class TestBlock(blockHash: Int, parentBlockHash: Int, command: String)
@@ -341,11 +347,9 @@ object HotStuffProtocolCommands extends Commands {
 
   //def genNotFromFederation(state: State): Gen[Command] =
 
-  type Transition = ProtocolState.Transition[TestAgreement]
-
   /** Timeout. */
   case class NextViewCmd(viewNumber: ViewNumber) extends Command {
-    type Result = Transition
+    type Result = ProtocolState.Transition[TestAgreement]
 
     def run(sut: Sut): Result = {
       sut.state.handleNextView(Event.NextView(ViewNumber(viewNumber))) match {
@@ -369,47 +373,48 @@ object HotStuffProtocolCommands extends Commands {
       viewNumber == state.viewNumber
 
     def postCondition(state: Model, result: Try[Result]): Prop =
-      result match {
-        case Failure(exception) =>
-          fail(s"unexpected $exception")
+      "NextView" |: {
+        result match {
+          case Failure(exception) =>
+            fail(s"unexpected $exception")
 
-        case Success((next, effects)) =>
-          val propNewView = effects
-            .collectFirst {
-              case Effect.SendMessage(
-                    recipient,
-                    Message.NewView(viewNumber, prepareQC)
-                  ) =>
-                "sends the new view to the next leader" |:
-                  recipient == next.leader &&
-                  viewNumber == state.viewNumber &&
-                  prepareQC == next.prepareQC
-            }
-            .getOrElse(fail("didn't send the new view"))
+          case Success((next, effects)) =>
+            val propNewView = effects
+              .collectFirst {
+                case Effect.SendMessage(
+                      recipient,
+                      Message.NewView(viewNumber, prepareQC)
+                    ) =>
+                  "sends the new view to the next leader" |:
+                    recipient == next.leader &&
+                    viewNumber == state.viewNumber &&
+                    prepareQC == next.prepareQC
+              }
+              .getOrElse(fail("didn't send the new view"))
 
-          val propSchedule = effects
-            .collectFirst {
-              case Effect.ScheduleNextView(
-                    viewNumber,
-                    timeout
-                  ) =>
-                "schedules the next view" |:
-                  viewNumber == next.viewNumber &&
-                  timeout == next.timeout
-            }
-            .getOrElse(fail("didn't schedule the next view"))
+            val propSchedule = effects
+              .collectFirst {
+                case Effect.ScheduleNextView(
+                      viewNumber,
+                      timeout
+                    ) =>
+                  "schedules the next view" |:
+                    viewNumber == next.viewNumber &&
+                    timeout == next.timeout
+              }
+              .getOrElse(fail("didn't schedule the next view"))
 
-          val propNext = "goes to the next phase" |:
-            next.phase == Phase.Prepare &&
-            next.viewNumber == state.viewNumber + 1 &&
-            next.votes.isEmpty &&
-            next.newViews.isEmpty
+            val propNext = "goes to the next phase" |:
+              next.phase == Phase.Prepare &&
+              next.viewNumber == state.viewNumber + 1 &&
+              next.votes.isEmpty &&
+              next.newViews.isEmpty
 
-          "NextView" |:
             propNext &&
             propNewView &&
             propSchedule &&
             ("only has the expected effects" |: effects.size == 2)
+        }
       }
   }
 
@@ -454,34 +459,36 @@ object HotStuffProtocolCommands extends Commands {
         result: Try[Result]
     ): Prop = {
       val nextS = nextState(state)
-      if (
-        state.phase == Phase.Prepare && nextS.newViewsFrom.size == state.`n - f`
-      ) {
-        result match {
-          case Success(Right((next, effects))) =>
-            val newViewsMax = nextS.newViewsHighQC.viewNumber
-            val highestView = effects.headOption match {
-              case Some(CreateBlock(_, highQC)) => highQC.viewNumber.toInt
-              case _                            => 0
-            }
+      "NewView" |: {
+        if (
+          state.phase == Phase.Prepare && nextS.newViewsFrom.size == state.`n - f`
+        ) {
+          result match {
+            case Success(Right((next, effects))) =>
+              val newViewsMax = nextS.newViewsHighQC.viewNumber
+              val highestView = effects.headOption match {
+                case Some(CreateBlock(_, highQC)) => highQC.viewNumber.toInt
+                case _                            => 0
+              }
 
-            "NewView" |: all(
-              "stays in the phase" |: next.phase == state.phase,
-              "records newView" |: next.newViews.size == state.`n - f`,
-              "creates a block and nothing else" |: effects.size == 1 &&
-                effects.head.isInstanceOf[Effect.CreateBlock[_]],
-              s"selects the highest QC: $highestView ?= $newViewsMax" |: highestView == newViewsMax
-            )
-          case err =>
-            fail(s"unexpected $err")
-        }
-      } else {
-        result match {
-          case Success(Right((next, effects))) =>
-            "stays in the phase and doesn't create more blocks" |:
-              next.phase == state.phase && effects.isEmpty
-          case err =>
-            fail(s"unexpected $err")
+              all(
+                "stays in the phase" |: next.phase == state.phase,
+                "records newView" |: next.newViews.size == state.`n - f`,
+                "creates a block and nothing else" |: effects.size == 1 &&
+                  effects.head.isInstanceOf[Effect.CreateBlock[_]],
+                s"selects the highest QC: $highestView ?= $newViewsMax" |: highestView == newViewsMax
+              )
+            case err =>
+              fail(s"unexpected $err")
+          }
+        } else {
+          result match {
+            case Success(Right((next, effects))) =>
+              "stays in the phase and doesn't create more blocks" |:
+                next.phase == state.phase && effects.isEmpty
+            case err =>
+              fail(s"unexpected $err")
+          }
         }
       }
     }
@@ -510,25 +517,29 @@ object HotStuffProtocolCommands extends Commands {
     override def postCondition(
         state: State,
         result: Try[Result]
-    ): Prop = result match {
-      case Success((next, effects)) =>
-        "BlockCreated" |: all(
-          "stay in Prepare" |: next.phase == Phase.Prepare,
-          "broadcast to all" |: effects.size == state.federation.size,
-          all(
-            effects.map {
-              case Effect.SendMessage(_, m: Message.Prepare[_]) =>
-                all(
-                  "send prepared block" |: m.block == event.block,
-                  "send highQC" |: m.highQC == event.highQC
-                )
-              case other =>
-                fail(s"expected Prepare message: $other")
-            }: _*
-          )
-        )
-      case Failure(ex) =>
-        fail(s"failed to broadcast Prepare: $ex")
+    ): Prop = {
+      "BlockCreated" |: {
+        result match {
+          case Success((next, effects)) =>
+            all(
+              "stay in Prepare" |: next.phase == Phase.Prepare,
+              "broadcast to all" |: effects.size == state.federation.size,
+              all(
+                effects.map {
+                  case Effect.SendMessage(_, m: Message.Prepare[_]) =>
+                    all(
+                      "send prepared block" |: m.block == event.block,
+                      "send highQC" |: m.highQC == event.highQC
+                    )
+                  case other =>
+                    fail(s"expected Prepare message: $other")
+                }: _*
+              )
+            )
+          case Failure(ex) =>
+            fail(s"failed with $ex")
+        }
+      }
     }
   }
 
@@ -549,29 +560,31 @@ object HotStuffProtocolCommands extends Commands {
         state: Model,
         result: Try[Result]
     ): Prop = {
-      result match {
-        case Success(Right((next, effects))) =>
-          "Prepare" |: all(
-            "move to PreCommit" |: next.phase == Phase.PreCommit,
-            "cast a vote" |: effects.size == 1,
-            effects.head match {
-              case Effect.SendMessage(
-                    recipient,
-                    Message.Vote(_, phase, blockHash, _)
-                  ) =>
-                all(
-                  "vote Prepare" |: phase == Phase.Prepare,
-                  "send to leader" |: recipient == state.leader,
-                  "vote on block" |: blockHash == message.block.blockHash
-                )
-              case other =>
-                fail(s"unexpected effect $other")
-            }
-          )
-        case other =>
-          fail(s"unexpected result $other")
+      "Prepare" |: {
+        result match {
+          case Success(Right((next, effects))) =>
+            all(
+              "move to PreCommit" |: next.phase == Phase.PreCommit,
+              "cast a vote" |: effects.size == 1,
+              effects.head match {
+                case Effect.SendMessage(
+                      recipient,
+                      Message.Vote(_, phase, blockHash, _)
+                    ) =>
+                  all(
+                    "vote Prepare" |: phase == Phase.Prepare,
+                    "send to leader" |: recipient == state.leader,
+                    "vote on block" |: blockHash == message.block.blockHash
+                  )
+                case other =>
+                  fail(s"unexpected effect $other")
+              }
+            )
+          case other =>
+            fail(s"unexpected result $other")
+        }
       }
     }
-
   }
+
 }
