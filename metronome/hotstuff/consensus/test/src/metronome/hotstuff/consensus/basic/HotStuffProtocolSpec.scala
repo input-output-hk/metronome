@@ -131,13 +131,14 @@ object HotStuffProtocolCommands extends Commands {
   case class Model(
       n: Int,
       f: Int,
-      viewNumber: Int,
+      viewNumber: ViewNumber,
       phase: Phase,
       federation: Vector[TestAgreement.PKey],
       ownIndex: Int,
       votesFrom: Set[TestAgreement.PKey],
       newViewsFrom: Set[TestAgreement.PKey],
-      newViewsHighQC: QuorumCertificate[TestAgreement]
+      newViewsHighQC: QuorumCertificate[TestAgreement],
+      maybeBlockCreated: Option[Event.BlockCreated[TestAgreement]]
       // TODO: Keep a list of previous prepareQC items and pick
       // from them for NewView, rather than generate an arbitrary one.
   ) {
@@ -211,13 +212,14 @@ object HotStuffProtocolCommands extends Commands {
     } yield Model(
       n,
       f,
-      viewNumber = 1,
+      viewNumber = ViewNumber(1),
       phase = Phase.Prepare,
       federation = publicKeys.toVector,
       ownIndex = ownIndex,
       votesFrom = Set.empty,
       newViewsFrom = Set.empty,
-      newViewsHighQC = genesisQC
+      newViewsHighQC = genesisQC,
+      maybeBlockCreated = None
     )
 
   /** Generate valid and invalid commands depending on state.
@@ -267,7 +269,15 @@ object HotStuffProtocolCommands extends Commands {
     } yield NewViewCmd(s, m)
 
   /** Leader creates a valid block on top of the saved High Q.C. */
-  def genValidBlock(state: State): Gen[Command] = genTimeout(state)
+  def genValidBlock(state: State): Gen[Command] =
+    for {
+      c <- arbitrary[String]
+      h <- genHash
+      p = state.newViewsHighQC.blockHash
+      b = TestBlock(h, p, c)
+      e = Event
+        .BlockCreated[TestAgreement](state.viewNumber, b, state.newViewsHighQC)
+    } yield BlockCreatedCmd(e)
 
   /** Leader sends a valid Prepare command with the generated block. */
   def genValidPrepare(state: State): Gen[Command] = genTimeout(state)
@@ -317,7 +327,7 @@ object HotStuffProtocolCommands extends Commands {
   type Transition = ProtocolState.Transition[TestAgreement]
 
   /** Timeout. */
-  case class NextViewCmd(viewNumber: Int) extends Command {
+  case class NextViewCmd(viewNumber: ViewNumber) extends Command {
     type Result = Transition
 
     def run(sut: Sut): Result = {
@@ -330,7 +340,7 @@ object HotStuffProtocolCommands extends Commands {
 
     def nextState(state: State): State =
       state.copy(
-        viewNumber = state.viewNumber + 1,
+        viewNumber = ViewNumber(state.viewNumber + 1),
         phase = Phase.Prepare,
         votesFrom = Set.empty,
         // In this model there's not a guaranteed message from the leader to itself.
@@ -456,6 +466,41 @@ object HotStuffProtocolCommands extends Commands {
             fail(s"unexpected $err")
         }
       }
+    }
+  }
+
+  case class BlockCreatedCmd(event: Event.BlockCreated[TestAgreement])
+      extends Command {
+    type Result = ProtocolState.Transition[TestAgreement]
+
+    override def run(sut: Protocol): Result = {
+      sut.state.handleBlockCreated(event) match {
+        case result @ (next, _) =>
+          sut.state = next
+          result
+      }
+    }
+
+    override def nextState(state: State): State =
+      state.copy(
+        maybeBlockCreated = Some(event)
+      )
+
+    override def preCondition(state: State): Boolean =
+      event.viewNumber == state.viewNumber
+
+    override def postCondition(
+        state: State,
+        result: Try[Result]
+    ): Prop = result match {
+      case Success((_, effects)) =>
+        "broadcast Prepare" |: effects.size == state.federation.size &&
+          effects.forall {
+            case Effect.SendMessage(_, _: Message.Prepare[_]) => true
+            case _                                            => false
+          }
+      case Failure(ex) =>
+        fail(s"failed to broadcast Prepare: $ex")
     }
 
   }
