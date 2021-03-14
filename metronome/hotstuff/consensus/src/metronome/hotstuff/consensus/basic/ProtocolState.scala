@@ -266,7 +266,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     case v: Vote[_] if isLeader && extraVote(v, phase) =>
       stay
 
-    case v: NewView[_] if isLeader && v.viewNumber == viewNumber - 1 =>
+    case v: NewView[_] if isLeader && v.viewNumber == viewNumber.prev =>
       stay
   }
 
@@ -358,18 +358,19 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     val next = copy(votes = votes + vote)
 
     // Only make the quorum certificate once.
-    val effects = if (next.votes.size == quorumSize) {
-      val vs = votes.toSeq
-      val qc = QuorumCertificate(
-        phase = vs.head.phase,
-        viewNumber = vs.head.viewNumber,
-        blockHash = vs.head.blockHash,
-        signature = Signing[A].combine(vs.map(_.signature))
-      )
-      broadcast {
-        Quorum(viewNumber, qc)
-      }
-    } else Nil
+    val effects =
+      if (votes.size < quorumSize && next.votes.size == quorumSize) {
+        val vs = next.votes.toSeq
+        val qc = QuorumCertificate(
+          phase = vs.head.phase,
+          viewNumber = vs.head.viewNumber,
+          blockHash = vs.head.blockHash,
+          signature = Signing[A].combine(vs.map(_.signature))
+        )
+        broadcast {
+          Quorum(viewNumber, qc)
+        }
+      } else Nil
 
     // The move to the next phase will be triggered when the Q.C. is delivered.
     next -> effects
@@ -393,14 +394,15 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     )
 
     // Only make a block once.
-    val effects = if (next.newViews.size == quorumSize) {
-      List(
-        CreateBlock(
-          viewNumber,
-          highQC = next.newViews.values.map(_.prepareQC).maxBy(_.viewNumber)
+    val effects =
+      if (newViews.size < quorumSize && next.newViews.size == quorumSize) {
+        List(
+          CreateBlock(
+            viewNumber,
+            highQC = next.newViews.values.map(_.prepareQC).maxBy(_.viewNumber)
+          )
         )
-      )
-    } else Nil
+      } else Nil
 
     // The move to the next phase will be triggered when the block is created.
     next -> effects
