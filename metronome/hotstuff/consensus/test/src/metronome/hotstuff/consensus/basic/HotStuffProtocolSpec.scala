@@ -137,7 +137,9 @@ object HotStuffProtocolCommands extends Commands {
       ownIndex: Int,
       votesFrom: Set[TestAgreement.PKey],
       newViewsFrom: Set[TestAgreement.PKey],
-      newViewsMax: Int
+      newViewsHighQC: QuorumCertificate[TestAgreement]
+      // TODO: Keep a list of previous prepareQC items and pick
+      // from them for NewView, rather than generate an arbitrary one.
   ) {
     def publicKey = federation(ownIndex)
 
@@ -149,6 +151,7 @@ object HotStuffProtocolCommands extends Commands {
     def `n - f` = n - f
   }
 
+  // Keep a variable state in our System Under Test.
   class Protocol(var state: ProtocolState[TestAgreement])
 
   type Sut   = Protocol
@@ -214,7 +217,7 @@ object HotStuffProtocolCommands extends Commands {
       ownIndex = ownIndex,
       votesFrom = Set.empty,
       newViewsFrom = Set.empty,
-      newViewsMax = 0
+      newViewsHighQC = genesisQC
     )
 
   /** Generate valid and invalid commands depending on state.
@@ -313,6 +316,7 @@ object HotStuffProtocolCommands extends Commands {
 
   type Transition = ProtocolState.Transition[TestAgreement]
 
+  /** Timeout. */
   case class NextViewCmd(viewNumber: Int) extends Command {
     type Result = Transition
 
@@ -329,8 +333,9 @@ object HotStuffProtocolCommands extends Commands {
         viewNumber = state.viewNumber + 1,
         phase = Phase.Prepare,
         votesFrom = Set.empty,
+        // In this model there's not a guaranteed message from the leader to itself.
         newViewsFrom = Set.empty,
-        newViewsMax = 0
+        newViewsHighQC = genesisQC
       )
 
     def preCondition(state: State): Boolean =
@@ -380,6 +385,7 @@ object HotStuffProtocolCommands extends Commands {
       }
   }
 
+  /** Common logic of handling a received message */
   trait MessageCmd extends Command {
     type Result = ProtocolState.TransitionAttempt[TestAgreement]
 
@@ -396,6 +402,7 @@ object HotStuffProtocolCommands extends Commands {
     }
   }
 
+  /** NewView from a replicas to the leader. */
   case class NewViewCmd(
       sender: TestAgreement.PKey,
       message: Message.NewView[TestAgreement]
@@ -404,9 +411,10 @@ object HotStuffProtocolCommands extends Commands {
       if (state.phase == Phase.Prepare) {
         state.copy(
           newViewsFrom = state.newViewsFrom + sender,
-          newViewsMax =
-            math.max(state.newViewsMax, message.prepareQC.viewNumber.toInt)
-          // TODO: if we reached n-f new views, then save the hiqh QC
+          newViewsHighQC =
+            if (message.prepareQC.viewNumber > state.newViewsHighQC.viewNumber)
+              message.prepareQC
+            else state.newViewsHighQC
         )
       } else state
 
@@ -416,16 +424,14 @@ object HotStuffProtocolCommands extends Commands {
     override def postCondition(
         state: Model,
         result: Try[Result]
-    ): Prop =
+    ): Prop = {
+      val nextS = nextState(state)
       if (
-        state.phase == Phase.Prepare && (state.newViewsFrom + sender).size == state.`n - f`
+        state.phase == Phase.Prepare && nextS.newViewsFrom.size == state.`n - f`
       ) {
         result match {
           case Success(Right((next, effects))) =>
-            val newViewsMax = math.max(
-              state.newViewsMax,
-              message.prepareQC.viewNumber.toInt
-            )
+            val newViewsMax = nextS.newViewsHighQC.viewNumber
             val highestView = effects.headOption match {
               case Some(CreateBlock(_, highQC)) => highQC.viewNumber.toInt
               case _                            => 0
@@ -450,6 +456,7 @@ object HotStuffProtocolCommands extends Commands {
             fail(s"unexpected $err")
         }
       }
+    }
 
   }
 }
