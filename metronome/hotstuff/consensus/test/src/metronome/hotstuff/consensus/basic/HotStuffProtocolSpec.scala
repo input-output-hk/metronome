@@ -148,6 +148,7 @@ object HotStuffProtocolCommands extends Commands {
     def signingKey = mockSigningKey(publicKey)
 
     def isLeader = viewNumber % n == ownIndex
+    def leader   = federation((viewNumber % n).toInt)
 
     def `n - f` = n - f
   }
@@ -245,10 +246,12 @@ object HotStuffProtocolCommands extends Commands {
     val usables: List[Gen[Command]] =
       List(
         genValidNewView(state) -> state.isLeader,
-        genValidBlock(state)   -> state.isLeader,
-        genValidPrepare(state) -> true,
-        genValidVote(state)    -> state.isLeader,
-        genValidQuorum(state)  -> true
+        genValidBlock(state) ->
+          (state.isLeader && state.phase == Phase.Prepare),
+        genValidPrepare(state) ->
+          (state.maybeBlockCreated.isDefined && state.phase == Phase.Prepare),
+        genValidVote(state)   -> state.isLeader,
+        genValidQuorum(state) -> true
       ).collect {
         case (gen, usable) if usable => gen
       }
@@ -280,7 +283,21 @@ object HotStuffProtocolCommands extends Commands {
     } yield BlockCreatedCmd(e)
 
   /** Leader sends a valid Prepare command with the generated block. */
-  def genValidPrepare(state: State): Gen[Command] = genTimeout(state)
+  def genValidPrepare(state: State): Gen[Command] =
+    state.maybeBlockCreated match {
+      case None => genTimeout(state)
+      case Some(blockCreated) =>
+        Gen.const {
+          PrepareCmd(
+            sender = state.leader,
+            message = Message.Prepare(
+              state.viewNumber,
+              blockCreated.block,
+              blockCreated.highQC
+            )
+          )
+        }
+    }
 
   /** Replica sends a valid vote for the current phase and prepared block. */
   def genValidVote(state: State): Gen[Command] = genTimeout(state)
@@ -388,10 +405,11 @@ object HotStuffProtocolCommands extends Commands {
             next.votes.isEmpty &&
             next.newViews.isEmpty
 
-          propNext &&
-          propNewView &&
-          propSchedule &&
-          ("only has the expected effects" |: effects.size == 2)
+          "NextView" |:
+            propNext &&
+            propNewView &&
+            propSchedule &&
+            ("only has the expected effects" |: effects.size == 2)
       }
   }
 
@@ -447,7 +465,7 @@ object HotStuffProtocolCommands extends Commands {
               case _                            => 0
             }
 
-            all(
+            "NewView" |: all(
               "stays in the phase" |: next.phase == state.phase,
               "records newView" |: next.newViews.size == state.`n - f`,
               "creates a block and nothing else" |: effects.size == 1 &&
@@ -493,14 +511,66 @@ object HotStuffProtocolCommands extends Commands {
         state: State,
         result: Try[Result]
     ): Prop = result match {
-      case Success((_, effects)) =>
-        "broadcast Prepare" |: effects.size == state.federation.size &&
-          effects.forall {
-            case Effect.SendMessage(_, _: Message.Prepare[_]) => true
-            case _                                            => false
-          }
+      case Success((next, effects)) =>
+        "BlockCreated" |: all(
+          "stay in Prepare" |: next.phase == Phase.Prepare,
+          "broadcast to all" |: effects.size == state.federation.size,
+          all(
+            effects.map {
+              case Effect.SendMessage(_, m: Message.Prepare[_]) =>
+                all(
+                  "send prepared block" |: m.block == event.block,
+                  "send highQC" |: m.highQC == event.highQC
+                )
+              case other =>
+                fail(s"expected Prepare message: $other")
+            }: _*
+          )
+        )
       case Failure(ex) =>
         fail(s"failed to broadcast Prepare: $ex")
+    }
+  }
+
+  /** Prepare from leader to a replica. */
+  case class PrepareCmd(
+      sender: TestAgreement.PKey,
+      message: Message.Prepare[TestAgreement]
+  ) extends MessageCmd {
+    override def nextState(state: State): State =
+      state.copy(
+        phase = Phase.PreCommit
+      )
+
+    override def preCondition(state: State): Boolean =
+      message.viewNumber == state.viewNumber && state.phase == Phase.Prepare
+
+    override def postCondition(
+        state: Model,
+        result: Try[Result]
+    ): Prop = {
+      result match {
+        case Success(Right((next, effects))) =>
+          "Prepare" |: all(
+            "move to PreCommit" |: next.phase == Phase.PreCommit,
+            "cast a vote" |: effects.size == 1,
+            effects.head match {
+              case Effect.SendMessage(
+                    recipient,
+                    Message.Vote(_, phase, blockHash, _)
+                  ) =>
+                all(
+                  "vote Prepare" |: phase == Phase.Prepare,
+                  "send to leader" |: recipient == state.leader,
+                  "vote on block" |: blockHash == message.block.blockHash
+                )
+              case other =>
+                fail(s"unexpected effect $other")
+            }
+          )
+        case other =>
+          fail(s"unexpected result $other")
+      }
     }
 
   }
