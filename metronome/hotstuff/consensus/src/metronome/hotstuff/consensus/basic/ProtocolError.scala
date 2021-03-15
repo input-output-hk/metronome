@@ -1,7 +1,5 @@
 package metronome.hotstuff.consensus.basic
 
-import metronome.hotstuff.consensus.ViewNumber
-
 sealed trait ProtocolError[A <: Agreement]
 
 object ProtocolError {
@@ -42,6 +40,25 @@ object ProtocolError {
   ) extends ProtocolError[A]
 
   /** A message we didn't expect to receive in the given state. */
+  case class UnexpectedBlockHash[A <: Agreement](
+      event: Event.MessageReceived[A],
+      expected: A#Hash
+  ) extends ProtocolError[A]
+
+  /** A message we didn't expect to receive in the given state.
+    *
+    * One reason for this could be that the peer is slightly ahead of us,
+    * e.g. already finished the `Decide` phase and sent out the `NewView`
+    * to us, the next leader, in which case the view number would not
+    * match up. Or maybe a quorum has already formed for the next round
+    * and we receive a `Prepare`, while we're still in `Decide`.
+    *
+    * The host system passing the events and processing the effects
+    * is expected to inspect `Unexpected` messages and decide what to do:
+    * - if the message is for the next round, then just re-deliver it after the view transition
+    * - if the message is far in the future, perhaps it's best to re-sync the status with everyone
+    * - if the message is in the past then it can be ignored
+    */
   case class Unexpected[A <: Agreement](
       event: Event.MessageReceived[A]
   ) extends ProtocolError[A]

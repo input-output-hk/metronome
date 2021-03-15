@@ -177,7 +177,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       // Leader:  Collect NewViews, create block, boradcast Prepare
       // Replica: Wait for Prepare, check safe extension, vote Prepare, move to PreCommit.
       case Phase.Prepare =>
-        matchingMsgAttempt(e) {
+        matchingMsg(e) {
           case m: NewView[_] if m.viewNumber == viewNumber.prev && isLeader =>
             Right(addNewViewAndMaybeCreateBlock(e.sender, m))
 
@@ -200,9 +200,8 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       // Replica: Wait for Prepare Q.C, save prepareQC, vote PreCommit, move to Commit.
       case Phase.PreCommit =>
         matchingMsg(e) {
-          handleVotesFrom(Phase.Prepare) orElse {
-            case m: Quorum[_]
-                if matchingLeader(e) && matchingQC(m, Phase.Prepare) =>
+          handleVotes(e, Phase.Prepare) orElse
+            handleQuorum(e, Phase.Prepare) { m =>
               val effects = Seq(
                 sendVote(Phase.PreCommit, m.quorumCertificate.blockHash)
               )
@@ -210,16 +209,15 @@ case class ProtocolState[A <: Agreement: Block: Signing](
                 prepareQC = m.quorumCertificate
               )
               next -> effects
-          }
+            }
         }
 
       // Leader:  Collect PreCommit votes, broadcast PreCommit Q.C.
       // Replica: Wait for PreCommit Q.C., save lockedQC, vote Commit, move to Decide.
       case Phase.Commit =>
         matchingMsg(e) {
-          handleVotesFrom(Phase.PreCommit) orElse {
-            case m: Quorum[_]
-                if matchingLeader(e) && matchingQC(m, Phase.PreCommit) =>
+          handleVotes(e, Phase.PreCommit) orElse
+            handleQuorum(e, Phase.PreCommit) { m =>
               val effects = Seq(
                 sendVote(Phase.Commit, m.quorumCertificate.blockHash)
               )
@@ -227,16 +225,15 @@ case class ProtocolState[A <: Agreement: Block: Signing](
                 lockedQC = m.quorumCertificate
               )
               next -> effects
-          }
+            }
         }
 
       // Leader:  Collect Commit votes, broadcast Commit Q.C.
       // Replica: Wait for Commit Q.C., execute block, send NewView, move to Prepare.
       case Phase.Decide =>
         matchingMsg(e) {
-          handleVotesFrom(Phase.Commit) orElse {
-            case m: Quorum[_]
-                if matchingLeader(e) && matchingQC(m, Phase.Commit) =>
+          handleVotes(e, Phase.Commit) orElse
+            handleQuorum(e, Phase.Commit) { m =>
               handleNextView(NextView(viewNumber)) match {
                 case (next, effects) =>
                   val withExec = ExecuteBlocks(
@@ -246,7 +243,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
 
                   next -> withExec
               }
-          }
+            }
         }
     }
 
@@ -257,51 +254,63 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     * It can also receive messages beyond the `n-f` it needed,
     * which it can ignore.
     */
-  private def handleVotesFrom(
+  private def handleVotes(
+      event: MessageReceived[A],
       phase: VotingPhase
-  ): PartialFunction[Message[A], Transition[A]] = {
-    case v: Vote[_] if isLeader && matchingVote(v, phase) =>
-      addVoteAndMaybeBroadcastQC(v)
+  ): PartialFunction[Message[A], TransitionAttempt[A]] = {
+    // Check that a vote is compatible with our current expectations.
+    case v: Vote[_]
+        if isLeader && v.viewNumber == viewNumber &&
+          v.phase == phase &&
+          v.blockHash == preparedBlockHash =>
+      Right(addVoteAndMaybeBroadcastQC(v))
 
-    case v: Vote[_] if isLeader && extraVote(v, phase) =>
-      stay
+    // Once the leader moves on to the next phase, it can still receive votes
+    // for the previous one. These can be ignored, they are not unexpected.
+    case v: Vote[_]
+        if isLeader &&
+          v.viewNumber == viewNumber &&
+          v.phase != phase &&
+          v.blockHash == preparedBlockHash =>
+      Right(stay)
+
+    // Ignore votes for other blocks.
+    case v: Vote[_]
+        if isLeader && v.viewNumber == viewNumber &&
+          v.phase == phase &&
+          v.blockHash != preparedBlockHash =>
+      Left(UnexpectedBlockHash(event, preparedBlockHash))
 
     case v: NewView[_] if isLeader && v.viewNumber == viewNumber.prev =>
-      stay
+      Right(stay)
+  }
+
+  private def handleQuorum(
+      event: Validated[MessageReceived[A]],
+      phase: VotingPhase
+  )(
+      f: Quorum[A] => Transition[A]
+  ): PartialFunction[Message[A], TransitionAttempt[A]] = {
+    case m: Quorum[_]
+        if matchingLeader(event) &&
+          m.quorumCertificate.viewNumber == viewNumber &&
+          m.quorumCertificate.phase == phase &&
+          m.quorumCertificate.blockHash == preparedBlockHash =>
+      Right(f(m))
+
+    case m: Quorum[_]
+        if matchingLeader(event) &&
+          m.quorumCertificate.viewNumber == viewNumber &&
+          m.quorumCertificate.phase == phase &&
+          m.quorumCertificate.blockHash != preparedBlockHash =>
+      Left(UnexpectedBlockHash(event, preparedBlockHash))
   }
 
   /** Try to match a message to expectations, or return Unexpected. */
   private def matchingMsg(e: MessageReceived[A])(
-      pf: PartialFunction[Message[A], Transition[A]]
-  ): TransitionAttempt[A] =
-    matchingMsgAttempt(e) {
-      pf.andThen(Right(_))
-    }
-
-  private def matchingMsgAttempt(e: MessageReceived[A])(
       pf: PartialFunction[Message[A], TransitionAttempt[A]]
   ): TransitionAttempt[A] =
     pf.lift(e.message).getOrElse(Left(Unexpected(e)))
-
-  /** Check that a vote is compatible with our current expectations. */
-  private def matchingVote(vote: Vote[A], phase: VotingPhase): Boolean =
-    vote.viewNumber == viewNumber &&
-      vote.phase == phase &&
-      vote.blockHash == preparedBlockHash
-
-  /** Once the leader moves on to the next phase, it can still receive votes
-    * for the previous one. These can be ignored, they are not unexpected.
-    */
-  private def extraVote(vote: Vote[A], phase: VotingPhase): Boolean =
-    vote.viewNumber == viewNumber &&
-      vote.blockHash == preparedBlockHash &&
-      vote.phase != phase
-
-  /** Check that a Q.C. is compatible with our current expectations. */
-  private def matchingQC(m: Quorum[A], phase: VotingPhase): Boolean =
-    m.quorumCertificate.viewNumber == viewNumber &&
-      m.quorumCertificate.phase == phase &&
-      m.quorumCertificate.blockHash == preparedBlockHash
 
   /** Check that a message is coming from the view leader and is for the current phase. */
   private def matchingLeader(e: MessageReceived[A]): Boolean =
@@ -314,6 +323,12 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     * because the leader is a replica as well. The effect
     * system should take care that these messages don't
     * try to go over the network.
+    *
+    * NOTE: Some messages trigger transitions; it's best
+    * if the message sent to the leader by itself is handled
+    * before the other messages are sent out to avoid any
+    * votes coming in return coming in phases that don't
+    * yet expect them.
     */
   private def broadcast(m: Message[A]): Seq[Effect[A]] =
     federation.publicKeys.map { pk =>
