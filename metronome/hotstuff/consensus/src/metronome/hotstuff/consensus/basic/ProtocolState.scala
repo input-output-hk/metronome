@@ -322,13 +322,13 @@ case class ProtocolState[A <: Agreement: Block: Signing](
 
       case m: Vote[_]
           if m.viewNumber > viewNumber ||
-            m.viewNumber == viewNumber && m.phase.isAfter(phase) =>
+            m.viewNumber == viewNumber && m.phase.isAfter(phase.prev) =>
         TooEarly(e, m.viewNumber, m.phase.next)
 
       case m: Quorum[_]
           if m.quorumCertificate.viewNumber > viewNumber ||
             m.quorumCertificate.viewNumber == viewNumber &&
-            m.quorumCertificate.phase.isAfter(phase) =>
+            m.quorumCertificate.phase.isAfter(phase.prev) =>
         TooEarly(e, m.viewNumber, m.quorumCertificate.phase.next)
 
       case _ =>
