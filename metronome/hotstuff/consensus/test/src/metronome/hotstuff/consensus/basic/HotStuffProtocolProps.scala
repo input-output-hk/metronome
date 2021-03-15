@@ -235,8 +235,7 @@ object HotStuffProtocolCommands extends Commands {
   override def genCommand(state: State): Gen[Command] =
     Gen.frequency(
       7 -> genValid(state),
-      // 3 -> genInvalid,
-      // 2 -> genUnexpected(state),
+      2 -> genInvalid(state),
       1 -> genTimeout(state)
     )
 
@@ -282,6 +281,127 @@ object HotStuffProtocolCommands extends Commands {
       case Nil                => genTimeout(state)
       case one :: Nil         => one
       case one :: two :: rest => Gen.oneOf(one, two, rest: _*)
+    }
+  }
+
+  /** Take an valid command and turn it invalid. */
+  def genInvalid(state: State): Gen[Command] = {
+    def nextVoting(phase: Phase): VotingPhase = {
+      phase.next match {
+        case p: VotingPhase => p
+        case p              => nextVoting(p)
+      }
+    }
+
+    def invalidateHash(h: TestAgreement.Hash) = h * 2 + 1
+    def invalidateSig(s: TestAgreement.PSig)  = s * 2 + 1
+    def invalidateViewNumber(v: ViewNumber)   = ViewNumber(v + 1000)
+    def invalidSender                         = state.federation.sum + 1
+
+    def invalidateQC(
+        qc: QuorumCertificate[TestAgreement]
+    ): Gen[QuorumCertificate[TestAgreement]] = {
+      Gen.oneOf(
+        genLazy(
+          qc.copy[TestAgreement](blockHash = invalidateHash(qc.blockHash))
+        ),
+        genLazy(qc.copy[TestAgreement](phase = nextVoting(qc.phase))),
+        genLazy(
+          qc.copy[TestAgreement](viewNumber =
+            invalidateViewNumber(qc.viewNumber)
+          )
+        ),
+        genLazy(
+          qc.copy[TestAgreement](signature =
+            qc.signature.copy(sig = 0 +: qc.signature.sig.map(invalidateSig))
+          )
+        )
+      )
+    }
+
+    implicit class StringOps(label: String) {
+      def `!`(gen: Gen[MessageCmd]): Gen[Command] =
+        gen.map(cmd => InvalidCmd(label, cmd))
+    }
+
+    genValid(state) flatMap {
+      case msg: MessageCmd =>
+        msg match {
+          case cmd @ NewViewCmd(_, m) =>
+            Gen.oneOf(
+              "sender" ! genLazy(cmd.copy(sender = invalidSender)),
+              "viewNumber" ! genLazy(
+                cmd.copy(message =
+                  m.copy(viewNumber = invalidateViewNumber(m.viewNumber))
+                )
+              ),
+              "prepareQC" ! invalidateQC(m.prepareQC).map { qc =>
+                cmd.copy(message = m.copy(prepareQC = qc))
+              }
+            )
+
+          case cmd @ PrepareCmd(_, m) =>
+            Gen.oneOf(
+              "sender" ! genLazy(cmd.copy(sender = invalidSender)),
+              "viewNumber" ! genLazy(
+                cmd.copy(message = m.copy(viewNumber = m.viewNumber.next))
+              ),
+              "parentBlockHash" ! genLazy(
+                cmd.copy(message =
+                  m.copy[TestAgreement](block =
+                    m.block
+                      .copy(parentBlockHash =
+                        invalidateHash(m.block.parentBlockHash)
+                      )
+                  )
+                )
+              ),
+              "highQC" ! invalidateQC(m.highQC).map { qc =>
+                cmd.copy(message = m.copy(highQC = qc))
+              }
+            )
+
+          case cmd @ VoteCmd(_, m) =>
+            Gen.oneOf(
+              "sender" ! genLazy(cmd.copy(sender = invalidSender)),
+              "viewNumber" ! genLazy(
+                cmd.copy(message =
+                  m.copy[TestAgreement](viewNumber =
+                    invalidateViewNumber(m.viewNumber)
+                  )
+                )
+              ),
+              "phase" ! genLazy(
+                cmd.copy(message =
+                  m.copy[TestAgreement](phase = nextVoting(m.phase))
+                )
+              ),
+              "blockHash" ! genLazy(
+                cmd.copy(message =
+                  m.copy[TestAgreement](blockHash = invalidateHash(m.blockHash))
+                )
+              ),
+              "signature" ! genLazy(
+                cmd.copy(message =
+                  m.copy[TestAgreement](signature =
+                    m.signature.copy(sig = invalidateSig(m.signature.sig))
+                  )
+                )
+              )
+            )
+
+          case cmd @ QuorumCmd(_, m) =>
+            Gen.oneOf(
+              "sender" ! genLazy(cmd.copy(sender = invalidSender)),
+              "quorumCertificate" ! invalidateQC(m.quorumCertificate).map {
+                qc =>
+                  cmd.copy(message = m.copy(quorumCertificate = qc))
+              }
+            )
+        }
+
+      // Leave anything else alone.
+      case other => Gen.const(other)
     }
   }
 
@@ -385,18 +505,6 @@ object HotStuffProtocolCommands extends Commands {
   val genHash: Gen[TestAgreement.Hash] =
     arbitrary[Int].map(math.abs(_) + 1)
 
-  // def genInvalid(state: State): Gen[Command] =
-  //   Gen.oneOf(
-  //     genNotFromFederation(state),
-  //     genNotFromLeader(state),
-  //     genNotToLeader(state),
-  //     genInvalidVote(state),
-  //     genInvalidQuorumCertificate(state),
-  //     genUnsafeExtension(state)
-  //   )
-
-  //def genNotFromFederation(state: State): Gen[Command] =
-
   /** Timeout. */
   case class NextViewCmd(viewNumber: ViewNumber) extends Command {
     type Result = ProtocolState.Transition[TestAgreement]
@@ -470,7 +578,7 @@ object HotStuffProtocolCommands extends Commands {
   }
 
   /** Common logic of handling a received message */
-  trait MessageCmd extends Command {
+  sealed trait MessageCmd extends Command {
     type Result = ProtocolState.TransitionAttempt[TestAgreement]
 
     def sender: TestAgreement.PKey
@@ -772,6 +880,40 @@ object HotStuffProtocolCommands extends Commands {
         }
       }
     }
+  }
+
+  case class InvalidCmd(label: String, cmd: MessageCmd) extends Command {
+    type Result = ProtocolState.TransitionAttempt[TestAgreement]
+
+    // The underlying command should return a `Left`,
+    // which means it shouldn't update the state.
+    override def run(sut: Protocol): Result =
+      cmd.run(sut)
+
+    // The model state validation is not as sophisticated,
+    // but because we know this is invalid, we know
+    // it should not cause any change in state.
+    override def nextState(state: State): State =
+      state
+
+    // The invalidation should be strong enough that it doesn't
+    // become valid during shrinking.
+    override def preCondition(state: State): Boolean =
+      true
+
+    override def postCondition(
+        state: State,
+        result: Try[Result]
+    ): Prop =
+      s"Invalid $label" |: {
+        result match {
+          case Success(value) =>
+            "not executed" |: value.isLeft
+          case other =>
+            println(s"UNEXPECTED INVALID : $other")
+            fail(s"unexpected result $other")
+        }
+      }
 
   }
 }
