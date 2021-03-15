@@ -71,17 +71,6 @@ object ProtocolError {
     * The host system can maintain some metrics so we can see if we're completely out of
     * alignment with all the other peers.
     */
-  case class TooEarly[A <: Agreement](
-      event: Event.MessageReceived[A],
-      expectedInViewNumber: ViewNumber,
-      expectedInPhase: Phase
-  ) extends ProtocolError[A]
-
-  /** A message we didn't expect to receive in the given state.
-    *
-    * The host system can maintain some metrics so we can see if we're completely out of
-    * alignment with all the other peers.
-    */
   case class Unexpected[A <: Agreement](
       event: Event.MessageReceived[A]
   ) extends ProtocolError[A]
