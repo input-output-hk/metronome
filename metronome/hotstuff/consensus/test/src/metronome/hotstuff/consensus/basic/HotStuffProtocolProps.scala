@@ -313,7 +313,8 @@ object HotStuffProtocolCommands extends Commands {
         ),
         genLazy(
           qc.copy[TestAgreement](signature =
-            qc.signature.copy(sig = 0 +: qc.signature.sig.map(invalidateSig))
+            // The quorum cert has no items, so add one to make it different.
+            qc.signature.copy(sig = 0L +: qc.signature.sig.map(invalidateSig))
           )
         )
       )
