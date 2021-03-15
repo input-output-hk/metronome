@@ -9,6 +9,7 @@ import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   ConnectionsRegister
 }
 import io.iohk.scalanet.peergroup.Channel
+import io.iohk.scalanet.peergroup.Channel.ChannelEvent
 import io.iohk.scalanet.peergroup.PeerGroup.ServerEvent.ChannelCreated
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
   FramingConfig,
@@ -62,6 +63,7 @@ object RemoteConnectionManager {
   ) {
     def sendMessage(m: M): F[Unit] = TaskLift[F].apply(channel.sendMessage(m))
 
+    def nextConnectionEvent = TaskLift[F].apply(channel.nextChannelEvent)
   }
 
   def buildPeerGroup[F[_]: Concurrent: TaskLift, M: Codec](
@@ -149,6 +151,47 @@ object RemoteConnectionManager {
       .completedL
   }
 
+  def handleConnections[F[_]: Concurrent: TaskLift, M: Codec](
+      q: ConcurrentQueue[F, Connection[F, M]],
+      connectionsRegister: ConnectionsRegister[F, M],
+      messageQueue: ConcurrentQueue[F, (PeerInfo, M)]
+  ): F[Unit] = {
+    Iterant
+      .repeatEvalF(q.poll)
+      .mapEval { connection =>
+        //Concurrent[F].background()
+        Iterant
+          .repeatEvalF(connection.nextConnectionEvent)
+          .mapEval {
+            case None =>
+              // remote has closed connections, deregister channel
+              connectionsRegister
+                .deregisterConnection(connection.info.id)
+                .map(_ => None): F[Option[ChannelEvent[M]]]
+            case Some(ev) =>
+              Concurrent[F].pure(Some(ev)): F[Option[ChannelEvent[M]]]
+          }
+          .takeWhile(_.isDefined)
+          .map(_.get)
+          .mapEval {
+            case Channel.MessageReceived(m) =>
+              messageQueue.offer((connection.info, m): (PeerInfo, M))
+            case Channel.UnexpectedError(e) =>
+              Concurrent[F].raiseError[Unit](
+                new RuntimeException("Unexpected Error")
+              )
+
+            case Channel.DecodingError =>
+              Concurrent[F].raiseError[Unit](
+                new RuntimeException("Decoding error")
+              )
+          }
+          .completedL
+          .start
+      }
+      .completedL
+  }
+
   class ConnectionsRegister[F[_]: Concurrent, M: Codec](
       register: Ref[F, Map[BitVector, Connection[F, M]]]
   ) {
@@ -225,6 +268,12 @@ object RemoteConnectionManager {
         connectionQueue,
         acquiredConnections,
         semaphore
+      ).background
+
+      _ <- handleConnections(
+        connectionQueue,
+        acquiredConnections,
+        messageQueue
       ).background
     } yield new RemoteConnectionManager[F, M](
       acquiredConnections,

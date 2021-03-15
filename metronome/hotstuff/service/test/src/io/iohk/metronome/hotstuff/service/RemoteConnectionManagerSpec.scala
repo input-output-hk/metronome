@@ -35,7 +35,6 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
   }
 
   it should "connect to other running peers" in customTestCaseT {
-    val rand = NodeInfo.getRandomNodeInfo
     (for {
       rcm1 <- buildTestConnectionManager[Task, TestMessage]()
       rcm2 <- buildTestConnectionManager[Task, TestMessage]()
@@ -44,25 +43,74 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
-        ac1 <- (Task
-          .parMap3(
-            cm1.getAcquiredConnections,
-            cm2.getAcquiredConnections,
-            cm3.getAcquiredConnections
-          ) { case (cm1Connections, cm2Connections, cm3Connections) =>
-            (cm1Connections.size, cm2Connections.size, cm3Connections.size)
-          })
-          .restartUntil {
-            case (cm1ConnectionSize, cm2ConnectionSize, cm3ConnectionSize) =>
-              cm1ConnectionSize == 1 && cm2ConnectionSize == 1 && cm3ConnectionSize == 2
-          }
-          .timeout(5.seconds)
-        (cm1ConnectionSize, cm2ConnectionSize, cm3ConnectionSize) = ac1
+        connectionCountsResult <- waitFor3Managers(
+          (cm1, 1),
+          (cm2, 1),
+          (cm3, 2)
+        )(5.seconds)
+        _ <- Task(assert(connectionCountsResult.isRight))
+        (cm1ConnectionSize, cm2ConnectionSize, cm3ConnectionSize) =
+          connectionCountsResult.getOrElse(null)
       } yield assert(cm3ConnectionSize == 2)
     }
   }
+
+  it should "send message to other peers" in customTestCaseT {
+    val testMessage1 = MessageA(1)
+    val testMessage2 = MessageB("hello")
+
+    (for {
+      rcm1 <- buildTestConnectionManager[Task, TestMessage]()
+      rcm2 <- buildTestConnectionManager[Task, TestMessage]()
+      rcm3 <- buildTestConnectionManager[Task, TestMessage](
+        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
+      )
+    } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
+      for {
+        connectionCountsResult <- waitFor3Managers(
+          (cm1, 1),
+          (cm2, 1),
+          (cm3, 2)
+        )(5.seconds)
+        _ <- Task(assert(connectionCountsResult.isRight))
+        receivedMessages <- Task.parMap3(
+          cm1.sendMessage(cm3.getLocalInfo, testMessage1),
+          cm2.sendMessage(cm3.getLocalInfo, testMessage2),
+          cm3.incomingMessages.take(2).toListL
+        )((_, _, received) => received)
+      } yield {
+        assert(receivedMessages.size == 2)
+        assert(receivedMessages.contains((cm1.getLocalInfo, testMessage1)))
+        assert(receivedMessages.contains((cm2.getLocalInfo, testMessage2)))
+
+      }
+    }
+  }
+
 }
 object RemoteConnectionManagerSpec {
+  def waitFor3Managers(
+      cm1: (RemoteConnectionManager[Task, TestMessage], Int),
+      cm2: (RemoteConnectionManager[Task, TestMessage], Int),
+      cm3: (RemoteConnectionManager[Task, TestMessage], Int)
+  )(timeOut: FiniteDuration): Task[Either[Unit, (Int, Int, Int)]] = {
+    (Task
+      .parMap3(
+        cm1._1.getAcquiredConnections,
+        cm2._1.getAcquiredConnections,
+        cm3._1.getAcquiredConnections
+      ) { case (cm1Connections, cm2Connections, cm3Connections) =>
+        (cm1Connections.size, cm2Connections.size, cm3Connections.size)
+      })
+      .restartUntil {
+        case (cm1ConnectionSize, cm2ConnectionSize, cm3ConnectionSize) =>
+          cm1ConnectionSize == cm1._2 && cm2ConnectionSize == cm2._2 && cm3ConnectionSize == cm3._2
+      }
+      .timeout(timeOut)
+      .attempt
+      .map(result => result.left.map(_ => ()))
+  }
+
   val secureRandom = new SecureRandom()
   val standardFraming =
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
