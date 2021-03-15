@@ -19,7 +19,16 @@ object Effect {
       timeout: FiniteDuration
   ) extends Effect[Nothing]
 
-  /** Send a message to a federation member. */
+  /** Send a message to a federation member.
+    *
+    * The recipient can be the current member itself (i.e. the leader
+    * sending itself a message to trigger its own vote). It is best
+    * if the host system carries out these effects before it talks
+    * to the external world, to avoid any possible phase mismatches.
+    *
+    * The `ProtocolState` could do it on its own but this way it's
+    * slightly closer to the pseudo code.
+    */
   case class SendMessage[A <: Agreement](
       recipient: A#PKey,
       message: Message[A]

@@ -306,11 +306,41 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       Left(UnexpectedBlockHash(event, preparedBlockHash))
   }
 
+  /** Categorize unexpected messages into ones that can be re-queued or discarded.
+    *
+    * At this point we already know that the messages have been validated once,
+    * so at at least they are consistent with their own view, e.g. sending to the
+    * leader of their own view.
+    */
+  private def handleUnexpected(e: MessageReceived[A]): ProtocolError[A] = {
+    e.message match {
+      case m: NewView[_] if m.viewNumber >= viewNumber =>
+        TooEarly(e, m.viewNumber.next, Phase.Prepare)
+
+      case m: Prepare[_] if m.viewNumber > viewNumber =>
+        TooEarly(e, m.viewNumber, Phase.Prepare)
+
+      case m: Vote[_]
+          if m.viewNumber > viewNumber ||
+            m.viewNumber == viewNumber && m.phase.isAfter(phase) =>
+        TooEarly(e, m.viewNumber, m.phase.next)
+
+      case m: Quorum[_]
+          if m.quorumCertificate.viewNumber > viewNumber ||
+            m.quorumCertificate.viewNumber == viewNumber &&
+            m.quorumCertificate.phase.isAfter(phase) =>
+        TooEarly(e, m.viewNumber, m.quorumCertificate.phase.next)
+
+      case _ =>
+        Unexpected(e)
+    }
+  }
+
   /** Try to match a message to expectations, or return Unexpected. */
   private def matchingMsg(e: MessageReceived[A])(
       pf: PartialFunction[Message[A], TransitionAttempt[A]]
   ): TransitionAttempt[A] =
-    pf.lift(e.message).getOrElse(Left(Unexpected(e)))
+    pf.lift(e.message).getOrElse(Left(handleUnexpected(e)))
 
   /** Check that a message is coming from the view leader and is for the current phase. */
   private def matchingLeader(e: MessageReceived[A]): Boolean =
@@ -448,6 +478,23 @@ object ProtocolState {
         case (PreCommit, Commit | Decide)           => true
         case (Commit, Decide)                       => true
         case _                                      => false
+      }
+
+    /** Check that *within the same view* phase `a` follows phase `b`. */
+    def isAfter(b: Phase): Boolean =
+      (a, b) match {
+        case (PreCommit, Prepare)                   => true
+        case (Commit, Prepare | PreCommit)          => true
+        case (Decide, Prepare | PreCommit | Commit) => true
+        case _                                      => false
+      }
+
+    def next: Phase =
+      a match {
+        case Prepare   => PreCommit
+        case PreCommit => Commit
+        case Commit    => Decide
+        case Decide    => Prepare
       }
   }
 }
