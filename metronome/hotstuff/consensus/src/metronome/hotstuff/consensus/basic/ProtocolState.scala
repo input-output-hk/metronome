@@ -488,13 +488,5 @@ object ProtocolState {
         case (Decide, Prepare | PreCommit | Commit) => true
         case _                                      => false
       }
-
-    def next: Phase =
-      a match {
-        case Prepare   => PreCommit
-        case PreCommit => Commit
-        case Commit    => Decide
-        case Decide    => Prepare
-      }
   }
 }
