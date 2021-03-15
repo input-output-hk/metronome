@@ -270,7 +270,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     case v: Vote[_]
         if isLeader &&
           v.viewNumber == viewNumber &&
-          v.phase != phase &&
+          v.phase.isBefore(phase) &&
           v.blockHash == preparedBlockHash =>
       Right(stay)
 
@@ -437,4 +437,17 @@ object ProtocolState {
   /** Return an initial set of effects; at the minimum the timeout for the first round. */
   def init[A <: Agreement](state: ProtocolState[A]): Seq[Effect[A]] =
     List(Effect.ScheduleNextView(state.viewNumber, state.timeout))
+
+  private implicit class PhaseOps(val a: Phase) extends AnyVal {
+    import Phase._
+
+    /** Check that *within the same view* phase `a` precedes phase `b`. */
+    def isBefore(b: Phase): Boolean =
+      (a, b) match {
+        case (Prepare, PreCommit | Commit | Decide) => true
+        case (PreCommit, Commit | Decide)           => true
+        case (Commit, Decide)                       => true
+        case _                                      => false
+      }
+  }
 }
