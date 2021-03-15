@@ -320,8 +320,8 @@ object HotStuffProtocolCommands extends Commands {
     }
 
     implicit class StringOps(label: String) {
-      def `!`(gen: Gen[MessageCmd]): Gen[Command] =
-        gen.map(cmd => InvalidCmd(label, cmd))
+      def `!`(gen: Gen[MessageCmd]): Gen[InvalidCmd] =
+        gen.map(cmd => InvalidCmd(label, cmd, isEarly = label == "viewNumber"))
     }
 
     genValid(state) flatMap {
@@ -405,6 +405,9 @@ object HotStuffProtocolCommands extends Commands {
     }
   }
 
+  /** A constant expression, but only evaluated if the generator is chosen,
+    * which allows us to have conditions attached to it.
+    */
   def genLazy[A](a: => A): Gen[A] = Gen.lzy(Gen.const(a))
 
   /** Replica sends a new view with an arbitrary prepare QC. */
@@ -818,29 +821,27 @@ object HotStuffProtocolCommands extends Commands {
       message: Message.Quorum[TestAgreement]
   ) extends MessageCmd {
     override def nextState(state: State): State =
-      if (preCondition(state)) {
-        state.copy(
-          viewNumber =
-            if (state.phase == Phase.Decide) state.viewNumber.next
-            else state.viewNumber,
-          phase = state.phase match {
-            case Phase.Prepare   => Phase.PreCommit
-            case Phase.PreCommit => Phase.Commit
-            case Phase.Commit    => Phase.Decide
-            case Phase.Decide    => Phase.Prepare
-          },
-          votesFrom = Set.empty,
-          newViewsFrom = Set.empty,
-          maybeBlockHash =
-            if (state.phase == Phase.Decide) None else state.maybeBlockHash,
-          prepareQCs =
-            if (message.quorumCertificate.phase == Phase.Prepare)
-              message.quorumCertificate :: state.prepareQCs
-            else state.prepareQCs,
-          newViewsHighQC =
-            if (state.phase == Phase.Decide) genesisQC else state.newViewsHighQC
-        )
-      } else state
+      state.copy(
+        viewNumber =
+          if (state.phase == Phase.Decide) state.viewNumber.next
+          else state.viewNumber,
+        phase = state.phase match {
+          case Phase.Prepare   => Phase.PreCommit
+          case Phase.PreCommit => Phase.Commit
+          case Phase.Commit    => Phase.Decide
+          case Phase.Decide    => Phase.Prepare
+        },
+        votesFrom = Set.empty,
+        newViewsFrom = Set.empty,
+        maybeBlockHash =
+          if (state.phase == Phase.Decide) None else state.maybeBlockHash,
+        prepareQCs =
+          if (message.quorumCertificate.phase == Phase.Prepare)
+            message.quorumCertificate :: state.prepareQCs
+          else state.prepareQCs,
+        newViewsHighQC =
+          if (state.phase == Phase.Decide) genesisQC else state.newViewsHighQC
+      )
 
     override def preCondition(state: State): Boolean =
       state.viewNumber == message.viewNumber &&
@@ -882,13 +883,18 @@ object HotStuffProtocolCommands extends Commands {
     }
   }
 
-  case class InvalidCmd(label: String, cmd: MessageCmd) extends Command {
-    type Result = ProtocolState.TransitionAttempt[TestAgreement]
+  /** Check that a deliberately invalidated command returns a protocol error. */
+  case class InvalidCmd(label: String, cmd: MessageCmd, isEarly: Boolean)
+      extends Command {
+    type Result = (Boolean, ProtocolState.TransitionAttempt[TestAgreement])
 
     // The underlying command should return a `Left`,
     // which means it shouldn't update the state.
-    override def run(sut: Protocol): Result =
-      cmd.run(sut)
+    override def run(sut: Protocol): Result = {
+      val event             = Event.MessageReceived(cmd.sender, cmd.message)
+      val isStaticallyValid = sut.state.validateMessage(event).isRight
+      isStaticallyValid -> cmd.run(sut)
+    }
 
     // The model state validation is not as sophisticated,
     // but because we know this is invalid, we know
@@ -907,10 +913,15 @@ object HotStuffProtocolCommands extends Commands {
     ): Prop =
       s"Invalid $label" |: {
         result match {
-          case Success(value) =>
-            "not executed" |: value.isLeft
+          case Success((isStaticallyValid, Left(error))) =>
+            // Ensure that some errors are marked as TooEarly.
+            "is early" |:
+              isEarly && isStaticallyValid && error
+                .isInstanceOf[ProtocolError.TooEarly[_]] ||
+              !isStaticallyValid ||
+              !isEarly
+
           case other =>
-            println(s"UNEXPECTED INVALID : $other")
             fail(s"unexpected result $other")
         }
       }
