@@ -1,9 +1,9 @@
 package io.iohk.metronome.hotstuff.service
 
-import cats.effect.concurrent.{Ref, Semaphore}
+import cats.effect.concurrent.{Deferred, Ref}
+import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.implicits._
-import cats.effect.implicits._
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   Connection,
   ConnectionsRegister
@@ -45,7 +45,8 @@ class RemoteConnectionManager[F[_]: Sync: TaskLift, M: Codec](
 
   def sendMessage(recipient: PeerInfo, message: M): F[Unit] = {
     acquiredConnections.getConnection(recipient.id).flatMap {
-      case Some(connection) => connection.sendMessage(message)
+      case Some(connection) =>
+        connection.sendMessage(message)
       case None =>
         Sync[F].raiseError(
           new RuntimeException(s"Peer ${recipient}, already disconnected")
@@ -63,7 +64,8 @@ object RemoteConnectionManager {
   ) {
     def sendMessage(m: M): F[Unit] = TaskLift[F].apply(channel.sendMessage(m))
 
-    def nextConnectionEvent = TaskLift[F].apply(channel.nextChannelEvent)
+    def nextConnectionEvent: F[Option[ChannelEvent[M]]] =
+      TaskLift[F].apply(channel.nextChannelEvent)
   }
 
   def buildPeerGroup[F[_]: Concurrent: TaskLift, M: Codec](
@@ -73,7 +75,7 @@ object RemoteConnectionManager {
       useNativeTlsImplementation: Boolean,
       framingConfig: FramingConfig,
       maxIncomingQueueSizePerPeer: Int
-  )(implicit s: Scheduler) = {
+  )(implicit s: Scheduler): Resource[F, DynamicTLSPeerGroup[M]] = {
 
     val config = DynamicTLSPeerGroup
       .Config(
@@ -108,7 +110,6 @@ object RemoteConnectionManager {
 
   def acquireConnections[F[_]: Concurrent: TaskLift, M: Codec](
       pg: DynamicTLSPeerGroup[M],
-      semaphore: Semaphore[F],
       connectionsToAcquire: ConcurrentQueue[F, PeerInfo],
       connectionsRegister: ConnectionsRegister[F, M],
       connectionsQueue: ConcurrentQueue[F, Connection[F, M]]
@@ -133,8 +134,7 @@ object RemoteConnectionManager {
   def handleServerConnections[F[_]: Concurrent: TaskLift, M: Codec](
       pg: DynamicTLSPeerGroup[M],
       connectionsQueue: ConcurrentQueue[F, Connection[F, M]],
-      connectionsRegister: ConnectionsRegister[F, M],
-      semaphore: Semaphore[F]
+      connectionsRegister: ConnectionsRegister[F, M]
   ): F[Unit] = {
     Iterant
       .repeatEvalF(TaskLift[F].apply(pg.nextServerEvent))
@@ -151,45 +151,52 @@ object RemoteConnectionManager {
       .completedL
   }
 
+  def withCancelToken[F[_]: Concurrent, A](
+      token: Deferred[F, Unit],
+      ops: F[Option[A]]
+  ): F[Option[A]] =
+    Concurrent[F].race(token.get, ops).map {
+      case Left(()) => None
+      case Right(x) => x
+    }
+
   def handleConnections[F[_]: Concurrent: TaskLift, M: Codec](
       q: ConcurrentQueue[F, Connection[F, M]],
       connectionsRegister: ConnectionsRegister[F, M],
       messageQueue: ConcurrentQueue[F, (PeerInfo, M)]
   ): F[Unit] = {
-    Iterant
-      .repeatEvalF(q.poll)
-      .mapEval { connection =>
-        //Concurrent[F].background()
-        Iterant
-          .repeatEvalF(connection.nextConnectionEvent)
-          .mapEval {
-            case None =>
-              // remote has closed connections, deregister channel
-              connectionsRegister
-                .deregisterConnection(connection.info.id)
-                .map(_ => None): F[Option[ChannelEvent[M]]]
-            case Some(ev) =>
-              Concurrent[F].pure(Some(ev)): F[Option[ChannelEvent[M]]]
-          }
-          .takeWhile(_.isDefined)
-          .map(_.get)
-          .mapEval {
-            case Channel.MessageReceived(m) =>
-              messageQueue.offer((connection.info, m): (PeerInfo, M))
-            case Channel.UnexpectedError(e) =>
-              Concurrent[F].raiseError[Unit](
-                new RuntimeException("Unexpected Error")
-              )
+    Deferred[F, Unit].flatMap { cancelToken =>
+      Iterant
+        .repeatEvalF(q.poll)
+        .mapEval { connection =>
+          Iterant
+            .repeatEvalF(
+              withCancelToken(cancelToken, connection.nextConnectionEvent)
+            )
+            .takeWhile(_.isDefined)
+            .map(_.get)
+            .mapEval {
+              case Channel.MessageReceived(m) =>
+                messageQueue.offer((connection.info, m): (PeerInfo, M))
+              case Channel.UnexpectedError(e) =>
+                Concurrent[F].raiseError[Unit](
+                  new RuntimeException("Unexpected Error")
+                )
 
-            case Channel.DecodingError =>
-              Concurrent[F].raiseError[Unit](
-                new RuntimeException("Decoding error")
-              )
-          }
-          .completedL
-          .start
-      }
-      .completedL
+              case Channel.DecodingError =>
+                Concurrent[F].raiseError[Unit](
+                  new RuntimeException("Decoding error")
+                )
+            }
+            .guarantee(
+              connectionsRegister.deregisterConnection(connection.info.id)
+            )
+            .completedL
+            .start
+        }
+        .completedL
+        .guarantee(cancelToken.complete(()))
+    }
   }
 
   class ConnectionsRegister[F[_]: Concurrent, M: Codec](
@@ -233,7 +240,6 @@ object RemoteConnectionManager {
       cs: ContextShift[F]
   ): Resource[F, RemoteConnectionManager[F, M]] = {
     for {
-      semaphore           <- Resource.liftF(Semaphore(1))
       acquiredConnections <- Resource.liftF(ConnectionsRegister.empty)
       connectionsToAcquireQueue <- Resource.liftF(
         ConcurrentQueue.unbounded[F, PeerInfo]()
@@ -258,7 +264,6 @@ object RemoteConnectionManager {
       )
       _ <- acquireConnections(
         pg,
-        semaphore,
         connectionsToAcquireQueue,
         acquiredConnections,
         connectionQueue
@@ -266,8 +271,7 @@ object RemoteConnectionManager {
       _ <- handleServerConnections(
         pg,
         connectionQueue,
-        acquiredConnections,
-        semaphore
+        acquiredConnections
       ).background
 
       _ <- handleConnections(
