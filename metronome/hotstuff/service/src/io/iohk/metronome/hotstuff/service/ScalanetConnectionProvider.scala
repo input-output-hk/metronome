@@ -7,7 +7,7 @@ import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.{
   HandshakeFailed,
   UnexpectedError
 }
-import io.iohk.scalanet.peergroup.Channel
+import io.iohk.scalanet.peergroup.{Channel, InetMultiAddress}
 import io.iohk.scalanet.peergroup.PeerGroup.ServerEvent
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
   Config,
@@ -19,39 +19,25 @@ import monix.eval.{Task, TaskLift}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import scodec.Codec
+import scodec.bits.BitVector
 
 import java.net.InetSocketAddress
 import java.security.SecureRandom
 
-class ScalanetConnectionProvider {
-  trait PeerInfoTransform[A] {
-    def toPeerInfo(a: A): DynamicTLSPeerGroup.PeerInfo
-    def fromPeerInfo(info: DynamicTLSPeerGroup.PeerInfo): A
-  }
-
-  object PeerInfoTransform {
-    def apply[T](implicit tr: PeerInfoTransform[T]): PeerInfoTransform[T] = tr
-    object ops {
-      implicit class PeerInfoTransformOps[A: PeerInfoTransform](a: A) {
-        def toPeerInfo: DynamicTLSPeerGroup.PeerInfo =
-          PeerInfoTransform[A].toPeerInfo(a)
-      }
-      implicit class PeerInfoTransformOps1[A: PeerInfoTransform](a: PeerInfo) {
-        def fromPeerInfo: A =
-          PeerInfoTransform[A].fromPeerInfo(a)
-      }
-    }
-  }
-
-  import PeerInfoTransform.ops._
-
-  private class ScalanetEncryptedConnection[F[_]: TaskLift, K: PeerInfoTransform, M: Codec](
+object ScalanetConnectionProvider {
+  private class ScalanetEncryptedConnection[F[_]: TaskLift, K: Codec, M: Codec](
       underlyingChannel: Channel[PeerInfo, M],
       underlyingChannelRelease: F[Unit]
   ) extends EncryptedConnection[F, K, M] {
+
+    override lazy val getSerializedKey: BitVector = underlyingChannel.to.id
+
     override def close(): F[Unit] = underlyingChannelRelease
 
-    override def info: K = underlyingChannel.to.fromPeerInfo
+    override def remotePeerInfo: (K, InetSocketAddress) = (
+      Codec[K].decodeValue(underlyingChannel.to.id).require,
+      underlyingChannel.to.address.inetSocketAddress
+    )
 
     override def sendMessage(m: M): F[Unit] =
       TaskLift[F].apply(underlyingChannel.sendMessage(m))
@@ -69,7 +55,7 @@ class ScalanetConnectionProvider {
     }
   }
 
-  def scalanetProvider[F[_]: Sync: TaskLift, K: PeerInfoTransform, M: Codec](
+  def scalanetProvider[F[_]: Sync: TaskLift, K: Codec, M: Codec](
       bindAddress: InetSocketAddress,
       nodeKeyPair: AsymmetricCipherKeyPair,
       secureRandom: SecureRandom,
@@ -97,17 +83,31 @@ class ScalanetConnectionProvider {
       )
       pg <- DynamicTLSPeerGroup[M](config).mapK(TaskLift.apply)
     } yield new EncryptedConnectionProvider[F, K, M] {
-      override def connectTo(k: K): F[EncryptedConnection[F, K, M]] = {
-        TaskLift[F].apply(pg.client(k.toPeerInfo).allocated.attempt.flatMap {
-          case Left(value) => Task.raiseError(value)
-          case Right((channel, release)) =>
-            Task.now(
-              new ScalanetEncryptedConnection(
-                channel,
-                TaskLift[F].apply(release)
-              )
-            )
-        })
+      override def localInfo: (K, InetSocketAddress) = (
+        Codec[K].decodeValue(pg.processAddress.id).require,
+        pg.processAddress.address.inetSocketAddress
+      )
+
+      override def connectTo(
+          k: K,
+          address: InetSocketAddress
+      ): F[EncryptedConnection[F, K, M]] = {
+        val encodedKey = Codec[K].encode(k).require
+        TaskLift[F].apply(
+          pg.client(PeerInfo(encodedKey, InetMultiAddress(address)))
+            .allocated
+            .attempt
+            .flatMap {
+              case Left(value) => Task.raiseError(value)
+              case Right((channel, release)) =>
+                Task.now(
+                  new ScalanetEncryptedConnection(
+                    channel,
+                    TaskLift[F].apply(release)
+                  )
+                )
+            }
+        )
       }
 
       override def incomingConnection

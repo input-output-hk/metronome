@@ -1,6 +1,10 @@
 package io.iohk.metronome.hotstuff.service
 
 import cats.effect.{Concurrent, ContextShift, Resource}
+import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
+  MessageReceived,
+  OutGoingConnectionRequest
+}
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerSpec._
 import io.iohk.scalanet.peergroup.InetMultiAddress
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
@@ -14,6 +18,7 @@ import org.scalatest.Assertion
 import org.scalatest.flatspec.AsyncFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import scodec.Codec
+import scodec.bits.BitVector
 
 import java.net.{InetSocketAddress, ServerSocket}
 import java.security.SecureRandom
@@ -27,7 +32,7 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
   behavior of "RemoteConnectionManager"
 
   it should "start connectionManager without any connections" in customTestCaseResourceT(
-    buildTestConnectionManager[Task, TestMessage]()
+    buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
   ) { connectionManager =>
     for {
       connections <- connectionManager.getAcquiredConnections
@@ -36,10 +41,12 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
 
   it should "connect to other running peers" in customTestCaseT {
     (for {
-      rcm1 <- buildTestConnectionManager[Task, TestMessage]()
-      rcm2 <- buildTestConnectionManager[Task, TestMessage]()
-      rcm3 <- buildTestConnectionManager[Task, TestMessage](
-        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
+      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+      rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo).map {
+          case (key, address) => OutGoingConnectionRequest(key, address)
+        }
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
@@ -60,10 +67,12 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
     val testMessage2 = MessageB("hello")
 
     (for {
-      rcm1 <- buildTestConnectionManager[Task, TestMessage]()
-      rcm2 <- buildTestConnectionManager[Task, TestMessage]()
-      rcm3 <- buildTestConnectionManager[Task, TestMessage](
-        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
+      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+      rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo).map {
+          case (key, address) => OutGoingConnectionRequest(key, address)
+        }
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
@@ -74,14 +83,22 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
         )(5.seconds)
         _ <- Task(assert(connectionCountsResult.isRight))
         receivedMessages <- Task.parMap3(
-          cm1.sendMessage(cm3.getLocalInfo, testMessage1),
-          cm2.sendMessage(cm3.getLocalInfo, testMessage2),
+          cm1.sendMessage(cm3.getLocalInfo._1.key, testMessage1),
+          cm2.sendMessage(cm3.getLocalInfo._1.key, testMessage2),
           cm3.incomingMessages.take(2).toListL
         )((_, _, received) => received)
       } yield {
         assert(receivedMessages.size == 2)
-        assert(receivedMessages.contains((cm1.getLocalInfo, testMessage1)))
-        assert(receivedMessages.contains((cm2.getLocalInfo, testMessage2)))
+        assert(
+          receivedMessages.contains(
+            MessageReceived(cm1.getLocalInfo._1, testMessage1)
+          )
+        )
+        assert(
+          receivedMessages.contains(
+            MessageReceived(cm2.getLocalInfo._1, testMessage2)
+          )
+        )
 
       }
     }
@@ -90,9 +107,9 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
 }
 object RemoteConnectionManagerSpec {
   def waitFor3Managers(
-      cm1: (RemoteConnectionManager[Task, TestMessage], Int),
-      cm2: (RemoteConnectionManager[Task, TestMessage], Int),
-      cm3: (RemoteConnectionManager[Task, TestMessage], Int)
+      cm1: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
+      cm2: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
+      cm3: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int)
   )(timeOut: FiniteDuration): Task[Either[Unit, (Int, Int, Int)]] = {
     (Task
       .parMap3(
@@ -155,7 +172,15 @@ object RemoteConnectionManagerSpec {
     )
   }
 
-  def buildTestConnectionManager[F[_]: Concurrent: TaskLift, M: Codec](
+  case class Secp256k1Key(key: BitVector)
+
+  object Secp256k1Key {
+    implicit val codec: Codec[Secp256k1Key] = bits.as[Secp256k1Key]
+  }
+
+  def buildTestConnectionManager[F[
+      _
+  ]: Concurrent: TaskLift, K: Codec, M: Codec](
       bindAddress: InetSocketAddress = randomAddress(),
       nodeKeyPair: AsymmetricCipherKeyPair =
         CryptoUtils.generateSecp256k1KeyPair(secureRandom),
@@ -163,20 +188,22 @@ object RemoteConnectionManagerSpec {
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
       maxIncomingQueueSizePerPeer: Int = testIncomingQueueSize,
-      connectionsToAcquire: Set[PeerInfo] = Set()
+      connectionsToAcquire: Set[OutGoingConnectionRequest[K]] =
+        Set(): Set[OutGoingConnectionRequest[K]]
   )(implicit
       s: Scheduler,
       cs: ContextShift[F]
-  ): Resource[F, RemoteConnectionManager[F, M]] = {
-    RemoteConnectionManager(
-      bindAddress,
-      nodeKeyPair,
-      secureRandom,
-      useNativeTlsImplementation,
-      framingConfig,
-      maxIncomingQueueSizePerPeer,
-      connectionsToAcquire
-    )
+  ): Resource[F, RemoteConnectionManager[F, K, M]] = {
+    ScalanetConnectionProvider
+      .scalanetProvider[F, K, M](
+        bindAddress,
+        nodeKeyPair,
+        secureRandom,
+        useNativeTlsImplementation,
+        framingConfig,
+        maxIncomingQueueSizePerPeer
+      )
+      .flatMap(prov => RemoteConnectionManager(prov, connectionsToAcquire))
   }
 
   def customTestCaseResourceT[T](
