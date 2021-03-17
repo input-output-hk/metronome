@@ -1,21 +1,24 @@
 package io.iohk.metronome.hotstuff.service
 
+import cats.Monad
 import cats.effect.concurrent.{Deferred, Ref}
 import cats.effect.implicits._
-import cats.effect.{Concurrent, ContextShift, Resource, Sync}
+import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   ConnectionsRegister,
   MessageReceived
 }
 import monix.catnap.ConcurrentQueue
-import monix.eval.TaskLift
+import monix.eval.{TaskLift, TaskLike}
 import monix.execution.Scheduler
+import monix.reactive.Observable
 import monix.tail.Iterant
 import scodec.Codec
 import scodec.bits.BitVector
 
 import java.net.InetSocketAddress
+import scala.concurrent.duration.FiniteDuration
 
 /**
   */
@@ -44,32 +47,96 @@ class RemoteConnectionManager[F[_]: Sync: TaskLift, K: Codec, M: Codec](
     }
   }
 }
-
+//TODO add logging
 object RemoteConnectionManager {
 
   case class MessageReceived[K, M](from: K, message: M)
 
-  def acquireConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
+  case class ConnectionSuccess[F[_], K, M](
+      encryptedConnection: EncryptedConnection[F, K, M]
+  )
+  case class ConnectionFailure[K](
+      connectionRequest: OutGoingConnectionRequest[K],
+      err: Throwable
+  )
+
+  private def connectTo[F[
+      _
+  ]: Concurrent: TaskLift: TaskLike, K: Codec, M: Codec](
+      encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
+      connectionRequest: OutGoingConnectionRequest[K]
+  ): F[Either[ConnectionFailure[K], ConnectionSuccess[F, K, M]]] = {
+    encryptedConnectionProvider
+      .connectTo(connectionRequest.key, connectionRequest.address)
+      .redeemWith(
+        e => Concurrent[F].delay(Left(ConnectionFailure(connectionRequest, e))),
+        connection => Concurrent[F].delay(Right(ConnectionSuccess(connection)))
+      )
+  }
+
+  case class RetryConfig(
+      initialDelay: FiniteDuration,
+      backOffFactor: Long,
+      maxDelay: FiniteDuration
+  )
+
+  object RetryConfig {
+    import scala.concurrent.duration._
+    def default: RetryConfig = {
+      RetryConfig(500.milliseconds, 2, 30.seconds)
+    }
+  }
+
+  def retryConnection[F[_]: Timer: Monad, K](
+      config: RetryConfig,
+      connectionFailure: ConnectionFailure[K]
+  ): F[OutGoingConnectionRequest[K]] = {
+    val previousFailure = connectionFailure.connectionRequest
+    val evolvedDelay =
+      previousFailure.numberOfFailures * config.backOffFactor * config.initialDelay
+    val delay = (config.initialDelay + evolvedDelay).min(config.maxDelay)
+    Timer[F]
+      .sleep(delay)
+      .map(_ =>
+        previousFailure
+          .copy(numberOfFailures = previousFailure.numberOfFailures + 1)
+      )
+  }
+
+  /** Connections are acquired in linear fashion i.e there can be at most one concurrent call to remote peer.
+    * In case of failure each connection will be retried infinite number of times with exponential backoff between
+    * each call.
+    */
+  def acquireConnections[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       connectionsRegister: ConnectionsRegister[F, K, M],
-      connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]]
+      connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
+      retryConfig: RetryConfig
   ): F[Unit] = {
-    Iterant
+
+    /** Observable is used here as streaming primitive as it has richer api than Iterant and have mapParallelUnorderedF
+      * combinator, which makes it possible to have multiple concurrent retry timers, which are cancelled when whole
+      * outer stream is cancelled
+      */
+    Observable
       .repeatEvalF(connectionsToAcquire.poll)
-      .mapEval { connectionRequest =>
-        encryptedConnectionProvider
-          .connectTo(connectionRequest.key, connectionRequest.address)
-          .redeemWith(
-            //TODO add logging and some smarter reconnection logic
-            e => connectionsToAcquire.offer(connectionRequest),
-            connection =>
-              connectionsRegister
-                .registerConnection(connection)
-                .flatMap(_ => connectionsQueue.offer(connection))
-          )
+      .mapEvalF { connectionToAcquire =>
+        connectTo(encryptedConnectionProvider, connectionToAcquire)
       }
-      .completedL
+      .mapParallelUnorderedF(Integer.MAX_VALUE) {
+        case Left(failure) =>
+          retryConnection(retryConfig, failure).flatMap(updatedRequest =>
+            connectionsToAcquire.offer(updatedRequest)
+          )
+        case Right(connection) =>
+          connectionsRegister
+            .registerConnection(connection.encryptedConnection)
+            .flatMap(_ =>
+              connectionsQueue.offer(connection.encryptedConnection)
+            )
+      }
+      .completedF
   }
 
   def handleServerConnections[F[_]: Concurrent: TaskLift, K, M: Codec](
@@ -175,11 +242,25 @@ object RemoteConnectionManager {
     }
   }
 
-  case class OutGoingConnectionRequest[K](key: K, address: InetSocketAddress)
+  case class OutGoingConnectionRequest[K](
+      key: K,
+      address: InetSocketAddress,
+      numberOfFailures: Int
+  )
 
-  def apply[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
+  object OutGoingConnectionRequest {
+    def initial[K](
+        key: K,
+        address: InetSocketAddress
+    ): OutGoingConnectionRequest[K] = {
+      OutGoingConnectionRequest(key, address, 0)
+    }
+  }
+
+  def apply[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       encryptedConnectionsProvider: EncryptedConnectionProvider[F, K, M],
-      connectionsToAcquire: Set[OutGoingConnectionRequest[K]]
+      connectionsToAcquire: Set[(K, InetSocketAddress)],
+      retryConfig: RetryConfig
   )(implicit
       s: Scheduler,
       cs: ContextShift[F]
@@ -190,7 +271,9 @@ object RemoteConnectionManager {
         ConcurrentQueue.unbounded[F, OutGoingConnectionRequest[K]]()
       )
       _ <- Resource.liftF(
-        connectionsToAcquireQueue.offerMany(connectionsToAcquire)
+        connectionsToAcquireQueue.offerMany(connectionsToAcquire.map {
+          case (key, address) => OutGoingConnectionRequest.initial(key, address)
+        })
       )
       connectionQueue <- Resource.liftF(
         ConcurrentQueue.unbounded[F, EncryptedConnection[F, K, M]]()
@@ -203,7 +286,8 @@ object RemoteConnectionManager {
         encryptedConnectionsProvider,
         connectionsToAcquireQueue,
         acquiredConnections,
-        connectionQueue
+        connectionQueue,
+        retryConfig
       ).background
       _ <- handleServerConnections(
         encryptedConnectionsProvider,

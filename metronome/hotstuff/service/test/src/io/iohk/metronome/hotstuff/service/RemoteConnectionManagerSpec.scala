@@ -1,9 +1,9 @@
 package io.iohk.metronome.hotstuff.service
 
-import cats.effect.{Concurrent, ContextShift, Resource}
+import cats.effect.{Concurrent, ContextShift, Resource, Timer}
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   MessageReceived,
-  OutGoingConnectionRequest
+  RetryConfig
 }
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerSpec._
 import io.iohk.scalanet.peergroup.InetMultiAddress
@@ -11,7 +11,7 @@ import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
   FramingConfig,
   PeerInfo
 }
-import monix.eval.{Task, TaskLift}
+import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.Assertion
@@ -44,9 +44,7 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
       rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
       rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
       rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo).map {
-          case (key, address) => OutGoingConnectionRequest(key, address)
-        }
+        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
@@ -70,9 +68,7 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
       rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
       rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
       rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo).map {
-          case (key, address) => OutGoingConnectionRequest(key, address)
-        }
+        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
@@ -180,7 +176,7 @@ object RemoteConnectionManagerSpec {
 
   def buildTestConnectionManager[F[
       _
-  ]: Concurrent: TaskLift, K: Codec, M: Codec](
+  ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       bindAddress: InetSocketAddress = randomAddress(),
       nodeKeyPair: AsymmetricCipherKeyPair =
         CryptoUtils.generateSecp256k1KeyPair(secureRandom),
@@ -188,8 +184,9 @@ object RemoteConnectionManagerSpec {
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
       maxIncomingQueueSizePerPeer: Int = testIncomingQueueSize,
-      connectionsToAcquire: Set[OutGoingConnectionRequest[K]] =
-        Set(): Set[OutGoingConnectionRequest[K]]
+      connectionsToAcquire: Set[(K, InetSocketAddress)] =
+        Set(): Set[(K, InetSocketAddress)],
+      retryConfig: RetryConfig = RetryConfig.default
   )(implicit
       s: Scheduler,
       cs: ContextShift[F]
@@ -203,7 +200,9 @@ object RemoteConnectionManagerSpec {
         framingConfig,
         maxIncomingQueueSizePerPeer
       )
-      .flatMap(prov => RemoteConnectionManager(prov, connectionsToAcquire))
+      .flatMap(prov =>
+        RemoteConnectionManager(prov, connectionsToAcquire, retryConfig)
+      )
   }
 
   def customTestCaseResourceT[T](
