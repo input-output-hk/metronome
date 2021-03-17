@@ -4,12 +4,10 @@ import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.{
   ChannelError,
   HandshakeFailed
 }
-import scodec.bits.BitVector
 
 import java.net.InetSocketAddress
 
 trait EncryptedConnection[F[_], K, M] {
-  def getSerializedKey: BitVector
   def remotePeerInfo: (K, InetSocketAddress)
   def sendMessage(m: M): F[Unit]
   def incomingMessage: F[Option[Either[ChannelError, M]]]

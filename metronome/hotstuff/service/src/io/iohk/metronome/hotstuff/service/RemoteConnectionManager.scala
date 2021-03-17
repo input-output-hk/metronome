@@ -15,14 +15,12 @@ import monix.execution.Scheduler
 import monix.reactive.Observable
 import monix.tail.Iterant
 import scodec.Codec
-import scodec.bits.BitVector
-
 import java.net.InetSocketAddress
 import scala.concurrent.duration.FiniteDuration
 
 /**
   */
-class RemoteConnectionManager[F[_]: Sync: TaskLift, K: Codec, M: Codec](
+class RemoteConnectionManager[F[_]: Sync, K: Codec, M: Codec](
     acquiredConnections: ConnectionsRegister[F, K, M],
     localInfo: (K, InetSocketAddress),
     concurrentQueue: ConcurrentQueue[F, MessageReceived[K, M]]
@@ -36,7 +34,7 @@ class RemoteConnectionManager[F[_]: Sync: TaskLift, K: Codec, M: Codec](
   def incomingMessages: Iterant[F, MessageReceived[K, M]] =
     Iterant.repeatEvalF(concurrentQueue.poll)
 
-  def sendMessage(recipient: BitVector, message: M): F[Unit] = {
+  def sendMessage(recipient: K, message: M): F[Unit] = {
     acquiredConnections.getConnection(recipient).flatMap {
       case Some(connection) =>
         connection.sendMessage(message)
@@ -107,7 +105,9 @@ object RemoteConnectionManager {
     * In case of failure each connection will be retried infinite number of times with exponential backoff between
     * each call.
     */
-  def acquireConnections[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
+  def acquireConnections[F[
+      _
+  ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       connectionsRegister: ConnectionsRegister[F, K, M],
@@ -142,7 +142,8 @@ object RemoteConnectionManager {
   def handleServerConnections[F[_]: Concurrent: TaskLift, K, M: Codec](
       pg: EncryptedConnectionProvider[F, K, M],
       connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
-      connectionsRegister: ConnectionsRegister[F, K, M]
+      connectionsRegister: ConnectionsRegister[F, K, M],
+      clusterConfig: ClusterConfig[K]
   ): F[Unit] = {
     Iterant
       .repeatEvalF(pg.incomingConnection)
@@ -152,9 +153,17 @@ object RemoteConnectionManager {
         value
       }
       .mapEval { encryptedConnection =>
-        connectionsRegister
-          .registerConnection(encryptedConnection)
-          .flatMap(_ => connectionsQueue.offer(encryptedConnection))
+        if (
+          clusterConfig.isAllowedIncomingConnection(
+            encryptedConnection.remotePeerInfo._1
+          )
+        ) {
+          connectionsRegister
+            .registerConnection(encryptedConnection)
+            .flatMap(_ => connectionsQueue.offer(encryptedConnection))
+        } else {
+          encryptedConnection.close()
+        }
       }
       .completedL
   }
@@ -190,7 +199,7 @@ object RemoteConnectionManager {
                 )
               case Left(e) =>
                 Concurrent[F].raiseError[Unit](
-                  new RuntimeException("Unexpected Error")
+                  new RuntimeException(s"Unexpected Error ${e}")
                 )
             }
             .guarantee(
@@ -204,22 +213,22 @@ object RemoteConnectionManager {
     }
   }
 
-  class ConnectionsRegister[F[_]: Concurrent, K: Codec, M: Codec](
-      register: Ref[F, Map[BitVector, EncryptedConnection[F, K, M]]]
+  class ConnectionsRegister[F[_]: Concurrent, K, M: Codec](
+      register: Ref[F, Map[K, EncryptedConnection[F, K, M]]]
   ) {
 
     def registerConnection(
         connection: EncryptedConnection[F, K, M]
     ): F[Unit] = {
       register.update(current =>
-        current + (connection.getSerializedKey -> connection)
+        current + (connection.remotePeerInfo._1 -> connection)
       )
     }
 
     def deregisterConnection(
         connection: EncryptedConnection[F, K, M]
     ): F[Unit] = {
-      register.update(current => current - (connection.getSerializedKey))
+      register.update(current => current - (connection.remotePeerInfo._1))
     }
 
     def getAllRegisteredConnections: F[Set[EncryptedConnection[F, K, M]]] = {
@@ -227,17 +236,17 @@ object RemoteConnectionManager {
     }
 
     def getConnection(
-        connectionId: BitVector
+        connectionKey: K
     ): F[Option[EncryptedConnection[F, K, M]]] =
-      register.get.map(connections => connections.get(connectionId))
+      register.get.map(connections => connections.get(connectionKey))
 
   }
 
   object ConnectionsRegister {
-    def empty[F[_]: Concurrent, K: Codec, M: Codec]
+    def empty[F[_]: Concurrent, K, M: Codec]
         : F[ConnectionsRegister[F, K, M]] = {
       Ref
-        .of(Map.empty[BitVector, EncryptedConnection[F, K, M]])
+        .of(Map.empty[K, EncryptedConnection[F, K, M]])
         .map(ref => new ConnectionsRegister[F, K, M](ref))
     }
   }
@@ -257,9 +266,33 @@ object RemoteConnectionManager {
     }
   }
 
+  sealed abstract case class ClusterConfig[K] private (
+      connectionsToAcquire: Set[(K, InetSocketAddress)],
+      allowedIncoming: Set[K]
+  ) {
+    def isAllowedIncomingConnection(k: K): Boolean = allowedIncoming.contains(k)
+  }
+  object ClusterConfig {
+    def empty[K]: ClusterConfig[K] =
+      new ClusterConfig[K](Set.empty, Set.empty) {}
+
+    def buildConfig[K](
+        connectionsToAcquire: Set[(K, InetSocketAddress)],
+        allowedIncoming: Set[K]
+    ): Option[ClusterConfig[K]] = {
+      val outGoingKeys   = connectionsToAcquire.map(_._1)
+      val duplicatedKeys = outGoingKeys.intersect(allowedIncoming).nonEmpty
+      if (duplicatedKeys) {
+        None
+      } else {
+        Some(new ClusterConfig[K](connectionsToAcquire, allowedIncoming) {})
+      }
+    }
+  }
+
   def apply[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       encryptedConnectionsProvider: EncryptedConnectionProvider[F, K, M],
-      connectionsToAcquire: Set[(K, InetSocketAddress)],
+      clusterConfig: ClusterConfig[K],
       retryConfig: RetryConfig
   )(implicit
       s: Scheduler,
@@ -271,9 +304,11 @@ object RemoteConnectionManager {
         ConcurrentQueue.unbounded[F, OutGoingConnectionRequest[K]]()
       )
       _ <- Resource.liftF(
-        connectionsToAcquireQueue.offerMany(connectionsToAcquire.map {
-          case (key, address) => OutGoingConnectionRequest.initial(key, address)
-        })
+        connectionsToAcquireQueue.offerMany(
+          clusterConfig.connectionsToAcquire.map { case (key, address) =>
+            OutGoingConnectionRequest.initial(key, address)
+          }
+        )
       )
       connectionQueue <- Resource.liftF(
         ConcurrentQueue.unbounded[F, EncryptedConnection[F, K, M]]()
@@ -292,7 +327,8 @@ object RemoteConnectionManager {
       _ <- handleServerConnections(
         encryptedConnectionsProvider,
         connectionQueue,
-        acquiredConnections
+        acquiredConnections,
+        clusterConfig
       ).background
 
       _ <- handleConnections(

@@ -30,8 +30,6 @@ object ScalanetConnectionProvider {
       underlyingChannelRelease: F[Unit]
   ) extends EncryptedConnection[F, K, M] {
 
-    override lazy val getSerializedKey: BitVector = underlyingChannel.to.id
-
     override def close(): F[Unit] = underlyingChannelRelease
 
     override def remotePeerInfo: (K, InetSocketAddress) = (
@@ -54,7 +52,7 @@ object ScalanetConnectionProvider {
       })
     }
   }
-
+  // Codec constraint for K is necessary as scalanet require peer key to be in BitVector format
   def scalanetProvider[F[_]: Sync: TaskLift, K: Codec, M: Codec](
       bindAddress: InetSocketAddress,
       nodeKeyPair: AsymmetricCipherKeyPair,

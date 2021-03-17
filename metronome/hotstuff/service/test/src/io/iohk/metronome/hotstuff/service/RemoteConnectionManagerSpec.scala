@@ -2,15 +2,12 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
+  ClusterConfig,
   MessageReceived,
   RetryConfig
 }
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerSpec._
-import io.iohk.scalanet.peergroup.InetMultiAddress
-import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
-  FramingConfig,
-  PeerInfo
-}
+import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
@@ -39,12 +36,34 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
     } yield assert(connections.isEmpty)
   }
 
-  it should "connect to other running peers" in customTestCaseT {
+  it should "connect to other running peers with proper cluster config" in customTestCaseT {
+    val kp1 = NodeInfo.generateRandom
+    val kp2 = NodeInfo.generateRandom
+    val kp3 = NodeInfo.generateRandom
     (for {
-      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
-      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp1.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set.empty[(Secp256k1Key, InetSocketAddress)],
+            Set(kp3.publicKey)
+          )
+          .get
+      )
+      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp2.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set.empty[(Secp256k1Key, InetSocketAddress)],
+            Set(kp3.publicKey)
+          )
+          .get
+      )
       rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
+        nodeKeyPair = kp3.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(Set(rcm1.getLocalInfo, rcm2.getLocalInfo), Set())
+          .get
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
@@ -60,15 +79,38 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
     }
   }
 
-  it should "send message to other peers" in customTestCaseT {
+  it should "send message to other peers with proper cluster config" in customTestCaseT {
+    val kp1 = NodeInfo.generateRandom
+    val kp2 = NodeInfo.generateRandom
+    val kp3 = NodeInfo.generateRandom
+
     val testMessage1 = MessageA(1)
     val testMessage2 = MessageB("hello")
 
     (for {
-      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
-      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp1.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set.empty[(Secp256k1Key, InetSocketAddress)],
+            Set(kp3.publicKey)
+          )
+          .get
+      )
+      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp2.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set.empty[(Secp256k1Key, InetSocketAddress)],
+            Set(kp3.publicKey)
+          )
+          .get
+      )
       rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        connectionsToAcquire = Set(rcm1.getLocalInfo, rcm2.getLocalInfo)
+        nodeKeyPair = kp3.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(Set(rcm1.getLocalInfo, rcm2.getLocalInfo), Set())
+          .get
       )
     } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
       for {
@@ -79,8 +121,8 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
         )(5.seconds)
         _ <- Task(assert(connectionCountsResult.isRight))
         receivedMessages <- Task.parMap3(
-          cm1.sendMessage(cm3.getLocalInfo._1.key, testMessage1),
-          cm2.sendMessage(cm3.getLocalInfo._1.key, testMessage2),
+          cm1.sendMessage(cm3.getLocalInfo._1, testMessage1),
+          cm2.sendMessage(cm3.getLocalInfo._1, testMessage2),
           cm3.incomingMessages.take(2).toListL
         )((_, _, received) => received)
       } yield {
@@ -151,24 +193,19 @@ object RemoteConnectionManagerSpec {
       .typecase(2, utf8.as[MessageB])
   }
 
-  case class NodeInfo(
-      address: InetSocketAddress,
-      keyPair: AsymmetricCipherKeyPair
-  ) {
-    def toPeerInfo: PeerInfo = PeerInfo(
-      CryptoUtils.secp256k1KeyPairToNodeId(keyPair),
-      InetMultiAddress(address)
-    )
-  }
+  case class Secp256k1Key(key: BitVector)
+
+  case class NodeInfo(keyPair: AsymmetricCipherKeyPair, publicKey: Secp256k1Key)
 
   object NodeInfo {
-    def getRandomNodeInfo: NodeInfo = NodeInfo(
-      randomAddress(),
-      CryptoUtils.generateSecp256k1KeyPair(secureRandom)
-    )
+    def generateRandom: NodeInfo = {
+      val keyPair = CryptoUtils.generateSecp256k1KeyPair(secureRandom)
+      NodeInfo(
+        keyPair,
+        Secp256k1Key(CryptoUtils.secp256k1KeyPairToNodeId(keyPair))
+      )
+    }
   }
-
-  case class Secp256k1Key(key: BitVector)
 
   object Secp256k1Key {
     implicit val codec: Codec[Secp256k1Key] = bits.as[Secp256k1Key]
@@ -184,8 +221,7 @@ object RemoteConnectionManagerSpec {
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
       maxIncomingQueueSizePerPeer: Int = testIncomingQueueSize,
-      connectionsToAcquire: Set[(K, InetSocketAddress)] =
-        Set(): Set[(K, InetSocketAddress)],
+      clusterConfig: ClusterConfig[K] = ClusterConfig.empty[K],
       retryConfig: RetryConfig = RetryConfig.default
   )(implicit
       s: Scheduler,
@@ -201,7 +237,7 @@ object RemoteConnectionManagerSpec {
         maxIncomingQueueSizePerPeer
       )
       .flatMap(prov =>
-        RemoteConnectionManager(prov, connectionsToAcquire, retryConfig)
+        RemoteConnectionManager(prov, clusterConfig, retryConfig)
       )
   }
 
