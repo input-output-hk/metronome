@@ -36,108 +36,67 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
     } yield assert(connections.isEmpty)
   }
 
-  it should "connect to other running peers with proper cluster config" in customTestCaseT {
-    val kp1 = NodeInfo.generateRandom
-    val kp2 = NodeInfo.generateRandom
-    val kp3 = NodeInfo.generateRandom
-    (for {
-      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp1.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set.empty[(Secp256k1Key, InetSocketAddress)],
-            Set(kp3.publicKey)
-          )
-          .get
-      )
-      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp2.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set.empty[(Secp256k1Key, InetSocketAddress)],
-            Set(kp3.publicKey)
-          )
-          .get
-      )
-      rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp3.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(Set(rcm1.getLocalInfo, rcm2.getLocalInfo), Set())
-          .get
-      )
-    } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
+  it should "build fully connected cluster of 3 nodes" in customTestCaseT {
+    buildFullyConnectedClusterOf3Nodes(10.seconds).use { case (cm1, cm2, cm3) =>
       for {
-        connectionCountsResult <- waitFor3Managers(
-          (cm1, 1),
-          (cm2, 1),
-          (cm3, 2)
-        )(5.seconds)
-        _ <- Task(assert(connectionCountsResult.isRight))
-        (cm1ConnectionSize, cm2ConnectionSize, cm3ConnectionSize) =
-          connectionCountsResult.getOrElse(null)
-      } yield assert(cm3ConnectionSize == 2)
+        cm1Peers <- cm1.getAcquiredConnections
+        cm2Peers <- cm2.getAcquiredConnections
+        cm3Peers <- cm3.getAcquiredConnections
+      } yield assert(
+        cm1Peers.size == 2 && cm2Peers.size == 2 && cm3Peers.size == 2
+      )
     }
   }
 
-  it should "send message to other peers with proper cluster config" in customTestCaseT {
-    val kp1 = NodeInfo.generateRandom
-    val kp2 = NodeInfo.generateRandom
-    val kp3 = NodeInfo.generateRandom
-
+  it should "send message to other peers in cluster" in customTestCaseT {
     val testMessage1 = MessageA(1)
     val testMessage2 = MessageB("hello")
 
-    (for {
-      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp1.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set.empty[(Secp256k1Key, InetSocketAddress)],
-            Set(kp3.publicKey)
-          )
-          .get
-      )
-      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp2.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set.empty[(Secp256k1Key, InetSocketAddress)],
-            Set(kp3.publicKey)
-          )
-          .get
-      )
-      rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp3.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(Set(rcm1.getLocalInfo, rcm2.getLocalInfo), Set())
-          .get
-      )
-    } yield (rcm1, rcm2, rcm3)).use { case (cm1, cm2, cm3) =>
+    buildFullyConnectedClusterOf3Nodes(10.seconds).use { case (cm1, cm2, cm3) =>
       for {
-        connectionCountsResult <- waitFor3Managers(
-          (cm1, 1),
-          (cm2, 1),
-          (cm3, 2)
-        )(5.seconds)
-        _ <- Task(assert(connectionCountsResult.isRight))
-        receivedMessages <- Task.parMap3(
-          cm1.sendMessage(cm3.getLocalInfo._1, testMessage1),
-          cm2.sendMessage(cm3.getLocalInfo._1, testMessage2),
-          cm3.incomingMessages.take(2).toListL
-        )((_, _, received) => received)
+        _ <- Task
+          .parZip2(
+            cm1.sendMessage(cm2.getLocalInfo._1, testMessage1),
+            cm1.sendMessage(cm3.getLocalInfo._1, testMessage2)
+          )
+          .void
+        _ <- Task
+          .parZip2(
+            cm2.sendMessage(cm3.getLocalInfo._1, testMessage1),
+            cm2.sendMessage(cm1.getLocalInfo._1, testMessage2)
+          )
+          .void
+        _ <- Task
+          .parZip2(
+            cm3.sendMessage(cm1.getLocalInfo._1, testMessage1),
+            cm3.sendMessage(cm2.getLocalInfo._1, testMessage2)
+          )
+          .void
+        cm1Received <- cm1.incomingMessages.take(2).toListL
+        cm2Received <- cm2.incomingMessages.take(2).toListL
+        cm3Received <- cm3.incomingMessages.take(2).toListL
       } yield {
-        assert(receivedMessages.size == 2)
         assert(
-          receivedMessages.contains(
-            MessageReceived(cm1.getLocalInfo._1, testMessage1)
-          )
-        )
-        assert(
-          receivedMessages.contains(
+          cm1Received.contains(
             MessageReceived(cm2.getLocalInfo._1, testMessage2)
+          ) && cm1Received.contains(
+            MessageReceived(cm3.getLocalInfo._1, testMessage1)
           )
         )
-
+        assert(
+          cm2Received.contains(
+            MessageReceived(cm1.getLocalInfo._1, testMessage1)
+          ) && cm2Received.contains(
+            MessageReceived(cm3.getLocalInfo._1, testMessage2)
+          )
+        )
+        assert(
+          cm3Received.contains(
+            MessageReceived(cm1.getLocalInfo._1, testMessage2)
+          ) && cm3Received.contains(
+            MessageReceived(cm2.getLocalInfo._1, testMessage1)
+          )
+        )
       }
     }
   }
@@ -148,7 +107,7 @@ object RemoteConnectionManagerSpec {
       cm1: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
       cm2: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
       cm3: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int)
-  )(timeOut: FiniteDuration): Task[Either[Unit, (Int, Int, Int)]] = {
+  )(timeOut: FiniteDuration): Task[Unit] = {
     (Task
       .parMap3(
         cm1._1.getAcquiredConnections,
@@ -162,8 +121,51 @@ object RemoteConnectionManagerSpec {
           cm1ConnectionSize == cm1._2 && cm2ConnectionSize == cm2._2 && cm3ConnectionSize == cm3._2
       }
       .timeout(timeOut)
-      .attempt
-      .map(result => result.left.map(_ => ()))
+      .void
+  }
+
+  def buildFullyConnectedClusterOf3Nodes(
+      timeOut: FiniteDuration
+  )(implicit s: Scheduler): Resource[
+    Task,
+    (
+        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
+        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
+        RemoteConnectionManager[Task, Secp256k1Key, TestMessage]
+    )
+  ] = {
+    val kp1 = NodeInfo.generateRandom
+    val kp2 = NodeInfo.generateRandom
+    val kp3 = NodeInfo.generateRandom
+    (for {
+      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp1.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set.empty[(Secp256k1Key, InetSocketAddress)],
+            Set(kp2.publicKey, kp3.publicKey)
+          )
+          .get
+      )
+      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp2.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set(rcm1.getLocalInfo),
+            Set(kp3.publicKey)
+          )
+          .get
+      )
+      rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp3.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(Set(rcm1.getLocalInfo, rcm2.getLocalInfo), Set())
+          .get
+      )
+      _ <- Resource.liftF[Task, Unit](
+        waitFor3Managers((rcm1, 2), (rcm2, 2), (rcm3, 2))(timeOut).void
+      )
+    } yield (rcm1, rcm2, rcm3))
   }
 
   val secureRandom = new SecureRandom()
