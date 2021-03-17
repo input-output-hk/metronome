@@ -101,6 +101,48 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
     }
   }
 
+  it should "eventually connect to previously offline peer" in customTestCaseT {
+    val kp1        = NodeInfo.generateRandom
+    val kp2        = NodeInfo.generateRandom
+    val cm2Address = randomAddress()
+    for {
+      cm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        nodeKeyPair = kp1.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set((kp2.publicKey, cm2Address)),
+            Set.empty[Secp256k1Key]
+          )
+          .get
+      ).allocated
+      (cm1Manager, cm1Release) = cm1
+      _ <- Task.sleep(5.seconds)
+      cm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        bindAddress = cm2Address,
+        nodeKeyPair = kp2.keyPair,
+        clusterConfig = ClusterConfig
+          .buildConfig(
+            Set.empty[(Secp256k1Key, InetSocketAddress)],
+            Set(kp1.publicKey)
+          )
+          .get
+      ).allocated
+      (cm2Manager, cm2Release) = cm2
+      m1HasTheSameNumOfPeersAsM2 <- Task
+        .parMap2(
+          cm1Manager.getAcquiredConnections,
+          cm2Manager.getAcquiredConnections
+        ) { case (m1Peers, m2peers) =>
+          m1Peers.size == m2peers.size
+        }
+        .restartUntil(result => result)
+        .timeout(10.seconds)
+      _ <- Task.parZip2(cm1Release, cm2Release).void
+    } yield {
+      assert(m1HasTheSameNumOfPeersAsM2)
+    }
+  }
+
 }
 object RemoteConnectionManagerSpec {
   def waitFor3Managers(
