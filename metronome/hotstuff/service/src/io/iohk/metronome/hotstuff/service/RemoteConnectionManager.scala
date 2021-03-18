@@ -5,6 +5,7 @@ import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
+  ConnectionAlreadyClosedException,
   ConnectionsRegister,
   MessageReceived
 }
@@ -13,12 +14,13 @@ import monix.eval.{TaskLift, TaskLike}
 import monix.reactive.Observable
 import monix.tail.Iterant
 import scodec.Codec
+
 import java.net.InetSocketAddress
 import scala.concurrent.duration.FiniteDuration
 
 /**
   */
-class RemoteConnectionManager[F[_]: Sync, K: Codec, M: Codec](
+class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
     acquiredConnections: ConnectionsRegister[F, K, M],
     localInfo: (K, InetSocketAddress),
     concurrentQueue: ConcurrentQueue[F, MessageReceived[K, M]]
@@ -26,10 +28,11 @@ class RemoteConnectionManager[F[_]: Sync, K: Codec, M: Codec](
 
   def getLocalInfo: (K, InetSocketAddress) = localInfo
 
-  def getAcquiredConnections: F[Set[K]] =
+  def getAcquiredConnections: F[Set[K]] = {
     acquiredConnections.getAllRegisteredConnections.map(
       _.map(_.remotePeerInfo._1)
     )
+  }
 
   def incomingMessages: Iterant[F, MessageReceived[K, M]] =
     Iterant.repeatEvalF(concurrentQueue.poll)
@@ -37,16 +40,27 @@ class RemoteConnectionManager[F[_]: Sync, K: Codec, M: Codec](
   def sendMessage(recipient: K, message: M): F[Unit] = {
     acquiredConnections.getConnection(recipient).flatMap {
       case Some(connection) =>
-        connection.sendMessage(message)
+        //Connections could be closed by remote without us noticing, close it on our side and return error to caller
+        connection.sendMessage(message).handleErrorWith { e =>
+          //Todo logging
+          connection
+            .close()
+            .flatMap(_ =>
+              Sync[F].raiseError(ConnectionAlreadyClosedException(recipient))
+            )
+        }
       case None =>
-        Sync[F].raiseError(
-          new RuntimeException(s"Peer ${recipient}, already disconnected")
-        )
+        Sync[F].raiseError(ConnectionAlreadyClosedException(recipient))
     }
   }
 }
 //TODO add logging
 object RemoteConnectionManager {
+
+  case class ConnectionAlreadyClosedException[K](key: K)
+      extends RuntimeException(
+        s"Connection with node ${key}, has already closed"
+      )
 
   case class MessageReceived[K, M](from: K, message: M)
 
@@ -184,7 +198,9 @@ object RemoteConnectionManager {
   def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
       q: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
-      messageQueue: ConcurrentQueue[F, MessageReceived[K, M]]
+      connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
+      messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
+      clusterConfig: ClusterConfig[K]
   ): F[Unit] = {
     Deferred[F, Unit].flatMap { cancelToken =>
       Iterant
@@ -207,7 +223,24 @@ object RemoteConnectionManager {
                 )
             }
             .guarantee(
-              connectionsRegister.deregisterConnection(connection)
+              connectionsRegister
+                .deregisterConnection(connection)
+                .flatMap(_ =>
+                  if (
+                    clusterConfig
+                      .isOutGoingConnection(connection.remotePeerInfo._1)
+                  ) {
+                    // We have lost one of our outgoing connections, try to re-establish it by pushing it to connection to acquire queue
+                    connectionsToAcquire.offer(
+                      OutGoingConnectionRequest.initial(
+                        connection.remotePeerInfo._1,
+                        connection.remotePeerInfo._2
+                      )
+                    )
+                  } else {
+                    Concurrent[F].unit
+                  }
+                )
             )
             .completedL
             .start
@@ -275,6 +308,10 @@ object RemoteConnectionManager {
       allowedIncoming: Set[K]
   ) {
     def isAllowedIncomingConnection(k: K): Boolean = allowedIncoming.contains(k)
+
+    def isOutGoingConnection(k: K): Boolean = {
+      connectionsToAcquire.map(_._1).contains(k)
+    }
   }
   object ClusterConfig {
     def empty[K]: ClusterConfig[K] =
@@ -337,7 +374,9 @@ object RemoteConnectionManager {
       _ <- handleConnections(
         connectionQueue,
         acquiredConnections,
-        messageQueue
+        connectionsToAcquireQueue,
+        messageQueue,
+        clusterConfig
       ).background
     } yield new RemoteConnectionManager[F, K, M](
       acquiredConnections,
