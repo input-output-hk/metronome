@@ -7,26 +7,24 @@ import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   RetryConfig
 }
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerSpec._
+import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerTestUtils._
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
-import org.scalatest.Assertion
 import org.scalatest.flatspec.AsyncFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import scodec.Codec
-import scodec.bits.BitVector
 
-import java.net.{InetSocketAddress, ServerSocket}
+import java.net.InetSocketAddress
 import java.security.SecureRandom
-import scala.concurrent.Future
 import scala.concurrent.duration._
 
 class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
   implicit val testScheduler =
     Scheduler.fixedPool("RemoteConnectionManagerSpec", 16)
 
-  behavior of "RemoteConnectionManager"
+  behavior of "RemoteConnectionManagerWithScalanetProvider"
 
   it should "start connectionManager without any connections" in customTestCaseResourceT(
     buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
@@ -102,8 +100,8 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
   }
 
   it should "eventually connect to previously offline peer" in customTestCaseT {
-    val kp1        = NodeInfo.generateRandom
-    val kp2        = NodeInfo.generateRandom
+    val kp1        = NodeInfo.generateRandom(secureRandom)
+    val kp2        = NodeInfo.generateRandom(secureRandom)
     val cm2Address = randomAddress()
     for {
       cm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
@@ -176,9 +174,9 @@ object RemoteConnectionManagerSpec {
         RemoteConnectionManager[Task, Secp256k1Key, TestMessage]
     )
   ] = {
-    val kp1 = NodeInfo.generateRandom
-    val kp2 = NodeInfo.generateRandom
-    val kp3 = NodeInfo.generateRandom
+    val kp1 = NodeInfo.generateRandom(secureRandom)
+    val kp2 = NodeInfo.generateRandom(secureRandom)
+    val kp3 = NodeInfo.generateRandom(secureRandom)
     (for {
       rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
         nodeKeyPair = kp1.keyPair,
@@ -215,46 +213,6 @@ object RemoteConnectionManagerSpec {
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
   val testIncomingQueueSize = 20
 
-  def randomAddress(): InetSocketAddress = {
-    val s = new ServerSocket(0)
-    try {
-      new InetSocketAddress("localhost", s.getLocalPort)
-    } finally {
-      s.close()
-    }
-  }
-
-  import scodec.codecs._
-
-  sealed abstract class TestMessage
-  case class MessageA(i: Int)    extends TestMessage
-  case class MessageB(s: String) extends TestMessage
-
-  object TestMessage {
-    implicit val messageCodec: Codec[TestMessage] = discriminated[TestMessage]
-      .by(uint8)
-      .typecase(1, int32.as[MessageA])
-      .typecase(2, utf8.as[MessageB])
-  }
-
-  case class Secp256k1Key(key: BitVector)
-
-  case class NodeInfo(keyPair: AsymmetricCipherKeyPair, publicKey: Secp256k1Key)
-
-  object NodeInfo {
-    def generateRandom: NodeInfo = {
-      val keyPair = CryptoUtils.generateSecp256k1KeyPair(secureRandom)
-      NodeInfo(
-        keyPair,
-        Secp256k1Key(CryptoUtils.secp256k1KeyPairToNodeId(keyPair))
-      )
-    }
-  }
-
-  object Secp256k1Key {
-    implicit val codec: Codec[Secp256k1Key] = bits.as[Secp256k1Key]
-  }
-
   def buildTestConnectionManager[F[
       _
   ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
@@ -283,18 +241,6 @@ object RemoteConnectionManagerSpec {
       .flatMap(prov =>
         RemoteConnectionManager(prov, clusterConfig, retryConfig)
       )
-  }
-
-  def customTestCaseResourceT[T](
-      fixture: Resource[Task, T]
-  )(theTest: T => Task[Assertion])(implicit s: Scheduler): Future[Assertion] = {
-    fixture.use(fix => theTest(fix)).runToFuture
-  }
-
-  def customTestCaseT[T](
-      test: => Task[Assertion]
-  )(implicit s: Scheduler): Future[Assertion] = {
-    test.runToFuture
   }
 
 }

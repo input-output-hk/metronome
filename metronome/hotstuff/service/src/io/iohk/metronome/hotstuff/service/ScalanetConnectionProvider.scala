@@ -19,7 +19,6 @@ import monix.eval.{Task, TaskLift}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import scodec.Codec
-import scodec.bits.BitVector
 
 import java.net.InetSocketAddress
 import java.security.SecureRandom

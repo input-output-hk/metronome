@@ -1,6 +1,5 @@
 package io.iohk.metronome.hotstuff.service
 
-import cats.Monad
 import cats.effect.concurrent.{Deferred, Ref}
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
@@ -11,7 +10,6 @@ import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
 }
 import monix.catnap.ConcurrentQueue
 import monix.eval.{TaskLift, TaskLike}
-import monix.execution.Scheduler
 import monix.reactive.Observable
 import monix.tail.Iterant
 import scodec.Codec
@@ -28,8 +26,10 @@ class RemoteConnectionManager[F[_]: Sync, K: Codec, M: Codec](
 
   def getLocalInfo: (K, InetSocketAddress) = localInfo
 
-  def getAcquiredConnections: F[Set[EncryptedConnection[F, K, M]]] =
-    acquiredConnections.getAllRegisteredConnections
+  def getAcquiredConnections: F[Set[K]] =
+    acquiredConnections.getAllRegisteredConnections.map(
+      _.map(_.remotePeerInfo._1)
+    )
 
   def incomingMessages: Iterant[F, MessageReceived[K, M]] =
     Iterant.repeatEvalF(concurrentQueue.poll)
@@ -85,19 +85,23 @@ object RemoteConnectionManager {
     }
   }
 
-  def retryConnection[F[_]: Timer: Monad, K](
+  def retryConnection[F[_]: Timer: Concurrent, K](
       config: RetryConfig,
       connectionFailure: ConnectionFailure[K]
   ): F[OutGoingConnectionRequest[K]] = {
-    val previousFailure = connectionFailure.connectionRequest
-    val evolvedDelay =
-      previousFailure.numberOfFailures * config.backOffFactor * config.initialDelay
-    val delay = (config.initialDelay + evolvedDelay).min(config.maxDelay)
+    // TODO add error logging
+    val updatedFailureCount =
+      connectionFailure.connectionRequest.numberOfFailures + 1
+    val exponentialBackoff =
+      math.pow(config.backOffFactor.toDouble, updatedFailureCount).toLong
+    val newDelay =
+      (config.initialDelay * exponentialBackoff).min(config.maxDelay)
+
     Timer[F]
-      .sleep(delay)
+      .sleep(newDelay)
       .map(_ =>
-        previousFailure
-          .copy(numberOfFailures = previousFailure.numberOfFailures + 1)
+        connectionFailure.connectionRequest
+          .copy(numberOfFailures = updatedFailureCount)
       )
   }
 
@@ -295,7 +299,6 @@ object RemoteConnectionManager {
       clusterConfig: ClusterConfig[K],
       retryConfig: RetryConfig
   )(implicit
-      s: Scheduler,
       cs: ContextShift[F]
   ): Resource[F, RemoteConnectionManager[F, K, M]] = {
     for {
