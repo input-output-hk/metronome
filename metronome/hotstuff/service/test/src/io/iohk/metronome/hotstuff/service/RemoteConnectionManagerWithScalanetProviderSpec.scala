@@ -6,7 +6,7 @@ import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   MessageReceived,
   RetryConfig
 }
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerSpec._
+import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerWithScalanetProviderSpec._
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerTestUtils._
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
@@ -20,7 +20,9 @@ import java.net.InetSocketAddress
 import java.security.SecureRandom
 import scala.concurrent.duration._
 
-class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
+class RemoteConnectionManagerWithScalanetProviderSpec
+    extends AsyncFlatSpecLike
+    with Matchers {
   implicit val testScheduler =
     Scheduler.fixedPool("RemoteConnectionManagerSpec", 16)
 
@@ -142,7 +144,7 @@ class RemoteConnectionManagerSpec extends AsyncFlatSpecLike with Matchers {
   }
 
 }
-object RemoteConnectionManagerSpec {
+object RemoteConnectionManagerWithScalanetProviderSpec {
   def waitFor3Managers(
       cm1: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
       cm2: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
