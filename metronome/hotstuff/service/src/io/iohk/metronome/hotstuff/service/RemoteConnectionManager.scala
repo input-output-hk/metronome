@@ -18,8 +18,6 @@ import scodec.Codec
 import java.net.InetSocketAddress
 import scala.concurrent.duration.FiniteDuration
 
-/**
-  */
 class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
     acquiredConnections: ConnectionsRegister[F, K, M],
     localInfo: (K, InetSocketAddress),
@@ -99,7 +97,7 @@ object RemoteConnectionManager {
     }
   }
 
-  def retryConnection[F[_]: Timer: Concurrent, K](
+  private def retryConnection[F[_]: Timer: Concurrent, K](
       config: RetryConfig,
       connectionFailure: ConnectionFailure[K]
   ): F[OutGoingConnectionRequest[K]] = {
@@ -123,7 +121,7 @@ object RemoteConnectionManager {
     * In case of failure each connection will be retried infinite number of times with exponential backoff between
     * each call.
     */
-  def acquireConnections[F[
+  private def acquireConnections[F[
       _
   ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
@@ -157,7 +155,7 @@ object RemoteConnectionManager {
       .completedF
   }
 
-  def handleServerConnections[F[_]: Concurrent: TaskLift, K, M: Codec](
+  private def handleServerConnections[F[_]: Concurrent: TaskLift, K, M: Codec](
       pg: EncryptedConnectionProvider[F, K, M],
       connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
@@ -195,7 +193,7 @@ object RemoteConnectionManager {
       case Right(x) => x
     }
 
-  def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
+  private def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
       q: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
@@ -331,6 +329,20 @@ object RemoteConnectionManager {
     }
   }
 
+  /** Connection manager for static toplogy cluster. It starts 3 concurrent backgrounds processes:
+    * 1. Calling process - tries to connect to remote nodes specified in cluster config. In case of failure, retries with
+    *    exponential backoff.
+    * 2. Server process - reads incoming connections from server socket. Validates that incoming connections is from known
+    *    remote peer specified in cluster config.
+    * 3. Message reading proccess - receives connections from both, Calling and Server processes, and for each connections
+    *    start concurrent process reading messages from those connections. In case of some error on connections, it closes
+    *    connection. In case of discovering that one of outgoing connections failed, it request Calling process to establish
+    *    connection once again.
+    *
+    * @param encryptedConnectionsProvider component which makes it possible to receive and acquire encrypted connections
+    * @param clusterConfig static cluster toplogy configuration
+    * @param retryConfig retry configuration for outgoing connections (incoming connections are not retried)
+    */
   def apply[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
       encryptedConnectionsProvider: EncryptedConnectionProvider[F, K, M],
       clusterConfig: ClusterConfig[K],
