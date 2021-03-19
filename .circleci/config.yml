@@ -1,0 +1,85 @@
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: circleci/openjdk:8-jdk
+
+    working_directory: ~/repo
+
+    environment:
+      JVM_OPTS: -Xmx3200m
+      TERM: dumb
+
+    steps:
+      - checkout
+
+      # Download and cache dependencies
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "build.sc" }}
+            # fallback to using the latest cache if no exact match is found
+            - v1-dependencies-
+
+      # https://circleci.com/docs/2.0/env-vars/#using-bash_env-to-set-environment-variables
+      - run:
+          name: install coursier
+          command: |
+            curl -fLo cs https://git.io/coursier-cli-"$(uname | tr LD ld)"
+            chmod +x cs
+            ./cs install cs
+            rm cs
+            echo "export PATH=$PATH:/home/circleci/.local/share/coursier/bin" >> $BASH_ENV
+
+      - run:
+          name: install scalafmt
+          command: cs install scalafmt
+
+      - run:
+          name: install mill
+          command: |
+            mkdir -p ~/.local/bin
+            (echo "#!/usr/bin/env sh" && curl -L https://github.com/lihaoyi/mill/releases/download/0.8.0/0.8.0) > ~/.local/bin/mill
+            chmod +x ~/.local/bin/mill
+
+      - run:
+          name: check that the code is formatted properly
+          command: scalafmt --test
+
+      # For some reason if I try to separate compile and test, then the subsequent test step does nothing.
+      - run:
+          name: compile and test
+          command: mill __.test
+
+      - save_cache:
+          paths:
+            - ~/.ivy2
+            - ~/.cache
+          key: v1-dependencies--{{ checksum "build.sc" }}
+
+      - when:
+          condition:
+            or:
+              - equal: [ master, << pipeline.git.branch >> ]
+              - equal: [ develop, << pipeline.git.branch >> ]
+          steps:
+            - run:
+                name: install gpg2
+                # GPG in docker needs to be run with some additional flags
+                # and we are not able to change how mill uses it
+                # this is why we're creating wrapper that adds the flags
+                command: sh -c "apt update && apt install -y gnupg2 && mv /usr/bin/gpg /usr/bin/gpg-vanilla && echo '#!/bin/sh\n\n/usr/bin/gpg-vanilla --no-tty --pinentry loopback \$@' > /usr/bin/gpg && chmod 755 /usr/bin/gpg && cat /usr/bin/gpg"
+
+            - run:
+                name: install base64
+                command: apt update && apt install -y cl-base64
+
+            # TODO: Configure Mantis' credentials
+            # - run:
+            #     name: publish
+            #     command: .circleci/publish
+            #     no_output_timeout: 30m
+
+workflows:
+  build_and_publish:
+    jobs:
+      - build

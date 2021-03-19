@@ -54,7 +54,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       // Add yourself if you make a PR!
       developers = Seq(
         Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh"),
-        Developer("lemastero", "Piotr Paradzinski", "https://github.com/lemastero")
+        Developer(
+          "lemastero",
+          "Piotr Paradzinski",
+          "https://github.com/lemastero"
+        )
       )
     )
   }
