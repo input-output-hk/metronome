@@ -37,7 +37,10 @@ jobs:
 
       - run:
           name: install mill
-          command: sh -c '(echo "#!/usr/bin/env sh" && curl -L https://github.com/lihaoyi/mill/releases/download/0.8.0/0.8.0) > mill && chmod +x mill'
+          command: |
+            mkdir -p ~/.local/bin
+            (echo "#!/usr/bin/env sh" && curl -L https://github.com/lihaoyi/mill/releases/download/0.8.0/0.8.0) > ~/.local/bin/mill
+            chmod +x ~/.local/bin/mill
 
       - run:
           name: check that the code is formatted properly
@@ -46,7 +49,7 @@ jobs:
       # For some reason if I try to separate compile and test, then the subsequent test step does nothing.
       - run:
           name: compile and test
-          command: ./mill __.test
+          command: mill __.test
 
       - save_cache:
           paths:
