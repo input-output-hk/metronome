@@ -1,5 +1,7 @@
 package io.iohk.metronome.hotstuff.service
 
+import cats.data.NonEmptyList
+import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   ClusterConfig,
@@ -26,6 +28,8 @@ class RemoteConnectionManagerWithScalanetProviderSpec
   implicit val testScheduler =
     Scheduler.fixedPool("RemoteConnectionManagerSpec", 16)
 
+  implicit val timeOut = 10.seconds
+
   behavior of "RemoteConnectionManagerWithScalanetProvider"
 
   it should "start connectionManager without any connections" in customTestCaseResourceT(
@@ -36,68 +40,50 @@ class RemoteConnectionManagerWithScalanetProviderSpec
     } yield assert(connections.isEmpty)
   }
 
-  it should "build fully connected cluster of 3 nodes" in customTestCaseT {
-    buildFullyConnectedClusterOf3Nodes(10.seconds).use { case (cm1, cm2, cm3) =>
-      for {
-        cm1Peers <- cm1.getAcquiredConnections
-        cm2Peers <- cm2.getAcquiredConnections
-        cm3Peers <- cm3.getAcquiredConnections
-      } yield assert(
-        cm1Peers.size == 2 && cm2Peers.size == 2 && cm3Peers.size == 2
-      )
+  it should "build fully connected cluster of 3 nodes" in customTestCaseResourceT(
+    Cluster.buildCluster(3)
+  ) { cluster =>
+    for {
+      size          <- cluster.clusterSize
+      eachNodeCount <- cluster.getEachNodeConnectionsCount
+    } yield {
+      assert(eachNodeCount.forall(count => count == 2))
+      assert(size == 3)
     }
   }
 
-  it should "send message to other peers in cluster" in customTestCaseT {
-    val testMessage1 = MessageA(1)
-    val testMessage2 = MessageB("hello")
+  it should "build fully connected cluster of 4 nodes" in customTestCaseResourceT(
+    Cluster.buildCluster(4)
+  ) { cluster =>
+    for {
+      size          <- cluster.clusterSize
+      eachNodeCount <- cluster.getEachNodeConnectionsCount
+    } yield {
+      assert(eachNodeCount.forall(count => count == 3))
+      assert(size == 4)
+    }
+  }
 
-    buildFullyConnectedClusterOf3Nodes(10.seconds).use { case (cm1, cm2, cm3) =>
-      for {
-        _ <- Task
-          .parZip2(
-            cm1.sendMessage(cm2.getLocalInfo._1, testMessage1),
-            cm1.sendMessage(cm3.getLocalInfo._1, testMessage2)
-          )
-          .void
-        _ <- Task
-          .parZip2(
-            cm2.sendMessage(cm3.getLocalInfo._1, testMessage1),
-            cm2.sendMessage(cm1.getLocalInfo._1, testMessage2)
-          )
-          .void
-        _ <- Task
-          .parZip2(
-            cm3.sendMessage(cm1.getLocalInfo._1, testMessage1),
-            cm3.sendMessage(cm2.getLocalInfo._1, testMessage2)
-          )
-          .void
-        cm1Received <- cm1.incomingMessages.take(2).toListL
-        cm2Received <- cm2.incomingMessages.take(2).toListL
-        cm3Received <- cm3.incomingMessages.take(2).toListL
-      } yield {
-        assert(
-          cm1Received.contains(
-            MessageReceived(cm2.getLocalInfo._1, testMessage2)
-          ) && cm1Received.contains(
-            MessageReceived(cm3.getLocalInfo._1, testMessage1)
-          )
+  it should "send and receive messages with other nodes in cluster" in customTestCaseResourceT(
+    Cluster.buildCluster(3)
+  ) { cluster =>
+    for {
+      eachNodeCount <- cluster.getEachNodeConnectionsCount
+      sendResult    <- cluster.sendMessageFromRandomNodeToAllOthers(MessageA(1))
+      (sender, receivers) = sendResult
+      received <- Task.traverse(receivers.toList)(receiver =>
+        cluster.getMessageFromNode(receiver)
+      )
+    } yield {
+      assert(eachNodeCount.forall(count => count == 2))
+      assert(receivers.size == 2)
+      assert(received.size == 2)
+      //every node should have received the same message
+      assert(
+        received.forall(receivedMessage =>
+          receivedMessage == MessageReceived(sender, MessageA(1))
         )
-        assert(
-          cm2Received.contains(
-            MessageReceived(cm1.getLocalInfo._1, testMessage1)
-          ) && cm2Received.contains(
-            MessageReceived(cm3.getLocalInfo._1, testMessage2)
-          )
-        )
-        assert(
-          cm3Received.contains(
-            MessageReceived(cm1.getLocalInfo._1, testMessage2)
-          ) && cm3Received.contains(
-            MessageReceived(cm2.getLocalInfo._1, testMessage1)
-          )
-        )
-      }
+      )
     }
   }
 
@@ -145,71 +131,6 @@ class RemoteConnectionManagerWithScalanetProviderSpec
 
 }
 object RemoteConnectionManagerWithScalanetProviderSpec {
-  def waitFor3Managers(
-      cm1: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
-      cm2: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int),
-      cm3: (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Int)
-  )(timeOut: FiniteDuration): Task[Unit] = {
-    (Task
-      .parMap3(
-        cm1._1.getAcquiredConnections,
-        cm2._1.getAcquiredConnections,
-        cm3._1.getAcquiredConnections
-      ) { case (cm1Connections, cm2Connections, cm3Connections) =>
-        (cm1Connections.size, cm2Connections.size, cm3Connections.size)
-      })
-      .restartUntil {
-        case (cm1ConnectionSize, cm2ConnectionSize, cm3ConnectionSize) =>
-          cm1ConnectionSize == cm1._2 && cm2ConnectionSize == cm2._2 && cm3ConnectionSize == cm3._2
-      }
-      .timeout(timeOut)
-      .void
-  }
-
-  def buildFullyConnectedClusterOf3Nodes(
-      timeOut: FiniteDuration
-  )(implicit s: Scheduler): Resource[
-    Task,
-    (
-        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
-        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
-        RemoteConnectionManager[Task, Secp256k1Key, TestMessage]
-    )
-  ] = {
-    val kp1 = NodeInfo.generateRandom(secureRandom)
-    val kp2 = NodeInfo.generateRandom(secureRandom)
-    val kp3 = NodeInfo.generateRandom(secureRandom)
-    (for {
-      rcm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp1.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set.empty[(Secp256k1Key, InetSocketAddress)],
-            Set(kp2.publicKey, kp3.publicKey)
-          )
-          .get
-      )
-      rcm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp2.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set(rcm1.getLocalInfo),
-            Set(kp3.publicKey)
-          )
-          .get
-      )
-      rcm3 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp3.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(Set(rcm1.getLocalInfo, rcm2.getLocalInfo), Set())
-          .get
-      )
-      _ <- Resource.liftF[Task, Unit](
-        waitFor3Managers((rcm1, 2), (rcm2, 2), (rcm3, 2))(timeOut).void
-      )
-    } yield (rcm1, rcm2, rcm3))
-  }
-
   val secureRandom = new SecureRandom()
   val standardFraming =
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
@@ -243,6 +164,119 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       .flatMap(prov =>
         RemoteConnectionManager(prov, clusterConfig, retryConfig)
       )
+  }
+
+  type ClusterNodes = Map[
+    Secp256k1Key,
+    (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Task[Unit])
+  ]
+
+  def buildClusterNodes(
+      keys: NonEmptyList[NodeInfo]
+  )(implicit s: Scheduler, timeOut: FiniteDuration) = {
+
+    def go(
+        keysLeft: List[NodeInfo],
+        managersAlreadyBuild: ClusterNodes
+    ): Task[ClusterNodes] = {
+      Task(keysLeft).flatMap {
+        case Nil => Task.now(managersAlreadyBuild)
+        case ::(head, rest) =>
+          val alreadyBuild =
+            managersAlreadyBuild.values.map(_._1.getLocalInfo).toSet
+          val allowedIncoming = rest.map(_.publicKey).toSet
+          val clusterConfig = ClusterConfig
+            .buildConfig(
+              connectionsToAcquire = alreadyBuild,
+              allowedIncoming = allowedIncoming
+            )
+            .get
+          buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+            nodeKeyPair = head.keyPair,
+            clusterConfig = clusterConfig
+          ).allocated.flatMap { case (manager, release) =>
+            go(
+              rest,
+              managersAlreadyBuild + (manager.getLocalInfo._1 -> (manager, release))
+            )
+          }
+      }
+    }
+
+    go(keys.toList, Map.empty)
+  }
+
+  class Cluster(nodes: Ref[Task, ClusterNodes]) {
+
+    def clusterSize: Task[Int] = nodes.get.map(_.size)
+
+    def getEachNodeConnectionsCount: Task[List[Int]] = {
+      for {
+        runningNodes <- nodes.get.flatMap(nodes =>
+          Task.traverse(nodes.values.map(_._1))(manager =>
+            manager.getAcquiredConnections
+          )
+        )
+
+      } yield runningNodes.map(_.size).toList
+    }
+
+    def closeAllNodes: Task[Unit] = {
+      nodes.get.flatMap { nodes =>
+        Task
+          .traverse(nodes.values) { case (node, release) =>
+            release
+          }
+          .void
+      }
+    }
+
+    def sendMessageFromRandomNodeToAllOthers(
+        message: TestMessage
+    ): Task[(Secp256k1Key, Set[Secp256k1Key])] = {
+      for {
+        runningNodes <- nodes.get
+        (key, (node, _)) = runningNodes.head
+        nodesRececivingMessage <- node.getAcquiredConnections.flatMap {
+          connections =>
+            Task
+              .traverse(connections)(connectionKey =>
+                node.sendMessage(connectionKey, message)
+              )
+              .map(_ => connections)
+        }
+      } yield (key, nodesRececivingMessage)
+    }
+
+    def getMessageFromNode(key: Secp256k1Key) = {
+      nodes.get.flatMap { runningNodes =>
+        runningNodes(key)._1.incomingMessages.take(1).toListL.map(_.head)
+      }
+    }
+
+  }
+
+  object Cluster {
+    def buildCluster(size: Int)(implicit
+        s: Scheduler,
+        timeOut: FiniteDuration
+    ): Resource[Task, Cluster] = {
+      val nodeInfos = NonEmptyList.fromListUnsafe(
+        ((0 until size).map(_ => NodeInfo.generateRandom(secureRandom)).toList)
+      )
+
+      Resource.make {
+        for {
+          nodes <- buildClusterNodes(nodeInfos)
+          ref   <- Ref.of[Task, ClusterNodes](nodes)
+          cluster = new Cluster(ref)
+          _ <- cluster.getEachNodeConnectionsCount
+            .restartUntil(counts => counts.forall(count => count == size - 1))
+            .timeout(timeOut)
+        } yield cluster
+      } { cluster => cluster.closeAllNodes }
+    }
+
   }
 
 }
