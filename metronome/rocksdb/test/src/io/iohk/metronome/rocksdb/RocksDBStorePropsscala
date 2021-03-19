@@ -189,8 +189,12 @@ object RocksDBStoreCommands extends Commands {
   /** Initialise a fresh model state. */
   override def genInitialState: Gen[State] =
     for {
-      n  <- Gen.choose(3, 10)
-      ns <- Gen.listOfN(n, arbitrary[Array[Byte]].suchThat(_.nonEmpty))
+      // Generate at least 3 unique namespaces.
+      n <- Gen.choose(3, 10)
+      ns <- Gen
+        .listOfN(n, arbitrary[ByteVector].suchThat(_.nonEmpty))
+        .map(_.distinct)
+        .suchThat(_.size >= 3)
       namespaces = ns.map(_.toIndexedSeq).toIndexedSeq
     } yield Model(
       isConnected = false,
