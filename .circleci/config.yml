@@ -20,15 +20,20 @@ jobs:
             # fallback to using the latest cache if no exact match is found
             - v1-dependencies-
 
+      # https://circleci.com/docs/2.0/env-vars/#using-bash_env-to-set-environment-variables
       - run:
           name: install coursier
-          command: curl -fLo cs https://git.io/coursier-cli-"$(uname | tr LD ld)" && chmod +x cs && echo 'export PATH="$PATH:/home/circleci/.local/share/coursier/bin"' >> ~/.bashrc
+          command: |
+            curl -fLo cs https://git.io/coursier-cli-"$(uname | tr LD ld)"
+            chmod +x cs
+            ./cs install cs
+            rm cs
+            echo "export PATH=$PATH:/home/circleci/.local/share/coursier/bin" >> $BASH_ENV
 
       # The install started failing on CircleCI, it gets some HTML content instead of the package.
       - run:
           name: install scalafmt
-          #command: test -f scalafmt || ./coursier bootstrap org.scalameta:scalafmt-cli_2.12:2.7.4 -f -r sonatype:snapshots --main org.scalafmt.cli.Cli --standalone -o scalafmt
-          command: ./cs install scalafmt
+          command: cs install scalafmt
 
       - run:
           name: install mill
