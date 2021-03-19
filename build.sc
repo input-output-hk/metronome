@@ -11,24 +11,28 @@ import mill.contrib.versionfile.VersionFileModule
 object versionFile extends VersionFileModule
 
 object VersionOf {
-  val cats         = "2.3.1"
-  val config       = "1.4.1"
-  val logback      = "1.2.3"
-  val monix        = "3.3.0"
-  val prometheus   = "0.10.0"
-  val rocksdb      = "6.15.2"
-  val scalacheck   = "1.15.2"
-  val scalalogging = "3.9.2"
-  val scalatest    = "3.2.5"
-  val scalanet     = "0.7.0"
+  val cats          = "2.3.1"
+  val config        = "1.4.1"
+  val logback       = "1.2.3"
+  val monix         = "3.3.0"
+  val prometheus    = "0.10.0"
+  val rocksdb       = "6.15.2"
+  val scalacheck    = "1.15.2"
+  val scalalogging  = "3.9.2"
+  val scalatest     = "3.2.5"
+  val scalanet      = "0.7.0"
+  val `scodec-core` = "1.11.7"
+  val `scodec-bits` = "1.1.12"
 }
 
-object metronome extends Cross[MetronomeModule]("2.12.10", "2.13.4")
+// Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
+// warnings that come up in 2.13 but are too awkward to work around.
+object metronome extends Cross[MetronomeModule]("2.12.13", "2.13.4")
 
 class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
-  // Get rid of the `metronome-2.12.10-` part from the artifact name. The JAR name suffix will shows the Scala version.
-  // Check with `mill show metronome[2.12.10].__.artifactName` or `mill __.publishLocal`.
+  // Get rid of the `metronome-2.13.4-` part from the artifact name. The JAR name suffix will shows the Scala version.
+  // Check with `mill show metronome[2.13.4].__.artifactName` or `mill __.publishLocal`.
   private def removeCrossVersion(artifactName: String): String =
     "metronome-" + artifactName.split("-").drop(2).mkString("-")
 
@@ -65,13 +69,44 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.typelevel::cats-effect:${VersionOf.cats}"
     )
 
+    override def scalacOptions = Seq(
+      "-unchecked",
+      "-deprecation",
+      "-feature",
+      "-encoding",
+      "utf-8",
+      "-Xfatal-warnings",
+      "-Ywarn-value-discard"
+    ) ++ {
+      crossScalaVersion.take(4) match {
+        case "2.12" =>
+          // These options don't work well with 2.13
+          Seq(
+            "-Xlint:unsound-match",
+            "-Ywarn-inaccessible",
+            "-Ywarn-unused-import",
+            "-Ypartial-unification", // Required for the `>>` syntax.
+            "-language:higherKinds",
+            "-language:postfixOps"
+          )
+        case "2.13" =>
+          Seq()
+      }
+    }
+
     // `extends Tests` uses the context of the module in which it's defined
     trait TestModule extends Tests {
       override def artifactName =
         removeCrossVersion(super.artifactName())
 
+      override def scalacOptions =
+        SubModule.this.scalacOptions
+
       override def testFrameworks =
-        Seq("org.scalatest.tools.Framework")
+        Seq(
+          "org.scalatest.tools.Framework",
+          "org.scalacheck.ScalaCheckFramework"
+        )
 
       // It may be useful to see logs in tests.
       override def moduleDeps: Seq[JavaModule] =
@@ -90,7 +125,15 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   }
 
   /** Storage abstractions, e.g. a generic key-value store. */
-  object storage extends SubModule
+  object storage extends SubModule {
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"org.typelevel::cats-free:${VersionOf.cats}",
+      ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}",
+      ivy"org.scodec::scodec-core:${VersionOf.`scodec-core`}"
+    )
+
+    object test extends TestModule
+  }
 
   /** Emit trace events, abstracting away logs and metrics.
     *
@@ -218,6 +261,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.rocksdb:rocksdbjni:${VersionOf.rocksdb}"
     )
 
-    object test extends TestModule
+    object test extends TestModule {
+      override def ivyDeps = super.ivyDeps() ++ Agg(
+        ivy"io.monix::monix:${VersionOf.monix}"
+      )
+    }
   }
 }
