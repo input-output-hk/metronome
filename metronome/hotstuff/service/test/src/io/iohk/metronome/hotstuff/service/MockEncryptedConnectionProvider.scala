@@ -72,7 +72,7 @@ object MockEncryptedConnectionProvider {
     private def disconnect(
         withFailure: Boolean,
         chosenPeer: Option[Secp256k1Key] = None
-    ): Task[Secp256k1Key] = {
+    ): Task[MockEncryptedConnection] = {
       provider.onlineConnections
         .modify { current =>
           chosenPeer.fold {
@@ -90,18 +90,19 @@ object MockEncryptedConnectionProvider {
             connection.close()
           }
         }
-        .map(connection => connection.remotePeerInfo._1)
     }
 
-    def randomPeerDisconnect(): Task[Secp256k1Key] = {
+    def randomPeerDisconnect(): Task[MockEncryptedConnection] = {
       disconnect(withFailure = false)
     }
 
-    def specificPeerDisconnect(key: Secp256k1Key): Task[Secp256k1Key] = {
+    def specificPeerDisconnect(
+        key: Secp256k1Key
+    ): Task[MockEncryptedConnection] = {
       disconnect(withFailure = false, Some(key))
     }
 
-    def failRandomPeer(): Task[Secp256k1Key] = {
+    def failRandomPeer(): Task[MockEncryptedConnection] = {
       disconnect(withFailure = true)
     }
 
@@ -183,7 +184,7 @@ object MockEncryptedConnectionProvider {
   ]]
 
   type IncomingConnectionEvent =
-    Option[Either[EncryptedConnectionProvider.ChannelError, TestMessage]]
+    Option[Either[EncryptedConnectionProvider.ConnectionError, TestMessage]]
 
   class MockEncryptedConnection(
       private val incomingEvents: ConcurrentQueue[
@@ -196,15 +197,10 @@ object MockEncryptedConnectionProvider {
         (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
   ) extends EncryptedConnection[Task, Secp256k1Key, TestMessage] {
 
-    private def closeIfNotClosed: Task[Unit] = {
-      closeToken.tryGet.flatMap {
-        case Some(_) => Task.now(())
-        case None    => closeToken.complete(())
-      }
-    }
-
     override def close(): Task[Unit] = {
-      Task.parZip2(incomingEvents.offer(None), closeIfNotClosed).void
+      Task
+        .parZip2(incomingEvents.offer(None), closeToken.complete(()).attempt)
+        .void
     }
 
     override def incomingMessage: Task[IncomingConnectionEvent] =
@@ -241,10 +237,11 @@ object MockEncryptedConnectionProvider {
     implicit class MockEncryptedConnectionTestMethodsOps(
         connection: MockEncryptedConnection
     ) {
+      lazy val key = connection.remotePeerInfo._1
 
       def pushRemoteEvent(
           ev: Option[
-            Either[EncryptedConnectionProvider.ChannelError, TestMessage]
+            Either[EncryptedConnectionProvider.ConnectionError, TestMessage]
           ]
       ): Task[Unit] = {
         connection.incomingEvents.offer(ev)

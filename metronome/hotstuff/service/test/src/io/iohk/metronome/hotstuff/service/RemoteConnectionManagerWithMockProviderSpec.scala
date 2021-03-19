@@ -16,6 +16,7 @@ import org.scalatest.matchers.should.Matchers
 import java.net.InetSocketAddress
 import scala.concurrent.duration._
 import MockEncryptedConnectionProvider._
+import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.DecodingError
 
 class RemoteConnectionManagerWithMockProviderSpec
     extends AsyncFlatSpecLike
@@ -106,23 +107,17 @@ class RemoteConnectionManagerWithMockProviderSpec
     buildTestCaseWithNOutgoingPeers(2)
   ) { case (provider, manager) =>
     for {
-      acquiredConnections <- manager.getAcquiredConnections
-      disconnectedPeer    <- provider.randomPeerDisconnect()
-      _                   <- manager.waitForNConnections(1)
-      _ <- manager.getAcquiredConnections.map(keys =>
-        assert(!keys.contains(disconnectedPeer))
+      disconnectedPeer <- provider.randomPeerDisconnect()
+      _                <- manager.waitForNConnections(1)
+      notContainDisconnectedPeer <- manager.notContainsConnection(
+        disconnectedPeer
       )
-      _ <- provider.registerOnlinePeer(disconnectedPeer)
-      _ <- manager.waitForNConnections(2)
-      _ <- manager.getAcquiredConnections.map(keys =>
-        assert(keys.contains(disconnectedPeer))
-      )
-      acquiredConnections1 <- manager.getAcquiredConnections
-      stats                <- provider.getStatistics
+      _                      <- provider.registerOnlinePeer(disconnectedPeer.key)
+      _                      <- manager.waitForNConnections(2)
+      containsAfterReconnect <- manager.containsConnection(disconnectedPeer)
     } yield {
-      assert(stats.maxInFlightConnections == 1)
-      assert(acquiredConnections.size == 2)
-      assert(acquiredConnections1.size == 2)
+      assert(notContainDisconnectedPeer)
+      assert(containsAfterReconnect)
     }
   }
 
@@ -130,32 +125,47 @@ class RemoteConnectionManagerWithMockProviderSpec
     buildTestCaseWithNOutgoingPeers(2)
   ) { case (provider, manager) =>
     for {
-      acquiredConnections <- manager.getAcquiredConnections
-      disconnectedPeer    <- provider.failRandomPeer()
-      _                   <- Task.sleep(100.milliseconds)
+      disconnectedPeer <- provider.failRandomPeer()
+      _                <- Task.sleep(100.milliseconds)
       // remote peer failed without any notice, we still have it in our acquired connections
-      _ <- manager.getAcquiredConnections.map(keys =>
-        assert(keys.contains(disconnectedPeer))
-      )
+      containsFailedPeer <- manager.containsConnection(disconnectedPeer)
       sendResult <- manager
-        .sendMessage(disconnectedPeer, MessageA(1))
+        .sendMessage(disconnectedPeer.key, MessageA(1))
         .attempt
         .map(result => result.left.getOrElse(null))
       _ <- Task(
-        assert(sendResult == ConnectionAlreadyClosedException(disconnectedPeer))
+        assert(
+          sendResult == ConnectionAlreadyClosedException(disconnectedPeer.key)
+        )
       )
-      _ <- manager.getAcquiredConnections.map(keys =>
-        assert(!keys.contains(disconnectedPeer))
+      notContainsFailedPeerAfterSend <- manager.notContainsConnection(
+        disconnectedPeer
       )
-      _ <- provider.registerOnlinePeer(disconnectedPeer)
+      _ <- provider.registerOnlinePeer(disconnectedPeer.key)
       _ <- manager.waitForNConnections(2)
-      _ <- manager.getAcquiredConnections.map(keys =>
-        assert(keys.contains(disconnectedPeer))
+      containsFailedAfterReconnect <- manager.containsConnection(
+        disconnectedPeer
       )
-      stats <- provider.getStatistics
     } yield {
-      assert(stats.maxInFlightConnections == 1)
-      assert(acquiredConnections.size == 2)
+      assert(containsFailedPeer)
+      assert(notContainsFailedPeerAfterSend)
+      assert(containsFailedAfterReconnect)
+    }
+  }
+
+  it should "fail sending message to unknown peer" in customTestCaseResourceT(
+    buildTestCaseWithNOutgoingPeers(2)
+  ) { case (provider, manager) =>
+    val randomKey = Secp256k1Key.getFakeRandomKey
+    for {
+      sendResult <- manager.sendMessage(randomKey, MessageA(1)).attempt
+    } yield {
+      assert(sendResult.isLeft)
+      assert(
+        sendResult.left.getOrElse(null) == ConnectionAlreadyClosedException(
+          randomKey
+        )
+      )
     }
   }
 
@@ -163,19 +173,16 @@ class RemoteConnectionManagerWithMockProviderSpec
     buildTestCaseWithNOutgoingPeers(2)
   ) { case (provider, manager) =>
     for {
-      acquiredConnections <- manager.getAcquiredConnections
       incomingPeerConnection <- provider.newIncomingPeer(
         Secp256k1Key.getFakeRandomKey
       )
       _ <- Task.sleep(100.milliseconds)
-      _ <- manager.getAcquiredConnections.map(connections =>
-        assert(!connections.contains(incomingPeerConnection.remotePeerInfo._1))
+      notContainsNotAllowedIncoming <- manager.notContainsConnection(
+        incomingPeerConnection
       )
       closedIncoming <- incomingPeerConnection.isClosed
-      stats          <- provider.getStatistics
     } yield {
-      assert(stats.maxInFlightConnections == 1)
-      assert(acquiredConnections.size == 2)
+      assert(notContainsNotAllowedIncoming)
       assert(closedIncoming)
     }
   }
@@ -186,16 +193,34 @@ class RemoteConnectionManagerWithMockProviderSpec
     for {
       incomingPeerConnection <- provider.newIncomingPeer(defalutAllowed)
       _                      <- Task.sleep(100.milliseconds)
-      _ <- manager.getAcquiredConnections.map(connections =>
-        assert(connections.contains(incomingPeerConnection.remotePeerInfo._1))
+      containsAllowedIncoming <- manager.containsConnection(
+        incomingPeerConnection
       )
       closedIncoming      <- incomingPeerConnection.isClosed
       acquiredConnections <- manager.getAcquiredConnections
-      stats               <- provider.getStatistics
     } yield {
-      assert(stats.maxInFlightConnections == 1)
+      assert(containsAllowedIncoming)
       assert(acquiredConnections.size == 3)
       assert(!closedIncoming)
+    }
+  }
+
+  it should "disconnect from peer on which connection error happened" in customTestCaseResourceT(
+    buildTestCaseWithNOutgoingPeers(2)
+  ) { case (provider, manager) =>
+    for {
+      incomingPeerConnection <- provider.newIncomingPeer(defalutAllowed)
+      _                      <- Task.sleep(100.milliseconds)
+      containsIncoming       <- manager.containsConnection(incomingPeerConnection)
+      _                      <- incomingPeerConnection.pushRemoteEvent(Some(Left(DecodingError)))
+      _                      <- manager.waitForNConnections(2)
+      notContainsErrorIncoming <- manager.notContainsConnection(
+        incomingPeerConnection
+      )
+      _ <- incomingPeerConnection.isClosed.map(isClosed => assert(isClosed))
+    } yield {
+      assert(containsIncoming)
+      assert(notContainsErrorIncoming)
     }
   }
 
@@ -203,20 +228,18 @@ class RemoteConnectionManagerWithMockProviderSpec
     buildTestCaseWithNOutgoingPeers(2)
   ) { case (provider, manager) =>
     for {
-      incomingPeerConnection <- provider.newIncomingPeer(defalutAllowed)
-      _                      <- Task.sleep(100.milliseconds)
-      _ <- manager.getAcquiredConnections.map(connections =>
-        assert(connections.contains(incomingPeerConnection.remotePeerInfo._1))
-      )
-      acquiredConnections                <- manager.getAcquiredConnections
+      incomingPeerConnection             <- provider.newIncomingPeer(defalutAllowed)
+      _                                  <- Task.sleep(100.milliseconds)
+      containsIncoming                   <- manager.containsConnection(incomingPeerConnection)
+      acquiredConnectionsAfterIncoming   <- manager.getAcquiredConnections
       _                                  <- provider.specificPeerDisconnect(defalutAllowed)
       _                                  <- manager.waitForNConnections(2)
       _                                  <- provider.registerOnlinePeer(defalutAllowed)
       _                                  <- Task.sleep(1.second)
       acquiredConnectionsAfterDisconnect <- manager.getAcquiredConnections
-
     } yield {
-      assert(acquiredConnections.size == 3)
+      assert(containsIncoming)
+      assert(acquiredConnectionsAfterIncoming.size == 3)
       assert(acquiredConnectionsAfterDisconnect.size == 2)
     }
   }
@@ -227,16 +250,15 @@ class RemoteConnectionManagerWithMockProviderSpec
     for {
       incomingPeerConnection <- provider.newIncomingPeer(defalutAllowed)
       _                      <- Task.sleep(100.milliseconds)
-      _ <- manager.getAcquiredConnections.map(connections =>
-        assert(connections.contains(incomingPeerConnection.remotePeerInfo._1))
-      )
-      acquiredConnections <- manager.getAcquiredConnections
-      connections         <- provider.getAllRegisteredPeers
+      containsIncoming       <- manager.containsConnection(incomingPeerConnection)
+      acquiredConnections    <- manager.getAcquiredConnections
+      connections            <- provider.getAllRegisteredPeers
       _ <- Task.traverse(connections)(conn =>
         conn.pushRemoteEvent(Some(Right(MessageA(1))))
       )
       received <- manager.incomingMessages.take(3).toListL
     } yield {
+      assert(containsIncoming)
       assert(acquiredConnections.size == 3)
       assert(received.size == 3)
     }
@@ -256,6 +278,21 @@ object RemoteConnectionManagerWithMockProviderSpec {
         .timeout(timeOut)
         .void
     }
+
+    def containsConnection(
+        connection: MockEncryptedConnection
+    ): Task[Boolean] = {
+      manager.getAcquiredConnections.map(connections =>
+        connections.contains(connection.remotePeerInfo._1)
+      )
+    }
+
+    def notContainsConnection(
+        connection: MockEncryptedConnection
+    ): Task[Boolean] = {
+      containsConnection(connection).map(contains => !contains)
+    }
+
   }
 
   def buildTestCaseWithNOutgoingPeers(

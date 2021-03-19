@@ -2,7 +2,7 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.effect.{Resource, Sync}
 import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.{
-  ChannelError,
+  ConnectionError,
   DecodingError,
   HandshakeFailed,
   UnexpectedError
@@ -31,7 +31,7 @@ object ScalanetConnectionProvider {
 
     override def close(): F[Unit] = underlyingChannelRelease
 
-    override def remotePeerInfo: (K, InetSocketAddress) = (
+    override lazy val remotePeerInfo: (K, InetSocketAddress) = (
       Codec[K].decodeValue(underlyingChannel.to.id).require,
       underlyingChannel.to.address.inetSocketAddress
     )
@@ -39,7 +39,7 @@ object ScalanetConnectionProvider {
     override def sendMessage(m: M): F[Unit] =
       TaskLift[F].apply(underlyingChannel.sendMessage(m))
 
-    override def incomingMessage: F[Option[Either[ChannelError, M]]] = {
+    override def incomingMessage: F[Option[Either[ConnectionError, M]]] = {
       TaskLift[F].apply(underlyingChannel.nextChannelEvent.map {
         case Some(event) =>
           event match {

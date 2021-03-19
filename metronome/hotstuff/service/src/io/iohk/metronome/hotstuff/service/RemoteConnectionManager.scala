@@ -4,6 +4,7 @@ import cats.effect.concurrent.{Deferred, Ref}
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
+import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.ConnectionError
 import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
   ConnectionAlreadyClosedException,
   ConnectionsRegister,
@@ -59,6 +60,21 @@ object RemoteConnectionManager {
       extends RuntimeException(
         s"Connection with node ${key}, has already closed"
       )
+
+  private def getConnectionErrorMessage[K](
+      e: ConnectionError,
+      connectionKey: K
+  ): String = {
+    e match {
+      case EncryptedConnectionProvider.DecodingError =>
+        s"Unexpected decoding error on connection with ${connectionKey}"
+      case EncryptedConnectionProvider.UnexpectedError(ex) =>
+        s"Unexpected error ${ex.getMessage} on connection with ${connectionKey}"
+    }
+  }
+
+  case class UnexpectedConnectionError[K](e: ConnectionError, connectionKey: K)
+      extends RuntimeException(getConnectionErrorMessage(e, connectionKey))
 
   case class MessageReceived[K, M](from: K, message: M)
 
@@ -155,6 +171,8 @@ object RemoteConnectionManager {
       .completedF
   }
 
+  /** Reads incoming connections in linear fashion and check if they are on cluster allowed list.
+    */
   private def handleServerConnections[F[_]: Concurrent: TaskLift, K, M: Codec](
       pg: EncryptedConnectionProvider[F, K, M],
       connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
@@ -193,6 +211,36 @@ object RemoteConnectionManager {
       case Right(x) => x
     }
 
+  private def connectionFinishHandler[F[_]: Concurrent, K, M](
+      connection: EncryptedConnection[F, K, M],
+      connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
+      connectionsRegister: ConnectionsRegister[F, K, M],
+      clusterConfig: ClusterConfig[K]
+  ): F[Unit] = {
+
+    for {
+      _ <- connection.close()
+      _ <- connectionsRegister.deregisterConnection(connection)
+      _ <-
+        if (clusterConfig.isOutGoingConnection(connection.remotePeerInfo._1)) {
+          // We have lost one of our outgoing connections, try to re-establish it by pushing it to connection to acquire queue
+          connectionsToAcquire.offer(
+            OutGoingConnectionRequest.initial(
+              connection.remotePeerInfo._1,
+              connection.remotePeerInfo._2
+            )
+          )
+        } else {
+          Concurrent[F].unit
+
+        }
+    } yield ()
+  }
+
+  /** Connections multiplexer, it receives both incoming and outgoing connections and start reading incoming messages from
+    * them concurrently, putting them on received messages queue.
+    * In case of error or stream finish it cleans up all resources.
+    */
   private def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
       q: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
@@ -217,28 +265,16 @@ object RemoteConnectionManager {
                 )
               case Left(e) =>
                 Concurrent[F].raiseError[Unit](
-                  new RuntimeException(s"Unexpected Error ${e}")
+                  UnexpectedConnectionError(e, connection.remotePeerInfo._1)
                 )
             }
             .guarantee(
-              connectionsRegister
-                .deregisterConnection(connection)
-                .flatMap(_ =>
-                  if (
-                    clusterConfig
-                      .isOutGoingConnection(connection.remotePeerInfo._1)
-                  ) {
-                    // We have lost one of our outgoing connections, try to re-establish it by pushing it to connection to acquire queue
-                    connectionsToAcquire.offer(
-                      OutGoingConnectionRequest.initial(
-                        connection.remotePeerInfo._1,
-                        connection.remotePeerInfo._2
-                      )
-                    )
-                  } else {
-                    Concurrent[F].unit
-                  }
-                )
+              connectionFinishHandler(
+                connection,
+                connectionsToAcquire,
+                connectionsRegister,
+                clusterConfig
+              )
             )
             .completedL
             .start
@@ -329,18 +365,18 @@ object RemoteConnectionManager {
     }
   }
 
-  /** Connection manager for static toplogy cluster. It starts 3 concurrent backgrounds processes:
+  /** Connection manager for static topology cluster. It starts 3 concurrent backgrounds processes:
     * 1. Calling process - tries to connect to remote nodes specified in cluster config. In case of failure, retries with
     *    exponential backoff.
     * 2. Server process - reads incoming connections from server socket. Validates that incoming connections is from known
     *    remote peer specified in cluster config.
-    * 3. Message reading proccess - receives connections from both, Calling and Server processes, and for each connections
+    * 3. Message reading process - receives connections from both, Calling and Server processes, and for each connections
     *    start concurrent process reading messages from those connections. In case of some error on connections, it closes
     *    connection. In case of discovering that one of outgoing connections failed, it request Calling process to establish
     *    connection once again.
     *
     * @param encryptedConnectionsProvider component which makes it possible to receive and acquire encrypted connections
-    * @param clusterConfig static cluster toplogy configuration
+    * @param clusterConfig static cluster topology configuration
     * @param retryConfig retry configuration for outgoing connections (incoming connections are not retried)
     */
   def apply[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](

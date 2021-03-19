@@ -1,7 +1,7 @@
 package io.iohk.metronome.hotstuff.service
 
 import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.{
-  ChannelError,
+  ConnectionError,
   HandshakeFailed
 }
 
@@ -10,7 +10,7 @@ import java.net.InetSocketAddress
 trait EncryptedConnection[F[_], K, M] {
   def remotePeerInfo: (K, InetSocketAddress)
   def sendMessage(m: M): F[Unit]
-  def incomingMessage: F[Option[Either[ChannelError, M]]]
+  def incomingMessage: F[Option[Either[ConnectionError, M]]]
   def close(): F[Unit]
 }
 
@@ -27,8 +27,8 @@ trait EncryptedConnectionProvider[F[_], K, M] {
 object EncryptedConnectionProvider {
   case class HandshakeFailed(ex: Throwable)
 
-  sealed trait ChannelError
-  case object DecodingError                 extends ChannelError
-  case class UnexpectedError(ex: Throwable) extends ChannelError
+  sealed trait ConnectionError
+  case object DecodingError                 extends ConnectionError
+  case class UnexpectedError(ex: Throwable) extends ConnectionError
 
 }
