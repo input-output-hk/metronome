@@ -41,7 +41,7 @@ jobs:
 
       - run:
           name: check that the code is formatted properly
-          command: scalafmt --test || echo "scalafmt not installed"
+          command: scalafmt --test
 
       # For some reason if I try to separate compile and test, then the subsequent test step does nothing.
       - run:
