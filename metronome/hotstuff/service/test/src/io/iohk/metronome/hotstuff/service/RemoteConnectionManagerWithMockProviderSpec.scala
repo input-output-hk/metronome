@@ -205,6 +205,28 @@ class RemoteConnectionManagerWithMockProviderSpec
     }
   }
 
+  it should "not allow duplicated incoming peer" in customTestCaseResourceT(
+    buildTestCaseWithNOutgoingPeers(2)
+  ) { case (provider, manager) =>
+    for {
+      incomingPeerConnection <- provider.newIncomingPeer(defalutAllowed)
+      _                      <- Task.sleep(100.milliseconds)
+      duplicatedIncomingPeerConnection <- provider.newIncomingPeer(
+        defalutAllowed
+      )
+      _ <- Task.sleep(100.milliseconds)
+      containsAllowedIncoming <- manager.containsConnection(
+        incomingPeerConnection
+      )
+      duplicatedIncomingClosed <- duplicatedIncomingPeerConnection.isClosed
+      firstIncomingClosed      <- incomingPeerConnection.isClosed
+    } yield {
+      assert(containsAllowedIncoming)
+      assert(duplicatedIncomingClosed)
+      assert(!firstIncomingClosed)
+    }
+  }
+
   it should "disconnect from peer on which connection error happened" in customTestCaseResourceT(
     buildTestCaseWithNOutgoingPeers(2)
   ) { case (provider, manager) =>

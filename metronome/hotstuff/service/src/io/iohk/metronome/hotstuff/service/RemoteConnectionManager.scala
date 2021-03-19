@@ -193,8 +193,22 @@ object RemoteConnectionManager {
           )
         ) {
           connectionsRegister
-            .registerConnection(encryptedConnection)
-            .flatMap(_ => connectionsQueue.offer(encryptedConnection))
+            .isConnectionAlreadyRegistered(encryptedConnection)
+            .flatMap { alreadyRegistered =>
+              // this case can arise when incoming remote peer fails without giving any notice
+              // after restart such peer will try to connect to our local node, even though local node still regards it as
+              // connected.
+              // this not atomic check is safe as long as incoming connections are processed one by one, and outgoing and
+              // incoming connections are disjoint.
+              // another option of dealing with this case would be to try to replace old faulty connection with new one.
+              if (alreadyRegistered) {
+                encryptedConnection.close()
+              } else {
+                connectionsRegister
+                  .registerConnection(encryptedConnection)
+                  .flatMap(_ => connectionsQueue.offer(encryptedConnection))
+              }
+            }
         } else {
           encryptedConnection.close()
         }
@@ -293,6 +307,14 @@ object RemoteConnectionManager {
     ): F[Unit] = {
       register.update(current =>
         current + (connection.remotePeerInfo._1 -> connection)
+      )
+    }
+
+    def isConnectionAlreadyRegistered(
+        connection: EncryptedConnection[F, K, M]
+    ): F[Boolean] = {
+      register.get.map(connections =>
+        connections.contains(connection.remotePeerInfo._1)
       )
     }
 
