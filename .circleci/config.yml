@@ -30,7 +30,6 @@ jobs:
             rm cs
             echo "export PATH=$PATH:/home/circleci/.local/share/coursier/bin" >> $BASH_ENV
 
-      # The install started failing on CircleCI, it gets some HTML content instead of the package.
       - run:
           name: install scalafmt
           command: cs install scalafmt
