@@ -22,7 +22,7 @@ jobs:
 
       - run:
           name: install coursier
-          command: curl -fLo cs https://git.io/coursier-cli-"$(uname | tr LD ld)" && chmod +x cs
+          command: curl -fLo cs https://git.io/coursier-cli-"$(uname | tr LD ld)" && chmod +x cs && echo 'export PATH="$PATH:/home/circleci/.local/share/coursier/bin"' >> ~/.bashrc
 
       # The install started failing on CircleCI, it gets some HTML content instead of the package.
       - run:
@@ -36,21 +36,18 @@ jobs:
 
       - run:
           name: check that the code is formatted properly
-          command: test -f scalafmt && ./scalafmt --test || echo "scalafmt not installed"
+          command: scalafmt --test || echo "scalafmt not installed"
 
+      # For some reason if I try to separate compile and test, then the subsequent test step does nothing.
       - run:
-          name: compile
-          command: ./mill __.compile
+          name: compile and test
+          command: ./mill __.test
 
       - save_cache:
           paths:
             - ~/.ivy2
             - ~/.cache
           key: v1-dependencies--{{ checksum "build.sc" }}
-
-      - run:
-          name: test
-          command: ./mill __.test
 
       - when:
           condition:
