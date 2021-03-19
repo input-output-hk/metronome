@@ -1,0 +1,79 @@
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: circleci/openjdk:8-jdk
+
+    working_directory: ~/repo
+
+    environment:
+      JVM_OPTS: -Xmx3200m
+      TERM: dumb
+
+    steps:
+      - checkout
+
+      # Download and cache dependencies
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "build.sc" }}
+            # fallback to using the latest cache if no exact match is found
+            - v1-dependencies-
+
+      - run:
+          name: install coursier
+          command: curl -L -o coursier https://git.io/vgvpD && chmod +x coursier
+
+      # The install started failing on CircleCI, it gets some HTML content instead of the package.
+      - run:
+          name: install scalafmt
+          command: test -f scalafmt || ./coursier bootstrap org.scalameta:scalafmt-cli_2.12:2.7.4 -f -r sonatype:snapshots --main org.scalafmt.cli.Cli --standalone -o scalafmt
+
+      - run:
+          name: install mill
+          command: sh -c '(echo "#!/usr/bin/env sh" && curl -L https://github.com/lihaoyi/mill/releases/download/0.8.0/0.8.0) > /usr/local/bin/mill && chmod +x /usr/local/bin/mill'
+
+      - run:
+          name: check that the code is formatted properly
+          command: test -f scalafmt && ./scalafmt --test || echo "scalafmt not installed"
+
+      - run:
+          name: compile
+          command: mill __.compile
+
+      - save_cache:
+          paths:
+            - ~/.m2
+          key: v1-dependencies--{{ checksum "build.sc" }}
+
+      - run:
+          name: test
+          command: mill __.test
+
+      - when:
+          condition:
+            or:
+              - equal: [ master, << pipeline.git.branch >> ]
+              - equal: [ develop, << pipeline.git.branch >> ]
+          steps:
+            - run:
+                name: install gpg2
+                # GPG in docker needs to be run with some additional flags
+                # and we are not able to change how mill uses it
+                # this is why we're creating wrapper that adds the flags
+                command: sh -c "apt update && apt install -y gnupg2 && mv /usr/bin/gpg /usr/bin/gpg-vanilla && echo '#!/bin/sh\n\n/usr/bin/gpg-vanilla --no-tty --pinentry loopback \$@' > /usr/bin/gpg && chmod 755 /usr/bin/gpg && cat /usr/bin/gpg"
+
+            - run:
+                name: install base64
+                command: apt update && apt install -y cl-base64
+
+            # TODO: Configure Mantis' credentials
+            # - run:
+            #     name: publish
+            #     command: .circleci/publish
+            #     no_output_timeout: 30m
+
+workflows:
+  build_and_publish:
+    jobs:
+      - build
