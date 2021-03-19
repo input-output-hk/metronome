@@ -32,7 +32,7 @@ jobs:
 
       - run:
           name: install mill
-          command: sh -c '(echo "#!/usr/bin/env sh" && curl -L https://github.com/lihaoyi/mill/releases/download/0.8.0/0.8.0) > /usr/local/bin/mill && chmod +x /usr/local/bin/mill'
+          command: sh -c '(echo "#!/usr/bin/env sh" && curl -L https://github.com/lihaoyi/mill/releases/download/0.8.0/0.8.0) > mill && chmod +x mill'
 
       - run:
           name: check that the code is formatted properly
@@ -40,16 +40,16 @@ jobs:
 
       - run:
           name: compile
-          command: mill __.compile
+          command: ./mill __.compile
 
       - save_cache:
           paths:
-            - ~/.m2
+            - ~/.ivy2
           key: v1-dependencies--{{ checksum "build.sc" }}
 
       - run:
           name: test
-          command: mill __.test
+          command: ./mill __.test
 
       - when:
           condition:
