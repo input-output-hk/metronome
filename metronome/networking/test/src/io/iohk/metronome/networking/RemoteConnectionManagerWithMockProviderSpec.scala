@@ -1,13 +1,22 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.Resource
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
+import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
+import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
+import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
   ConnectionAlreadyClosedException,
   RetryConfig
 }
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerTestUtils._
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerWithMockProviderSpec._
+import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils._
+import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.{
+  RemoteConnectionManagerOps,
+  buildConnectionsManagerWithMockProvider,
+  buildTestCaseWithNOutgoingPeers,
+  defalutAllowed,
+  defaultToMake,
+  fakeLocalAddress
+}
 import monix.eval.Task
 import monix.execution.Scheduler
 import org.scalatest.flatspec.AsyncFlatSpecLike
@@ -15,8 +24,6 @@ import org.scalatest.matchers.should.Matchers
 
 import java.net.InetSocketAddress
 import scala.concurrent.duration._
-import MockEncryptedConnectionProvider._
-import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.DecodingError
 
 class RemoteConnectionManagerWithMockProviderSpec
     extends AsyncFlatSpecLike

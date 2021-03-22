@@ -1,4 +1,4 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import org.bouncycastle.asn1.sec.SECNamedCurves
 import org.bouncycastle.asn1.x9.X9ECParameters

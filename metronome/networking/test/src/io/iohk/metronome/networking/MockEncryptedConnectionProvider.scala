@@ -1,15 +1,12 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.concurrent.{Deferred, Ref, TryableDeferred}
+import cats.implicits.toFlatMapOps
+import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
+import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils.{Secp256k1Key, TestMessage}
+import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
 import monix.catnap.ConcurrentQueue
 import monix.eval.Task
-import MockEncryptedConnectionProvider._
-import cats.implicits.toFlatMapOps
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerTestUtils.{
-  Secp256k1Key,
-  TestMessage
-}
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
 
 import java.net.InetSocketAddress
 

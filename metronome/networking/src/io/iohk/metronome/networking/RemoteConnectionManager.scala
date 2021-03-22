@@ -1,11 +1,11 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.concurrent.{Deferred, Ref}
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
-import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.ConnectionError
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
+import io.iohk.metronome.networking.EncryptedConnectionProvider.ConnectionError
+import io.iohk.metronome.networking.RemoteConnectionManager.{
   ConnectionAlreadyClosedException,
   ConnectionsRegister,
   MessageReceived

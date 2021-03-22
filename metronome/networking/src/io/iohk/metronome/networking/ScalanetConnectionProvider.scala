@@ -1,13 +1,12 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.{Resource, Sync}
-import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.{
+import io.iohk.metronome.networking.EncryptedConnectionProvider.{
   ConnectionError,
   DecodingError,
   HandshakeFailed,
   UnexpectedError
 }
-import io.iohk.scalanet.peergroup.{Channel, InetMultiAddress}
 import io.iohk.scalanet.peergroup.PeerGroup.ServerEvent
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
   Config,
@@ -15,6 +14,7 @@ import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
   PeerInfo
 }
 import io.iohk.scalanet.peergroup.dynamictls.{DynamicTLSPeerGroup, Secp256k1}
+import io.iohk.scalanet.peergroup.{Channel, InetMultiAddress}
 import monix.eval.{Task, TaskLift}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair

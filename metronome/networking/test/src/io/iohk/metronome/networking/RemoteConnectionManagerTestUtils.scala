@@ -1,4 +1,4 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.Resource
 import monix.eval.Task

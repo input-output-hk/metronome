@@ -1,15 +1,19 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.data.NonEmptyList
 import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManager.{
+import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
   MessageReceived,
   RetryConfig
 }
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerWithScalanetProviderSpec._
-import io.iohk.metronome.hotstuff.service.RemoteConnectionManagerTestUtils._
+import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils._
+import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderSpec.{
+  Cluster,
+  buildTestConnectionManager,
+  secureRandom
+}
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
@@ -136,9 +140,11 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
   val testIncomingQueueSize = 20
 
-  def buildTestConnectionManager[F[
-      _
-  ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
+  def buildTestConnectionManager[
+      F[_]: Concurrent: TaskLift: TaskLike: Timer,
+      K: Codec,
+      M: Codec
+  ](
       bindAddress: InetSocketAddress = randomAddress(),
       nodeKeyPair: AsymmetricCipherKeyPair =
         CryptoUtils.generateSecp256k1KeyPair(secureRandom),

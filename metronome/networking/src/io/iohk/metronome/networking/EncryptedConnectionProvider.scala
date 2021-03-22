@@ -1,9 +1,6 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
-import io.iohk.metronome.hotstuff.service.EncryptedConnectionProvider.{
-  ConnectionError,
-  HandshakeFailed
-}
+import io.iohk.metronome.networking.EncryptedConnectionProvider.{ConnectionError, HandshakeFailed}
 
 import java.net.InetSocketAddress
 

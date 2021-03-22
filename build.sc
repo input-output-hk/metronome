@@ -128,6 +128,21 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
+  /** Generic Peer-to-Peer components that can multiplex protocols
+    * from different modules over a single authenticated TLS connection.
+    */
+  object networking extends SubModule {
+    override def moduleDeps: Seq[JavaModule] =
+      Seq(tracing, crypto)
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.iohk::scalanet:${VersionOf.scalanet}"
+    )
+
+    object test extends TestModule
+  }
+
+
   /** Storage abstractions, e.g. a generic key-value store. */
   object storage extends SubModule {
     override def ivyDeps = super.ivyDeps() ++ Agg(
