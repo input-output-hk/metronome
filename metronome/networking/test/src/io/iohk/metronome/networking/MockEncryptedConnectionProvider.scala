@@ -3,7 +3,10 @@ package io.iohk.metronome.networking
 import cats.effect.concurrent.{Deferred, Ref, TryableDeferred}
 import cats.implicits.toFlatMapOps
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
-import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils.{Secp256k1Key, TestMessage}
+import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils.{
+  Secp256k1Key,
+  TestMessage
+}
 import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
 import monix.catnap.ConcurrentQueue
 import monix.eval.Task

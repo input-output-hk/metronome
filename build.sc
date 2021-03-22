@@ -142,7 +142,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     object test extends TestModule
   }
 
-
   /** Storage abstractions, e.g. a generic key-value store. */
   object storage extends SubModule {
     override def ivyDeps = super.ivyDeps() ++ Agg(
