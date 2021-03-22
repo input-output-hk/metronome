@@ -26,13 +26,14 @@ import java.security.SecureRandom
 object ScalanetConnectionProvider {
   private class ScalanetEncryptedConnection[F[_]: TaskLift, K: Codec, M: Codec](
       underlyingChannel: Channel[PeerInfo, M],
-      underlyingChannelRelease: F[Unit]
+      underlyingChannelRelease: F[Unit],
+      channelKey: K
   ) extends EncryptedConnection[F, K, M] {
 
     override def close(): F[Unit] = underlyingChannelRelease
 
-    override lazy val remotePeerInfo: (K, InetSocketAddress) = (
-      Codec[K].decodeValue(underlyingChannel.to.id).require,
+    override val remotePeerInfo: (K, InetSocketAddress) = (
+      channelKey,
       underlyingChannel.to.address.inetSocketAddress
     )
 
@@ -51,6 +52,30 @@ object ScalanetConnectionProvider {
       })
     }
   }
+
+  private object ScalanetEncryptedConnection {
+    def apply[F[_]: TaskLift, K: Codec, M: Codec](
+        channel: Channel[PeerInfo, M],
+        channelRelease: Task[Unit]
+    ): Task[EncryptedConnection[F, K, M]] = {
+
+      Task
+        .fromTry(Codec[K].decodeValue(channel.to.id).toTry)
+        .map { key =>
+          new ScalanetEncryptedConnection[F, K, M](
+            channel,
+            TaskLift[F].apply(channelRelease),
+            key
+          )
+        }
+        .onErrorHandleWith { e =>
+          channelRelease.flatMap(_ => Task.raiseError(e))
+        }
+
+    }
+
+  }
+
   // Codec constraint for K is necessary as scalanet require peer key to be in BitVector format
   def scalanetProvider[F[_]: Sync: TaskLift, K: Codec, M: Codec](
       bindAddress: InetSocketAddress,
@@ -79,12 +104,21 @@ object ScalanetConnectionProvider {
         )
       )
       pg <- DynamicTLSPeerGroup[M](config).mapK(TaskLift.apply)
-    } yield new EncryptedConnectionProvider[F, K, M] {
-      override def localInfo: (K, InetSocketAddress) = (
-        Codec[K].decodeValue(pg.processAddress.id).require,
-        pg.processAddress.address.inetSocketAddress
+      local <- Resource.pure(
+        (
+          Codec[K].decodeValue(pg.processAddress.id).require,
+          pg.processAddress.address.inetSocketAddress
+        )
       )
 
+    } yield new EncryptedConnectionProvider[F, K, M] {
+      override def localInfo: (K, InetSocketAddress) = local
+
+      /** Connects to remote node, creating new connection with each call
+        *
+        * @param k, key of the remote node
+        * @param address, address of the remote node
+        */
       override def connectTo(
           k: K,
           address: InetSocketAddress
@@ -95,36 +129,30 @@ object ScalanetConnectionProvider {
             .allocated
             .attempt
             .flatMap {
-              case Left(value) => Task.raiseError(value)
+              case Left(value) =>
+                Task.raiseError(value)
               case Right((channel, release)) =>
-                Task.now(
-                  new ScalanetEncryptedConnection(
-                    channel,
-                    TaskLift[F].apply(release)
-                  )
-                )
+                ScalanetEncryptedConnection(channel, release)
             }
         )
       }
 
       override def incomingConnection
           : F[Option[Either[HandshakeFailed, EncryptedConnection[F, K, M]]]] = {
-        TaskLift[F].apply(pg.nextServerEvent.map {
+        TaskLift[F].apply(pg.nextServerEvent.flatMap {
           case Some(ev) =>
             ev match {
               case ServerEvent.ChannelCreated(channel, release) =>
-                Some(
-                  Right(
-                    new ScalanetEncryptedConnection(
-                      channel,
-                      TaskLift[F].apply(release)
-                    )
-                  )
-                )
+                ScalanetEncryptedConnection[F, K, M](channel, release).map {
+                  connection =>
+                    Some(Right(connection))
+                }
+
               case ServerEvent.HandshakeFailed(failure) =>
-                Some(Left(HandshakeFailed(failure)))
+                Task.now(Some(Left(HandshakeFailed(failure))))
+
             }
-          case None => None
+          case None => Task.now(None)
         })
       }
     }

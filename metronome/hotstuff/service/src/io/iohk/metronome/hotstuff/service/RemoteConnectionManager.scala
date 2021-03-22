@@ -86,17 +86,19 @@ object RemoteConnectionManager {
       err: Throwable
   )
 
-  private def connectTo[F[
-      _
-  ]: Concurrent: TaskLift: TaskLike, K: Codec, M: Codec](
+  private def connectTo[
+      F[_]: Sync,
+      K: Codec,
+      M: Codec
+  ](
       encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
       connectionRequest: OutGoingConnectionRequest[K]
   ): F[Either[ConnectionFailure[K], ConnectionSuccess[F, K, M]]] = {
     encryptedConnectionProvider
       .connectTo(connectionRequest.key, connectionRequest.address)
       .redeemWith(
-        e => Concurrent[F].delay(Left(ConnectionFailure(connectionRequest, e))),
-        connection => Concurrent[F].delay(Right(ConnectionSuccess(connection)))
+        e => Sync[F].pure(Left(ConnectionFailure(connectionRequest, e))),
+        connection => Sync[F].pure(Right(ConnectionSuccess(connection)))
       )
   }
 
@@ -137,9 +139,11 @@ object RemoteConnectionManager {
     * In case of failure each connection will be retried infinite number of times with exponential backoff between
     * each call.
     */
-  private def acquireConnections[F[
-      _
-  ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
+  private def acquireConnections[
+      F[_]: Concurrent: TaskLift: TaskLike: Timer,
+      K: Codec,
+      M: Codec
+  ](
       encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       connectionsRegister: ConnectionsRegister[F, K, M],
@@ -256,7 +260,7 @@ object RemoteConnectionManager {
     * In case of error or stream finish it cleans up all resources.
     */
   private def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
-      q: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
+      connectionQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
@@ -264,7 +268,7 @@ object RemoteConnectionManager {
   ): F[Unit] = {
     Deferred[F, Unit].flatMap { cancelToken =>
       Iterant
-        .repeatEvalF(q.poll)
+        .repeatEvalF(connectionQueue.poll)
         .mapEval { connection =>
           Iterant
             .repeatEvalF(
