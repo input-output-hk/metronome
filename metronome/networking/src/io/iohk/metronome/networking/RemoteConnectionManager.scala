@@ -17,6 +17,7 @@ import monix.tail.Iterant
 import scodec.Codec
 
 import java.net.InetSocketAddress
+import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
 
 class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
@@ -151,33 +152,43 @@ object RemoteConnectionManager {
   case class RetryConfig(
       initialDelay: FiniteDuration,
       backOffFactor: Long,
-      maxDelay: FiniteDuration
+      maxDelay: FiniteDuration,
+      maxRandomJitter: Option[FiniteDuration]
   )
 
   object RetryConfig {
     import scala.concurrent.duration._
     def default: RetryConfig = {
-      RetryConfig(500.milliseconds, 2, 30.seconds)
+      RetryConfig(500.milliseconds, 2, 30.seconds, maxRandomJitter = None)
     }
+
   }
 
   private def retryConnection[F[_]: Timer: Concurrent, K](
       config: RetryConfig,
-      connectionFailure: ConnectionFailure[K]
+      failedConnectionRequest: OutGoingConnectionRequest[K]
   ): F[OutGoingConnectionRequest[K]] = {
-    // TODO add error logging
     val updatedFailureCount =
-      connectionFailure.connectionRequest.numberOfFailures + 1
+      failedConnectionRequest.numberOfFailures + 1
     val exponentialBackoff =
       math.pow(config.backOffFactor.toDouble, updatedFailureCount).toLong
+
+    val randomJitter =
+      config.maxRandomJitter.fold(FiniteDuration(0, TimeUnit.MILLISECONDS)) {
+        maxJitter =>
+          val randomJitterInMillis =
+            ThreadLocalRandom.current().nextLong(maxJitter.toMillis)
+          FiniteDuration(randomJitterInMillis, TimeUnit.MILLISECONDS)
+      }
+
     val newDelay =
-      (config.initialDelay * exponentialBackoff).min(config.maxDelay)
+      ((config.initialDelay * exponentialBackoff)
+        .min(config.maxDelay)) + randomJitter
 
     Timer[F]
       .sleep(newDelay)
       .map(_ =>
-        connectionFailure.connectionRequest
-          .copy(numberOfFailures = updatedFailureCount)
+        failedConnectionRequest.copy(numberOfFailures = updatedFailureCount)
       )
   }
 
@@ -209,8 +220,10 @@ object RemoteConnectionManager {
       }
       .mapParallelUnorderedF(Integer.MAX_VALUE) {
         case Left(failure) =>
-          retryConnection(retryConfig, failure).flatMap(updatedRequest =>
-            connectionsToAcquire.offer(updatedRequest)
+          //TODO add logging of failure
+          val failureToLog = failure.err
+          retryConnection(retryConfig, failure.connectionRequest).flatMap(
+            updatedRequest => connectionsToAcquire.offer(updatedRequest)
           )
         case Right(connection) =>
           val handledConnection =
@@ -262,6 +275,7 @@ object RemoteConnectionManager {
             }
 
           case None =>
+            // unknown connection, just close it
             encryptedConnection.close()
         }
       }
@@ -277,21 +291,23 @@ object RemoteConnectionManager {
       case Right(x) => x
     }
 
-  private def connectionFinishHandler[F[_]: Concurrent, K, M](
+  private def connectionFinishHandler[F[_]: Concurrent: Timer, K, M](
       connection: HandledConnection[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
-      connectionsRegister: ConnectionsRegister[F, K, M]
+      connectionsRegister: ConnectionsRegister[F, K, M],
+      retryConfig: RetryConfig
   ): F[Unit] = {
 
     for {
       _ <- connection.close()
       _ <- connectionsRegister.deregisterConnection(connection)
-      _ <- connectionsToAcquire.offer(
+      _ <- retryConnection(
+        retryConfig,
         OutGoingConnectionRequest.initial(
           connection.key,
           connection.serverAddress
         )
-      )
+      ).flatMap(req => connectionsToAcquire.offer(req))
     } yield ()
   }
 
@@ -299,11 +315,16 @@ object RemoteConnectionManager {
     * them concurrently, putting them on received messages queue.
     * In case of error or stream finish it cleans up all resources.
     */
-  private def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
+  private def handleConnections[
+      F[_]: Concurrent: TaskLift: Timer,
+      K: Codec,
+      M: Codec
+  ](
       connectionQueue: ConcurrentQueue[F, HandledConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
-      messageQueue: ConcurrentQueue[F, MessageReceived[K, M]]
+      messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
+      retryConfig: RetryConfig
   ): F[Unit] = {
     Deferred[F, Unit].flatMap { cancelToken =>
       Iterant
@@ -329,7 +350,8 @@ object RemoteConnectionManager {
               connectionFinishHandler(
                 connection,
                 connectionsToAcquire,
-                connectionsRegister
+                connectionsRegister,
+                retryConfig
               )
             )
             .completedL
@@ -432,7 +454,9 @@ object RemoteConnectionManager {
     * @param clusterConfig static cluster topology configuration
     * @param retryConfig retry configuration for outgoing connections (incoming connections are not retried)
     */
-  def apply[F[_]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec](
+  def apply[F[
+      _
+  ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec, C <: M](
       encryptedConnectionsProvider: EncryptedConnectionProvider[F, K, M],
       clusterConfig: ClusterConfig[K],
       retryConfig: RetryConfig
@@ -478,7 +502,8 @@ object RemoteConnectionManager {
         connectionQueue,
         acquiredConnections,
         connectionsToAcquireQueue,
-        messageQueue
+        messageQueue,
+        retryConfig
       ).background
     } yield new RemoteConnectionManager[F, K, M](
       acquiredConnections,
