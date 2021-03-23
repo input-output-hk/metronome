@@ -226,17 +226,17 @@ object RemoteConnectionManager {
             updatedRequest => connectionsToAcquire.offer(updatedRequest)
           )
         case Right(connection) =>
-          val handledConnection =
+          val newOutgoingConnections =
             HandledConnection.outgoing(connection.encryptedConnection)
           connectionsRegister
-            .registerIfAbsent(handledConnection)
+            .registerIfAbsent(newOutgoingConnections)
             .flatMap {
               case Some(_) =>
                 // we already have connection under this key, most probably we received it while we were calling
                 // close the new one, and keep the old one
-                handledConnection.close()
+                newOutgoingConnections.close()
               case None =>
-                connectionsQueue.offer(handledConnection)
+                connectionsQueue.offer(newOutgoingConnections)
             }
       }
       .completedF
@@ -454,9 +454,11 @@ object RemoteConnectionManager {
     * @param clusterConfig static cluster topology configuration
     * @param retryConfig retry configuration for outgoing connections (incoming connections are not retried)
     */
-  def apply[F[
-      _
-  ]: Concurrent: TaskLift: TaskLike: Timer, K: Codec, M: Codec, C <: M](
+  def apply[
+      F[_]: Concurrent: TaskLift: TaskLike: Timer,
+      K: Codec,
+      M: Codec
+  ](
       encryptedConnectionsProvider: EncryptedConnectionProvider[F, K, M],
       clusterConfig: ClusterConfig[K],
       retryConfig: RetryConfig
