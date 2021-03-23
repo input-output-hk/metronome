@@ -29,7 +29,7 @@ class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
 
   def getAcquiredConnections: F[Set[K]] = {
     acquiredConnections.getAllRegisteredConnections.map(
-      _.map(_.remotePeerInfo._1)
+      _.map(_.key)
     )
   }
 
@@ -55,6 +55,51 @@ class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
 }
 //TODO add logging
 object RemoteConnectionManager {
+  sealed abstract class ConnectionDirection
+  case object OutgoingConnection extends ConnectionDirection
+  case object IncomingConnection extends ConnectionDirection
+
+  case class HandledConnection[F[_], K, M](
+      key: K,
+      serverAddress: InetSocketAddress,
+      underlyingConnection: EncryptedConnection[F, K, M]
+  ) {
+    def sendMessage(m: M): F[Unit] = {
+      underlyingConnection.sendMessage(m)
+    }
+
+    def close(): F[Unit] = {
+      underlyingConnection.close()
+    }
+
+    def incomingMessage: F[Option[Either[ConnectionError, M]]] = {
+      underlyingConnection.incomingMessage
+    }
+  }
+
+  object HandledConnection {
+    def outgoing[F[_], K, M](
+        encryptedConnection: EncryptedConnection[F, K, M]
+    ): HandledConnection[F, K, M] = {
+      HandledConnection(
+        encryptedConnection.remotePeerInfo._1,
+        encryptedConnection.remotePeerInfo._2,
+        encryptedConnection
+      )
+    }
+
+    def incoming[F[_], K, M](
+        serverAddress: InetSocketAddress,
+        encryptedConnection: EncryptedConnection[F, K, M]
+    ): HandledConnection[F, K, M] = {
+      HandledConnection(
+        encryptedConnection.remotePeerInfo._1,
+        serverAddress,
+        encryptedConnection
+      )
+    }
+
+  }
 
   case class ConnectionAlreadyClosedException[K](key: K)
       extends RuntimeException(
@@ -81,6 +126,7 @@ object RemoteConnectionManager {
   case class ConnectionSuccess[F[_], K, M](
       encryptedConnection: EncryptedConnection[F, K, M]
   )
+
   case class ConnectionFailure[K](
       connectionRequest: OutGoingConnectionRequest[K],
       err: Throwable
@@ -147,7 +193,7 @@ object RemoteConnectionManager {
       encryptedConnectionProvider: EncryptedConnectionProvider[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       connectionsRegister: ConnectionsRegister[F, K, M],
-      connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
+      connectionsQueue: ConcurrentQueue[F, HandledConnection[F, K, M]],
       retryConfig: RetryConfig
   ): F[Unit] = {
 
@@ -157,6 +203,7 @@ object RemoteConnectionManager {
       */
     Observable
       .repeatEvalF(connectionsToAcquire.poll)
+      .filterEvalF(connectionsRegister.isNewConnection)
       .mapEvalF { connectionToAcquire =>
         connectTo(encryptedConnectionProvider, connectionToAcquire)
       }
@@ -166,11 +213,18 @@ object RemoteConnectionManager {
             connectionsToAcquire.offer(updatedRequest)
           )
         case Right(connection) =>
+          val handledConnection =
+            HandledConnection.outgoing(connection.encryptedConnection)
           connectionsRegister
-            .registerConnection(connection.encryptedConnection)
-            .flatMap(_ =>
-              connectionsQueue.offer(connection.encryptedConnection)
-            )
+            .registerIfAbsent(handledConnection)
+            .flatMap {
+              case Some(_) =>
+                // we already have connection under this key, most probably we received it while we were calling
+                // close the new one, and keep the old one
+                handledConnection.close()
+              case None =>
+                connectionsQueue.offer(handledConnection)
+            }
       }
       .completedF
   }
@@ -179,7 +233,7 @@ object RemoteConnectionManager {
     */
   private def handleServerConnections[F[_]: Concurrent: TaskLift, K, M: Codec](
       pg: EncryptedConnectionProvider[F, K, M],
-      connectionsQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
+      connectionsQueue: ConcurrentQueue[F, HandledConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
       clusterConfig: ClusterConfig[K]
   ): F[Unit] = {
@@ -191,30 +245,24 @@ object RemoteConnectionManager {
         value
       }
       .mapEval { encryptedConnection =>
-        if (
-          clusterConfig.isAllowedIncomingConnection(
-            encryptedConnection.remotePeerInfo._1
-          )
-        ) {
-          connectionsRegister
-            .isConnectionAlreadyRegistered(encryptedConnection)
-            .flatMap { alreadyRegistered =>
-              // this case can arise when incoming remote peer fails without giving any notice
-              // after restart such peer will try to connect to our local node, even though local node still regards it as
-              // connected.
-              // this not atomic check is safe as long as incoming connections are processed one by one, and outgoing and
-              // incoming connections are disjoint.
-              // another option of dealing with this case would be to try to replace old faulty connection with new one.
-              if (alreadyRegistered) {
-                encryptedConnection.close()
-              } else {
-                connectionsRegister
-                  .registerConnection(encryptedConnection)
-                  .flatMap(_ => connectionsQueue.offer(encryptedConnection))
-              }
+        clusterConfig.getIncomingConnectionServerInfo(
+          encryptedConnection.remotePeerInfo._1
+        ) match {
+          case Some(incomingConnectionServerAddress) =>
+            val handledConnection = HandledConnection.incoming(
+              incomingConnectionServerAddress,
+              encryptedConnection
+            )
+            connectionsRegister.registerIfAbsent(handledConnection).flatMap {
+              case Some(value) =>
+                // TODO consider closing and replacing current connection
+                handledConnection.close()
+              case None =>
+                connectionsQueue.offer(handledConnection)
             }
-        } else {
-          encryptedConnection.close()
+
+          case None =>
+            encryptedConnection.close()
         }
       }
       .completedL
@@ -230,28 +278,20 @@ object RemoteConnectionManager {
     }
 
   private def connectionFinishHandler[F[_]: Concurrent, K, M](
-      connection: EncryptedConnection[F, K, M],
+      connection: HandledConnection[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
-      connectionsRegister: ConnectionsRegister[F, K, M],
-      clusterConfig: ClusterConfig[K]
+      connectionsRegister: ConnectionsRegister[F, K, M]
   ): F[Unit] = {
 
     for {
       _ <- connection.close()
       _ <- connectionsRegister.deregisterConnection(connection)
-      _ <-
-        if (clusterConfig.isOutGoingConnection(connection.remotePeerInfo._1)) {
-          // We have lost one of our outgoing connections, try to re-establish it by pushing it to connection to acquire queue
-          connectionsToAcquire.offer(
-            OutGoingConnectionRequest.initial(
-              connection.remotePeerInfo._1,
-              connection.remotePeerInfo._2
-            )
-          )
-        } else {
-          Concurrent[F].unit
-
-        }
+      _ <- connectionsToAcquire.offer(
+        OutGoingConnectionRequest.initial(
+          connection.key,
+          connection.serverAddress
+        )
+      )
     } yield ()
   }
 
@@ -260,11 +300,10 @@ object RemoteConnectionManager {
     * In case of error or stream finish it cleans up all resources.
     */
   private def handleConnections[F[_]: Concurrent: TaskLift, K: Codec, M: Codec](
-      connectionQueue: ConcurrentQueue[F, EncryptedConnection[F, K, M]],
+      connectionQueue: ConcurrentQueue[F, HandledConnection[F, K, M]],
       connectionsRegister: ConnectionsRegister[F, K, M],
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
-      messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
-      clusterConfig: ClusterConfig[K]
+      messageQueue: ConcurrentQueue[F, MessageReceived[K, M]]
   ): F[Unit] = {
     Deferred[F, Unit].flatMap { cancelToken =>
       Iterant
@@ -279,19 +318,18 @@ object RemoteConnectionManager {
             .mapEval {
               case Right(m) =>
                 messageQueue.offer(
-                  MessageReceived(connection.remotePeerInfo._1, m)
+                  MessageReceived(connection.key, m)
                 )
               case Left(e) =>
                 Concurrent[F].raiseError[Unit](
-                  UnexpectedConnectionError(e, connection.remotePeerInfo._1)
+                  UnexpectedConnectionError(e, connection.key)
                 )
             }
             .guarantee(
               connectionFinishHandler(
                 connection,
                 connectionsToAcquire,
-                connectionsRegister,
-                clusterConfig
+                connectionsRegister
               )
             )
             .completedL
@@ -303,38 +341,40 @@ object RemoteConnectionManager {
   }
 
   class ConnectionsRegister[F[_]: Concurrent, K, M: Codec](
-      register: Ref[F, Map[K, EncryptedConnection[F, K, M]]]
+      register: Ref[F, Map[K, HandledConnection[F, K, M]]]
   ) {
 
-    def registerConnection(
-        connection: EncryptedConnection[F, K, M]
-    ): F[Unit] = {
-      register.update(current =>
-        current + (connection.remotePeerInfo._1 -> connection)
-      )
+    def registerIfAbsent(
+        connection: HandledConnection[F, K, M]
+    ): F[Option[HandledConnection[F, K, M]]] = {
+      register.modify { current =>
+        val connectionKey = connection.key
+
+        if (current.contains(connectionKey)) {
+          (current, current.get(connectionKey))
+        } else {
+          (current.updated(connectionKey, connection), None)
+        }
+      }
     }
 
-    def isConnectionAlreadyRegistered(
-        connection: EncryptedConnection[F, K, M]
-    ): F[Boolean] = {
-      register.get.map(connections =>
-        connections.contains(connection.remotePeerInfo._1)
-      )
+    def isNewConnection(request: OutGoingConnectionRequest[K]): F[Boolean] = {
+      register.get.map(currentState => !currentState.contains(request.key))
     }
 
     def deregisterConnection(
-        connection: EncryptedConnection[F, K, M]
+        connection: HandledConnection[F, K, M]
     ): F[Unit] = {
-      register.update(current => current - (connection.remotePeerInfo._1))
+      register.update(current => current - (connection.key))
     }
 
-    def getAllRegisteredConnections: F[Set[EncryptedConnection[F, K, M]]] = {
+    def getAllRegisteredConnections: F[Set[HandledConnection[F, K, M]]] = {
       register.get.map(m => m.values.toSet)
     }
 
     def getConnection(
         connectionKey: K
-    ): F[Option[EncryptedConnection[F, K, M]]] =
+    ): F[Option[HandledConnection[F, K, M]]] =
       register.get.map(connections => connections.get(connectionKey))
 
   }
@@ -343,7 +383,7 @@ object RemoteConnectionManager {
     def empty[F[_]: Concurrent, K, M: Codec]
         : F[ConnectionsRegister[F, K, M]] = {
       Ref
-        .of(Map.empty[K, EncryptedConnection[F, K, M]])
+        .of(Map.empty[K, HandledConnection[F, K, M]])
         .map(ref => new ConnectionsRegister[F, K, M](ref))
     }
   }
@@ -363,32 +403,19 @@ object RemoteConnectionManager {
     }
   }
 
-  sealed abstract case class ClusterConfig[K] private (
-      connectionsToAcquire: Set[(K, InetSocketAddress)],
-      allowedIncoming: Set[K]
+  case class ClusterConfig[K](
+      clusterNodes: Set[(K, InetSocketAddress)]
   ) {
-    def isAllowedIncomingConnection(k: K): Boolean = allowedIncoming.contains(k)
+    val clusterNodesKeys = clusterNodes.map(_._1)
 
-    def isOutGoingConnection(k: K): Boolean = {
-      connectionsToAcquire.map(_._1).contains(k)
-    }
-  }
-  object ClusterConfig {
-    def empty[K]: ClusterConfig[K] =
-      new ClusterConfig[K](Set.empty, Set.empty) {}
+    val serverAddresses = clusterNodes.toMap
 
-    def buildConfig[K](
-        connectionsToAcquire: Set[(K, InetSocketAddress)],
-        allowedIncoming: Set[K]
-    ): Option[ClusterConfig[K]] = {
-      val outGoingKeys   = connectionsToAcquire.map(_._1)
-      val duplicatedKeys = outGoingKeys.intersect(allowedIncoming).nonEmpty
-      if (duplicatedKeys) {
-        None
-      } else {
-        Some(new ClusterConfig[K](connectionsToAcquire, allowedIncoming) {})
-      }
-    }
+    def isAllowedIncomingConnection(k: K): Boolean =
+      clusterNodesKeys.contains(k)
+
+    def getIncomingConnectionServerInfo(k: K): Option[InetSocketAddress] =
+      serverAddresses.get(k)
+
   }
 
   /** Connection manager for static topology cluster. It starts 3 concurrent backgrounds processes:
@@ -419,13 +446,15 @@ object RemoteConnectionManager {
       )
       _ <- Resource.liftF(
         connectionsToAcquireQueue.offerMany(
-          clusterConfig.connectionsToAcquire.map { case (key, address) =>
-            OutGoingConnectionRequest.initial(key, address)
+          clusterConfig.clusterNodes.collect {
+            case toConnect
+                if toConnect != encryptedConnectionsProvider.localInfo =>
+              OutGoingConnectionRequest.initial(toConnect._1, toConnect._2)
           }
         )
       )
       connectionQueue <- Resource.liftF(
-        ConcurrentQueue.unbounded[F, EncryptedConnection[F, K, M]]()
+        ConcurrentQueue.unbounded[F, HandledConnection[F, K, M]]()
       )
       messageQueue <- Resource.liftF(
         ConcurrentQueue.unbounded[F, MessageReceived[K, M]]()
@@ -449,8 +478,7 @@ object RemoteConnectionManager {
         connectionQueue,
         acquiredConnections,
         connectionsToAcquireQueue,
-        messageQueue,
-        clusterConfig
+        messageQueue
       ).background
     } yield new RemoteConnectionManager[F, K, M](
       acquiredConnections,

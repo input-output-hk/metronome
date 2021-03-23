@@ -57,7 +57,7 @@ class RemoteConnectionManagerWithMockProviderSpec
     MockEncryptedConnectionProvider().flatMap(provider =>
       buildConnectionsManagerWithMockProvider(
         provider,
-        connectionToMake = connectionToMake
+        nodesInCluster = connectionToMake
       )
         .use { connectionManager =>
           for {
@@ -198,8 +198,12 @@ class RemoteConnectionManagerWithMockProviderSpec
     buildTestCaseWithNOutgoingPeers(2)
   ) { case (provider, manager) =>
     for {
-      incomingPeerConnection <- provider.newIncomingPeer(defalutAllowed)
-      _                      <- Task.sleep(100.milliseconds)
+      failedInfo <- provider.randomPeerDisconnect()
+      _          <- manager.waitForNConnections(1)
+      incomingPeerConnection <- provider.newIncomingPeer(
+        failedInfo.remotePeerInfo._1
+      )
+      _ <- manager.waitForNConnections(2)
       containsAllowedIncoming <- manager.containsConnection(
         incomingPeerConnection
       )
@@ -207,7 +211,7 @@ class RemoteConnectionManagerWithMockProviderSpec
       acquiredConnections <- manager.getAcquiredConnections
     } yield {
       assert(containsAllowedIncoming)
-      assert(acquiredConnections.size == 3)
+      assert(acquiredConnections.size == 2)
       assert(!closedIncoming)
     }
   }
@@ -344,7 +348,7 @@ object RemoteConnectionManagerWithMockProviderSpec {
       )
       manager <- buildConnectionsManagerWithMockProvider(
         provider,
-        connectionToMake = onlineConnections.map(conn => conn.remotePeerInfo)
+        nodesInCluster = onlineConnections.map(conn => conn.remotePeerInfo)
       )
       _ <- Resource.liftF(manager.waitForNConnections(n))
     } yield (provider, manager)
@@ -358,20 +362,14 @@ object RemoteConnectionManagerWithMockProviderSpec {
   def buildConnectionsManagerWithMockProvider(
       ec: MockEncryptedConnectionProvider,
       retryConfig: RetryConfig = RetryConfig(50.milliseconds, 2, 2.seconds),
-      connectionToMake: Set[(Secp256k1Key, InetSocketAddress)] = Set(
+      nodesInCluster: Set[(Secp256k1Key, InetSocketAddress)] = Set(
         (defaultToMake, fakeLocalAddress)
-      ),
-      allowedIncoming: Set[Secp256k1Key] = Set(defalutAllowed)
+      )
   ): Resource[
     Task,
     RemoteConnectionManager[Task, Secp256k1Key, TestMessage]
   ] = {
-    val clusterConfig = ClusterConfig
-      .buildConfig(
-        connectionToMake,
-        allowedIncoming
-      )
-      .get
+    val clusterConfig = ClusterConfig(nodesInCluster)
 
     RemoteConnectionManager(ec, clusterConfig, retryConfig)
   }

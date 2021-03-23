@@ -98,24 +98,17 @@ class RemoteConnectionManagerWithScalanetProviderSpec
     for {
       cm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
         nodeKeyPair = kp1.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set((kp2.publicKey, cm2Address)),
-            Set.empty[Secp256k1Key]
-          )
-          .get
+        clusterConfig =
+          ClusterConfig(clusterNodes = Set((kp2.publicKey, cm2Address)))
       ).allocated
       (cm1Manager, cm1Release) = cm1
       _ <- Task.sleep(5.seconds)
       cm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
         bindAddress = cm2Address,
         nodeKeyPair = kp2.keyPair,
-        clusterConfig = ClusterConfig
-          .buildConfig(
-            Set.empty[(Secp256k1Key, InetSocketAddress)],
-            Set(kp1.publicKey)
-          )
-          .get
+        clusterConfig = ClusterConfig(clusterNodes =
+          Set((kp1.publicKey, cm1._1.getLocalInfo._2))
+        )
       ).allocated
       (cm2Manager, cm2Release) = cm2
       m1HasTheSameNumOfPeersAsM2 <- Task
@@ -152,7 +145,9 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
       maxIncomingQueueSizePerPeer: Int = testIncomingQueueSize,
-      clusterConfig: ClusterConfig[K] = ClusterConfig.empty[K],
+      clusterConfig: ClusterConfig[K] = ClusterConfig(
+        Set.empty[(K, InetSocketAddress)]
+      ),
       retryConfig: RetryConfig = RetryConfig.default
   )(implicit
       s: Scheduler,
@@ -179,37 +174,31 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
 
   def buildClusterNodes(
       keys: NonEmptyList[NodeInfo]
-  )(implicit s: Scheduler, timeOut: FiniteDuration) = {
+  )(implicit
+      s: Scheduler,
+      timeOut: FiniteDuration
+  ): Task[Ref[Task, ClusterNodes]] = {
+    val keyWithAddress = keys.toList.map(key => (key, randomAddress())).toSet
 
-    def go(
-        keysLeft: List[NodeInfo],
-        managersAlreadyBuild: ClusterNodes
-    ): Task[ClusterNodes] = {
-      Task(keysLeft).flatMap {
-        case Nil => Task.now(managersAlreadyBuild)
-        case ::(head, rest) =>
-          val alreadyBuild =
-            managersAlreadyBuild.values.map(_._1.getLocalInfo).toSet
-          val allowedIncoming = rest.map(_.publicKey).toSet
-          val clusterConfig = ClusterConfig
-            .buildConfig(
-              connectionsToAcquire = alreadyBuild,
-              allowedIncoming = allowedIncoming
+    for {
+      nodes <- Ref.of[Task, ClusterNodes](Map.empty)
+      _ <- Task.traverse(keyWithAddress) { case (info, address) =>
+        buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+          bindAddress = address,
+          nodeKeyPair = info.keyPair,
+          clusterConfig = ClusterConfig(clusterNodes =
+            keyWithAddress.map(keyWithAddress =>
+              (keyWithAddress._1.publicKey, keyWithAddress._2)
             )
-            .get
-          buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-            nodeKeyPair = head.keyPair,
-            clusterConfig = clusterConfig
-          ).allocated.flatMap { case (manager, release) =>
-            go(
-              rest,
-              managersAlreadyBuild + (manager.getLocalInfo._1 -> (manager, release))
-            )
-          }
+          )
+        ).allocated.flatMap { case (manager, release) =>
+          nodes.update(map =>
+            map + (manager.getLocalInfo._1 -> (manager, release))
+          )
+        }
       }
-    }
 
-    go(keys.toList, Map.empty)
+    } yield nodes
   }
 
   class Cluster(nodes: Ref[Task, ClusterNodes]) {
@@ -230,7 +219,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     def closeAllNodes: Task[Unit] = {
       nodes.get.flatMap { nodes =>
         Task
-          .traverse(nodes.values) { case (node, release) =>
+          .parTraverseUnordered(nodes.values) { case (node, release) =>
             release
           }
           .void
@@ -274,8 +263,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       Resource.make {
         for {
           nodes <- buildClusterNodes(nodeInfos)
-          ref   <- Ref.of[Task, ClusterNodes](nodes)
-          cluster = new Cluster(ref)
+          cluster = new Cluster(nodes)
           _ <- cluster.getEachNodeConnectionsCount
             .restartUntil(counts => counts.forall(count => count == size - 1))
             .timeout(timeOut)
