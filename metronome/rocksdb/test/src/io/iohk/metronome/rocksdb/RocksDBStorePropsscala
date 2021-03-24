@@ -23,7 +23,7 @@ import scodec.codecs.implicits._
 // https://github.com/typelevel/scalacheck/blob/master/doc/UserGuide.md#stateful-testing
 // https://github.com/typelevel/scalacheck/blob/master/examples/commands-redis/src/test/scala/CommandsRedis.scala
 
-object RocksDBStoreSpec extends Properties("RocksDBStoreCommands") {
+object RocksDBStoreProps extends Properties("RocksDBStore") {
 
   override def overrideParameters(p: Test.Parameters): Test.Parameters =
     p.withMinSuccessfulTests(20).withMaxSize(100)
@@ -211,9 +211,9 @@ object RocksDBStoreCommands extends Commands {
     if (!state.isConnected) Gen.const(ToggleConnected)
     else
       Gen.frequency(
-        (10, genReadWriteProg(state)),
-        (3, genReadOnlyProg(state)),
-        (1, Gen.const(ToggleConnected))
+        10 -> genReadWriteProg(state),
+        3  -> genReadOnlyProg(state),
+        1  -> Gen.const(ToggleConnected)
       )
 
   /** Generate a sequence of writes and reads. */
