@@ -21,10 +21,10 @@ import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
   implicit val testScheduler =
-    Scheduler.fixedPool("RemoteConnectionManagerUtSpec", 16)
+    Scheduler.fixedPool("ConnectionHandlerSpec", 16)
   implicit val timeOut = 5.seconds
 
-  behavior of "RemoteConnectionManagerWithMockProvider"
+  behavior of "ConnectionHandler"
 
   it should "register new connections" in customTestCaseResourceT(
     buildHandlerResource()
