@@ -7,6 +7,7 @@ import org.scalatest.matchers.should.Matchers
 import scala.concurrent.duration._
 import RemoteConnectionManagerTestUtils._
 import cats.effect.Resource
+import cats.effect.concurrent.Deferred
 import io.iohk.metronome.networking.ConnectionHandler.HandledConnection
 import io.iohk.metronome.networking.ConnectionHandlerSpec.{
   buildHandlerResource,
@@ -15,6 +16,9 @@ import io.iohk.metronome.networking.ConnectionHandlerSpec.{
 }
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider.MockEncryptedConnection
 import monix.eval.Task
+import ConnectionHandlerSpec._
+import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
+
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
   implicit val testScheduler =
     Scheduler.fixedPool("RemoteConnectionManagerUtSpec", 16)
@@ -22,44 +26,164 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
 
   behavior of "RemoteConnectionManagerWithMockProvider"
 
-  it should "register new connections" in customTestCaseT {
+  it should "register new connections" in customTestCaseResourceT(
+    buildHandlerResource()
+  ) { handler =>
     for {
-      handlerAndRelease <- buildHandlerResource().allocated
-      (handler, release) = handlerAndRelease
       handledConnection1 <- newHandledConnection
-      _                  <- handler.registerIfAbsent(handledConnection1)
+      _                  <- handler.registerIfAbsent(handledConnection1._1)
       connections        <- handler.getAllActiveConnections
     } yield {
-      assert(connections.contains(handledConnection1.key))
+      assert(connections.contains(handledConnection1._1.key))
     }
   }
 
-  it should "clear new connections when released" in customTestCaseT {
+  it should "not register and close duplicated connection" in customTestCaseResourceT(
+    buildHandlerResource()
+  ) { handler =>
+    for {
+      handledConnection <- newHandledConnection
+      (handled, underlyingEncrypted) = handledConnection
+      _                           <- handler.registerIfAbsent(handled)
+      connections                 <- handler.getAllActiveConnections
+      _                           <- handler.registerIfAbsent(handled)
+      connectionsAfterDuplication <- handler.getAllActiveConnections
+      closedAfterDuplication      <- underlyingEncrypted.isClosed
+
+    } yield {
+      assert(connections.contains(handled.key))
+      assert(connectionsAfterDuplication.contains(handled.key))
+      assert(closedAfterDuplication)
+
+    }
+  }
+
+  it should "close all connections in background when released" in customTestCaseT {
     val expectedNumberOfConnections = 4
     for {
       handlerAndRelease <- buildHandlerResource().allocated
       (handler, release) = handlerAndRelease
       connections <- buildNConnections(expectedNumberOfConnections)
       _ <- Task.traverse(connections)(connection =>
-        handler.registerIfAbsent(connection)
+        handler.registerIfAbsent(connection._1)
       )
       maxNumberOfActiveConnections <- handler.numberOfActiveConnections
-        .restartUntil(numberOfConnections =>
-          numberOfConnections == expectedNumberOfConnections
+        .waitFor(numOfConnections =>
+          numOfConnections == expectedNumberOfConnections
         )
-        .timeout(timeOut)
+
       _ <- release
-      connectionsAfterClose <- handler.getAllActiveConnections
-        .restartUntil(con => con.isEmpty)
-        .timeout(timeOut)
+      connectionsAfterClose <- handler.getAllActiveConnections.waitFor(
+        connections => connections.isEmpty
+      )
     } yield {
       assert(maxNumberOfActiveConnections == expectedNumberOfConnections)
       assert(connectionsAfterClose.isEmpty)
     }
   }
+
+  it should "call provided callback when connection is closed" in customTestCaseT {
+    for {
+      cb                <- Deferred.tryable[Task, Unit]
+      handlerAndRelease <- buildHandlerResource(_ => cb.complete(())).allocated
+      (handler, release) = handlerAndRelease
+      connection <- newHandledConnection
+      (handledConnection, underlyingEncrypted) = connection
+      _              <- handler.registerIfAbsent(handledConnection)
+      numberOfActive <- handler.numberOfActiveConnections.waitFor(_ == 1)
+      _              <- underlyingEncrypted.pushRemoteEvent(None)
+      numberOfActiveAfterDisconnect <- handler.numberOfActiveConnections
+        .waitFor(_ == 0)
+      callbackCompleted <- cb.tryGet.waitFor(_.isDefined)
+      _                 <- release
+    } yield {
+      assert(numberOfActive == 1)
+      assert(numberOfActiveAfterDisconnect == 0)
+      assert(callbackCompleted.isDefined)
+    }
+  }
+
+  it should "call provided callback and close connection in case of error" in customTestCaseT {
+    for {
+      cb                <- Deferred.tryable[Task, Unit]
+      handlerAndRelease <- buildHandlerResource(_ => cb.complete(())).allocated
+      (handler, release) = handlerAndRelease
+      connection <- newHandledConnection
+      (handledConnection, underlyingEncrypted) = connection
+      _              <- handler.registerIfAbsent(handledConnection)
+      numberOfActive <- handler.numberOfActiveConnections.waitFor(_ == 1)
+      _              <- underlyingEncrypted.pushRemoteEvent(Some(Left(DecodingError)))
+      numberOfActiveAfterError <- handler.numberOfActiveConnections
+        .waitFor(_ == 0)
+      callbackCompleted <- cb.tryGet.waitFor(_.isDefined)
+      _                 <- release
+    } yield {
+      assert(numberOfActive == 1)
+      assert(numberOfActiveAfterError == 0)
+      assert(callbackCompleted.isDefined)
+    }
+  }
+
+  it should "try not to call callback in case of closing manager" in customTestCaseT {
+    for {
+      cb                <- Deferred.tryable[Task, Unit]
+      handlerAndRelease <- buildHandlerResource(_ => cb.complete(())).allocated
+      (handler, release) = handlerAndRelease
+      connection <- newHandledConnection
+      (handledConnection, underlyingEncrypted) = connection
+      _              <- handler.registerIfAbsent(handledConnection)
+      numberOfActive <- handler.numberOfActiveConnections.waitFor(_ == 1)
+      _              <- release
+      numberOfActiveAfterDisconnect <- handler.numberOfActiveConnections
+        .waitFor(_ == 0)
+      callbackCompleted <- cb.tryGet.waitFor(_.isDefined).attempt
+    } yield {
+      assert(numberOfActive == 1)
+      assert(numberOfActiveAfterDisconnect == 0)
+      assert(callbackCompleted.isLeft)
+    }
+  }
+
+  it should "multiplex messages from all open channels" in customTestCaseResourceT(
+    buildHandlerResource()
+  ) { handler =>
+    val expectedNumberOfConnections = 4
+    for {
+      connections <- buildNConnections(expectedNumberOfConnections)
+      _ <- Task.traverse(connections)(connection =>
+        handler.registerIfAbsent(connection._1)
+      )
+      maxNumberOfActiveConnections <- handler.numberOfActiveConnections
+        .waitFor(numOfConnections =>
+          numOfConnections == expectedNumberOfConnections
+        )
+      _ <- Task.traverse(connections) { case (_, encConnection) =>
+        encConnection.pushRemoteEvent(Some(Right(MessageA(1))))
+      }
+      receivedMessages <- handler.incomingMessages
+        .take(expectedNumberOfConnections)
+        .toListL
+    } yield {
+
+      val senders      = connections.map(_._1.key).toSet
+      val receivedFrom = receivedMessages.map(_.from).toSet
+      assert(receivedMessages.size == expectedNumberOfConnections)
+      assert(maxNumberOfActiveConnections == expectedNumberOfConnections)
+      assert(
+        senders.intersect(receivedFrom).size == expectedNumberOfConnections
+      )
+    }
+  }
+
 }
 
 object ConnectionHandlerSpec {
+  implicit class TaskOps[A](task: Task[A]) {
+    def waitFor(condition: A => Boolean)(implicit timeOut: FiniteDuration) = {
+      task.restartUntil(condition).timeout(timeOut)
+    }
+  }
+
   def buildHandler(): Task[ConnectionHandler[Task, Secp256k1Key, TestMessage]] =
     ConnectionHandler[Task, Secp256k1Key, TestMessage](_ => Task(()))
 
@@ -73,15 +197,25 @@ object ConnectionHandlerSpec {
 
   def newHandledConnection(implicit
       s: Scheduler
-  ): Task[HandledConnection[Task, Secp256k1Key, TestMessage]] = {
+  ): Task[
+    (
+        HandledConnection[Task, Secp256k1Key, TestMessage],
+        MockEncryptedConnection
+    )
+  ] = {
     for {
       enc <- MockEncryptedConnection()
-    } yield HandledConnection.outgoing(enc)
+    } yield (HandledConnection.outgoing(enc), enc)
   }
 
   def buildNConnections(n: Int)(implicit
       s: Scheduler
-  ): Task[List[HandledConnection[Task, Secp256k1Key, TestMessage]]] = {
+  ): Task[List[
+    (
+        HandledConnection[Task, Secp256k1Key, TestMessage],
+        MockEncryptedConnection
+    )
+  ]] = {
     Task.traverse((0 until n).toList)(_ => newHandledConnection)
   }
 
