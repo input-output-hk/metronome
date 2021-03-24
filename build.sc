@@ -11,18 +11,20 @@ import mill.contrib.versionfile.VersionFileModule
 object versionFile extends VersionFileModule
 
 object VersionOf {
-  val cats          = "2.3.1"
-  val config        = "1.4.1"
-  val logback       = "1.2.3"
-  val monix         = "3.3.0"
-  val prometheus    = "0.10.0"
-  val rocksdb       = "6.15.2"
-  val scalacheck    = "1.15.2"
-  val scalalogging  = "3.9.2"
-  val scalatest     = "3.2.5"
-  val scalanet      = "0.7.0"
-  val `scodec-core` = "1.11.7"
-  val `scodec-bits` = "1.1.12"
+  val cats             = "2.3.1"
+  val config           = "1.4.1"
+  val `kind-projector` = "0.11.3"
+  val logback          = "1.2.3"
+  val monix            = "3.3.0"
+  val prometheus       = "0.10.0"
+  val rocksdb          = "6.15.2"
+  val scalacheck       = "1.15.2"
+  val scalalogging     = "3.9.2"
+  val scalatest        = "3.2.5"
+  val scalanet         = "0.7.0"
+  val shapeless        = "2.3.3"
+  val `scodec-core`    = "1.11.7"
+  val `scodec-bits`    = "1.1.12"
 }
 
 // Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
@@ -128,6 +130,16 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
+  /** Data models shared between all modules. */
+  object core extends SubModule with Publishing {
+    override def description: String =
+      "Common data models."
+
+    override def ivyDeps = Agg(
+      ivy"com.chuusai::shapeless:${VersionOf.shapeless}"
+    )
+  }
+
   /** Generic Peer-to-Peer components that can multiplex protocols
     * from different modules over a single authenticated TLS connection.
     */
@@ -161,7 +173,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def description: String =
       "Abstractions for contravariant tracing."
 
-    def scalacPluginIvyDeps = Agg(ivy"org.typelevel:::kind-projector:0.11.3")
+    def scalacPluginIvyDeps = Agg(
+      ivy"org.typelevel:::kind-projector:${VersionOf.`kind-projector`}"
+    )
   }
 
   /** Additional crypto utilities such as threshold signature. */
@@ -178,6 +192,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
     /** Pure consensus models. */
     object consensus extends SubModule {
+      override def moduleDeps: Seq[PublishModule] =
+        Seq(core, crypto)
+
       object test extends TestModule
     }
 
@@ -219,7 +236,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Seq(tracing, crypto)
     }
 
-    /** Implements the checkpointing functionality and the ledger rules.
+    /** Implements the checkpointing functionality, the ledger rules,
+      * and state synchronisation, which is not an inherent part of
+      * HotStuff, but applies to the checkpointing use case.
       *
       * If it was published, it could be directly included in the checkpoint assisted blockchain application,
       * so the service and the interpreter can share data in memory.
