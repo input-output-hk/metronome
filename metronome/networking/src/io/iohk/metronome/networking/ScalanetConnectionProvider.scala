@@ -114,6 +114,8 @@ object ScalanetConnectionProvider {
     } yield new EncryptedConnectionProvider[F, K, M] {
       override def localInfo: (K, InetSocketAddress) = local
 
+      import cats.implicits._
+
       /** Connects to remote node, creating new connection with each call
         *
         * @param k, key of the remote node
@@ -124,17 +126,12 @@ object ScalanetConnectionProvider {
           address: InetSocketAddress
       ): F[EncryptedConnection[F, K, M]] = {
         val encodedKey = Codec[K].encode(k).require
-        TaskLift[F].apply(
-          pg.client(PeerInfo(encodedKey, InetMultiAddress(address)))
-            .allocated
-            .attempt
-            .flatMap {
-              case Left(value) =>
-                Task.raiseError(value)
-              case Right((channel, release)) =>
-                ScalanetEncryptedConnection(channel, release)
-            }
-        )
+        pg.client(PeerInfo(encodedKey, InetMultiAddress(address)))
+          .mapK[Task, F](TaskLift[F])
+          .allocated
+          .map { case (channel, release) =>
+            new ScalanetEncryptedConnection(channel, release, k)
+          }
       }
 
       override def incomingConnection

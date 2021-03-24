@@ -11,8 +11,7 @@ import io.iohk.metronome.networking.RemoteConnectionManager.{
 import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils._
 import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderSpec.{
   Cluster,
-  buildTestConnectionManager,
-  secureRandom
+  buildTestConnectionManager
 }
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
@@ -91,41 +90,25 @@ class RemoteConnectionManagerWithScalanetProviderSpec
     }
   }
 
-  it should "eventually connect to previously offline peer" in customTestCaseT {
-    val kp1        = NodeInfo.generateRandom(secureRandom)
-    val kp2        = NodeInfo.generateRandom(secureRandom)
-    val cm2Address = randomAddress()
+  it should "eventually reconnect to offline node" in customTestCaseResourceT(
+    Cluster.buildCluster(3)
+  ) { cluster =>
     for {
-      cm1 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        nodeKeyPair = kp1.keyPair,
-        clusterConfig =
-          ClusterConfig(clusterNodes = Set((kp2.publicKey, cm2Address)))
-      ).allocated
-      (cm1Manager, cm1Release) = cm1
-      _ <- Task.sleep(5.seconds)
-      cm2 <- buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
-        bindAddress = cm2Address,
-        nodeKeyPair = kp2.keyPair,
-        clusterConfig = ClusterConfig(clusterNodes =
-          Set((kp1.publicKey, cm1._1.getLocalInfo._2))
-        )
-      ).allocated
-      (cm2Manager, cm2Release) = cm2
-      m1HasTheSameNumOfPeersAsM2 <- Task
-        .parMap2(
-          cm1Manager.getAcquiredConnections,
-          cm2Manager.getAcquiredConnections
-        ) { case (m1Peers, m2peers) =>
-          m1Peers.size == m2peers.size
-        }
-        .restartUntil(result => result)
-        .timeout(10.seconds)
-      _ <- Task.parZip2(cm1Release, cm2Release).void
+      size   <- cluster.clusterSize
+      killed <- cluster.shutdownRandomNode
+      _      <- cluster.sendMessageFromRandomNodeToAllOthers(MessageA(1))
+      (address, keyPair, clusterConfig) = killed
+      _ <- cluster.waitUntilEveryNodeHaveNConnections(1)
+      // be offline for a moment
+      _                      <- Task.sleep(3.seconds)
+      connectionAfterFailure <- cluster.getEachNodeConnectionsCount
+      _                      <- cluster.startNode(address, keyPair, clusterConfig)
+      _                      <- cluster.waitUntilEveryNodeHaveNConnections(2)
     } yield {
-      assert(m1HasTheSameNumOfPeersAsM2)
+      assert(size == 3)
+      assert(connectionAfterFailure.forall(connections => connections == 1))
     }
   }
-
 }
 object RemoteConnectionManagerWithScalanetProviderSpec {
   val secureRandom = new SecureRandom()
@@ -170,7 +153,12 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
 
   type ClusterNodes = Map[
     Secp256k1Key,
-    (RemoteConnectionManager[Task, Secp256k1Key, TestMessage], Task[Unit])
+    (
+        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
+        AsymmetricCipherKeyPair,
+        ClusterConfig[Secp256k1Key],
+        Task[Unit]
+    )
   ]
 
   def buildClusterNodes(
@@ -184,17 +172,19 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     for {
       nodes <- Ref.of[Task, ClusterNodes](Map.empty)
       _ <- Task.traverse(keyWithAddress) { case (info, address) =>
+        val clusterConfig = ClusterConfig(clusterNodes =
+          keyWithAddress.map(keyWithAddress =>
+            (keyWithAddress._1.publicKey, keyWithAddress._2)
+          )
+        )
+
         buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
           bindAddress = address,
           nodeKeyPair = info.keyPair,
-          clusterConfig = ClusterConfig(clusterNodes =
-            keyWithAddress.map(keyWithAddress =>
-              (keyWithAddress._1.publicKey, keyWithAddress._2)
-            )
-          )
+          clusterConfig = clusterConfig
         ).allocated.flatMap { case (manager, release) =>
           nodes.update(map =>
-            map + (manager.getLocalInfo._1 -> (manager, release))
+            map + (manager.getLocalInfo._1 -> (manager, info.keyPair, clusterConfig, release))
           )
         }
       }
@@ -203,6 +193,22 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   }
 
   class Cluster(nodes: Ref[Task, ClusterNodes]) {
+
+    private def broadcastToAllConnections(
+        manager: RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
+        message: TestMessage
+    ) = {
+      manager.getAcquiredConnections.flatMap { connections =>
+        Task
+          .parTraverseUnordered(connections)(connectionKey =>
+            manager.sendMessage(connectionKey, message)
+          )
+          .map { _ =>
+            connections
+          }
+      }
+
+    }
 
     def clusterSize: Task[Int] = nodes.get.map(_.size)
 
@@ -217,10 +223,22 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       } yield runningNodes.map(_.size).toList
     }
 
+    def waitUntilEveryNodeHaveNConnections(
+        n: Int
+    )(implicit timeOut: FiniteDuration): Task[List[Int]] = {
+      getEachNodeConnectionsCount
+        .restartUntil(counts =>
+          counts.forall(currentNodeConnectionCount =>
+            currentNodeConnectionCount == n
+          )
+        )
+        .timeout(timeOut)
+    }
+
     def closeAllNodes: Task[Unit] = {
       nodes.get.flatMap { nodes =>
         Task
-          .parTraverseUnordered(nodes.values) { case (node, release) =>
+          .parTraverseUnordered(nodes.values) { case (node, _, _, release) =>
             release
           }
           .void
@@ -232,21 +250,56 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     ): Task[(Secp256k1Key, Set[Secp256k1Key])] = {
       for {
         runningNodes <- nodes.get
-        (key, (node, _)) = runningNodes.head
-        nodesRececivingMessage <- node.getAcquiredConnections.flatMap {
-          connections =>
-            Task
-              .traverse(connections)(connectionKey =>
-                node.sendMessage(connectionKey, message)
-              )
-              .map(_ => connections)
+        (key, (node, _, _, _)) = runningNodes.head
+        nodesReceivingMessage <- broadcastToAllConnections(node, message)
+      } yield (key, nodesReceivingMessage)
+    }
+
+    def sendMessageFromAllClusterNodesToTheirConnections(
+        message: TestMessage
+    ): Task[List[(Secp256k1Key, Set[Secp256k1Key])]] = {
+      nodes.get.flatMap { current =>
+        Task.parTraverseUnordered(current.values) { case (manager, _, _, _) =>
+          broadcastToAllConnections(manager, message).map { receivers =>
+            (manager.getLocalInfo._1 -> receivers)
+          }
         }
-      } yield (key, nodesRececivingMessage)
+      }
     }
 
     def getMessageFromNode(key: Secp256k1Key) = {
       nodes.get.flatMap { runningNodes =>
         runningNodes(key)._1.incomingMessages.take(1).toListL.map(_.head)
+      }
+    }
+
+    def shutdownRandomNode: Task[
+      (InetSocketAddress, AsymmetricCipherKeyPair, ClusterConfig[Secp256k1Key])
+    ] = {
+      for {
+        current <- nodes.get
+        (
+          randomNodeKey,
+          (randomManager, nodeKeyPair, clusterConfig, randomRelease)
+        ) = current.head
+        _ <- randomRelease
+        _ <- nodes.update(current => current - randomNodeKey)
+      } yield (randomManager.getLocalInfo._2, nodeKeyPair, clusterConfig)
+    }
+
+    def startNode(
+        bindAddress: InetSocketAddress,
+        key: AsymmetricCipherKeyPair,
+        clusterConfig: ClusterConfig[Secp256k1Key]
+    )(implicit s: Scheduler): Task[Unit] = {
+      buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        bindAddress = bindAddress,
+        nodeKeyPair = key,
+        clusterConfig = clusterConfig
+      ).allocated.flatMap { case (manager, release) =>
+        nodes.update { current =>
+          current + (manager.getLocalInfo._1 -> (manager, key, clusterConfig, release))
+        }
       }
     }
 
