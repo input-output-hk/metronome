@@ -75,6 +75,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.typelevel::cats-effect:${VersionOf.cats}"
     )
 
+    override def repositories = super.repositories ++ Seq(
+      MavenRepository("https://oss.sonatype.org/content/repositories/snapshots")
+    )
+
     override def scalacOptions = Seq(
       "-unchecked",
       "-deprecation",
@@ -183,7 +187,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def description: String =
       "Cryptographic primitives to support HotStuff and BFT proof verification."
 
-    // TODO: Use crypto library from Mantis.
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.iohk::mantis-crypto:3.2.1-SNAPSHOT",
+      ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}"
+    )
+
     object test extends TestModule
   }
 

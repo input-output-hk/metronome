@@ -123,7 +123,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   ](
       bindAddress: InetSocketAddress = randomAddress(),
       nodeKeyPair: AsymmetricCipherKeyPair =
-        CryptoUtils.generateSecp256k1KeyPair(secureRandom),
+        metronome.crypto.Secp256k1Utils.generateSecp256k1KeyPair(secureRandom),
       secureRandom: SecureRandom = secureRandom,
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
