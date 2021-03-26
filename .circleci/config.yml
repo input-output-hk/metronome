@@ -2,7 +2,7 @@ version: 2.1
 jobs:
   build:
     docker:
-      - image: circleci/openjdk:8-jdk
+      - image: openjdk:11
 
     working_directory: ~/repo
 
@@ -61,6 +61,7 @@ jobs:
             or:
               - equal: [ master, << pipeline.git.branch >> ]
               - equal: [ develop, << pipeline.git.branch >> ]
+              - equal: [ PM-3093-publish, << pipeline.git.branch >> ]
           steps:
             - run:
                 name: install gpg2
@@ -73,11 +74,10 @@ jobs:
                 name: install base64
                 command: apt update && apt install -y cl-base64
 
-            # TODO: Configure Mantis' credentials
-            # - run:
-            #     name: publish
-            #     command: .circleci/publish
-            #     no_output_timeout: 30m
+            - run:
+                name: publish
+                command: .circleci/publish
+                no_output_timeout: 30m
 
 workflows:
   build_and_publish:
