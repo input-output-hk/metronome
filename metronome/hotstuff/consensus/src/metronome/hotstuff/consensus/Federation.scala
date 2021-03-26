@@ -3,7 +3,7 @@ package metronome.hotstuff.consensus
 /** Collection of keys of the federation members. */
 case class Federation[PKey](
     publicKeys: IndexedSeq[PKey]
-) {
+)(implicit ls: LeaderSelection) {
   private val publicKeySet = publicKeys.toSet
 
   /** Size of the federation, `n`. */
@@ -16,5 +16,5 @@ case class Federation[PKey](
     publicKeySet.contains(publicKey)
 
   def leaderOf(viewNumber: ViewNumber): PKey =
-    publicKeys((viewNumber % size).toInt)
+    publicKeys(implicitly[LeaderSelection].leaderOf(viewNumber, size))
 }
