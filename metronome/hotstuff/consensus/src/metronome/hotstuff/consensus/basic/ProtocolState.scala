@@ -65,8 +65,11 @@ case class ProtocolState[A <: Agreement: Block: Signing](
   val leader   = federation.leaderOf(viewNumber)
   val isLeader = leader == publicKey
 
-  /** The leader has to collect `n-f` signatures into a Q.C. */
-  def quorumSize = federation.size - federation.maxFaulty
+  /** The leader has to collect `n-f` signatures into a Q.C.
+    *
+    * This value can be lower if we have higher trust in the federation.
+    */
+  def quorumSize = federation.quorumSize
 
   /** No state transition. */
   private def stay: Transition[A] =
