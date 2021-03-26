@@ -117,7 +117,7 @@ object RemoteConnectionManager {
         }
       }
 
-      /** Default jitter config which will keep random jitter in +/-10% range
+      /** Default jitter config which will keep random jitter in +/-20% range
         */
       val defaultConfig: RandomJitterConfig = buildJitterConfig(0.2).get
     }
@@ -330,6 +330,8 @@ object RemoteConnectionManager {
       )
 
       connectionsHandler <- ConnectionHandler.apply(
+        // when each connection will finished it the callback will be called, and connection will be put to connections to acquire
+        // queue
         handledConnectionFinisher.finish
       )
 

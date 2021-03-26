@@ -104,11 +104,11 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
           .attemptNarrow[ConnectionAlreadyClosed]
           .flatMap {
             case Left(_) =>
-              connection.close.map { _ =>
+              connection.close.as(
                 Left(ConnectionAlreadyClosedException(recipient))
-              }
+              )
 
-            case Right(value) =>
+            case Right(_) =>
               Concurrent[F].pure(Right(()))
           }
       case None =>
@@ -257,6 +257,10 @@ object ConnectionHandler {
     )
   }
 
+  /** Starts connection handler, and polling form connections
+    *
+    * @param connectionFinishCallback, callback to be called when connection is finished and get deregistred
+    */
   def apply[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
   ): Resource[F, ConnectionHandler[F, K, M]] = {
