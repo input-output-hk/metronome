@@ -68,7 +68,13 @@ jobs:
                 # GPG in docker needs to be run with some additional flags
                 # and we are not able to change how mill uses it
                 # this is why we're creating wrapper that adds the flags
-                command: sh -c "apt update && apt install -y gnupg2 && mv /usr/bin/gpg /usr/bin/gpg-vanilla && echo '#!/bin/sh\n\n/usr/bin/gpg-vanilla --no-tty --pinentry loopback \$@' > /usr/bin/gpg && chmod 755 /usr/bin/gpg && cat /usr/bin/gpg"
+                command: |
+                  sudo apt update
+                  sudo apt install -y gnupg2
+                  sudo mv /usr/bin/gpg /usr/bin/gpg-vanilla
+                  sudo sh -c "echo '#!/bin/sh\n\n/usr/bin/gpg-vanilla --no-tty --pinentry loopback \$@' > /usr/bin/gpg"
+                  sudo chmod 755 /usr/bin/gpg
+                  cat /usr/bin/gpg
 
             - run:
                 name: install base64
