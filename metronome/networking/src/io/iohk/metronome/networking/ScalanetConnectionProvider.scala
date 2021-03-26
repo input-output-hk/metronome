@@ -30,7 +30,7 @@ object ScalanetConnectionProvider {
       channelKey: K
   ) extends EncryptedConnection[F, K, M] {
 
-    override def close(): F[Unit] = underlyingChannelRelease
+    override def close: F[Unit] = underlyingChannelRelease
 
     override val remotePeerInfo: (K, InetSocketAddress) = (
       channelKey,
@@ -112,7 +112,7 @@ object ScalanetConnectionProvider {
       )
 
     } yield new EncryptedConnectionProvider[F, K, M] {
-      override def localInfo: (K, InetSocketAddress) = local
+      override def localPeerInfo: (K, InetSocketAddress) = local
 
       import cats.implicits._
 
@@ -146,7 +146,16 @@ object ScalanetConnectionProvider {
                 }
 
               case ServerEvent.HandshakeFailed(failure) =>
-                Task.now(Some(Left(HandshakeFailed(failure))))
+                Task.now(
+                  Some(
+                    Left(
+                      HandshakeFailed(
+                        failure,
+                        failure.to.address.inetSocketAddress
+                      )
+                    )
+                  )
+                )
 
             }
           case None => Task.now(None)

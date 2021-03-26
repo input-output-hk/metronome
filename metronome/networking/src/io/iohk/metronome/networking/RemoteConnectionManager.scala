@@ -19,13 +19,14 @@ import scodec.Codec
 import java.net.InetSocketAddress
 import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
+import scala.util.control.NoStackTrace
 
 class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
     connectionHandler: ConnectionHandler[F, K, M],
     localInfo: (K, InetSocketAddress)
 ) {
 
-  def getLocalInfo: (K, InetSocketAddress) = localInfo
+  def getLocalPeerInfo: (K, InetSocketAddress) = localInfo
 
   def getAcquiredConnections: F[Set[K]] = {
     connectionHandler.getAllActiveConnections
@@ -40,8 +41,7 @@ class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
         //Connections could be closed by remote without us noticing, close it on our side and return error to caller
         connection.sendMessage(message).handleErrorWith { e =>
           //Todo logging
-          connection
-            .close()
+          connection.close
             .flatMap(_ =>
               Sync[F].raiseError(ConnectionAlreadyClosedException(recipient))
             )
@@ -57,6 +57,7 @@ object RemoteConnectionManager {
       extends RuntimeException(
         s"Connection with node ${key}, has already closed"
       )
+      with NoStackTrace
 
   private def getConnectionErrorMessage[K](
       e: ConnectionError,
@@ -211,7 +212,7 @@ object RemoteConnectionManager {
 
           case None =>
             // unknown connection, just close it
-            encryptedConnection.close()
+            encryptedConnection.close
         }
       }
       .completedL
@@ -304,7 +305,7 @@ object RemoteConnectionManager {
         connectionsToAcquireQueue.offerMany(
           clusterConfig.clusterNodes.collect {
             case toConnect
-                if toConnect != encryptedConnectionsProvider.localInfo =>
+                if toConnect != encryptedConnectionsProvider.localPeerInfo =>
               OutGoingConnectionRequest.initial(toConnect._1, toConnect._2)
           }
         )
@@ -315,7 +316,7 @@ object RemoteConnectionManager {
         retryConfig
       )
 
-      connectionsHandler <- ConnectionHandler.connectionHandlerResource(
+      connectionsHandler <- ConnectionHandler.apply(
         handledConnectionFinisher.finish
       )
 
@@ -332,7 +333,7 @@ object RemoteConnectionManager {
       ).background
     } yield new RemoteConnectionManager[F, K, M](
       connectionsHandler,
-      encryptedConnectionsProvider.localInfo
+      encryptedConnectionsProvider.localPeerInfo
     )
 
   }

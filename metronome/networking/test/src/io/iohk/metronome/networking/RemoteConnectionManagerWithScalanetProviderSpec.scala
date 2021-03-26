@@ -123,7 +123,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   ](
       bindAddress: InetSocketAddress = randomAddress(),
       nodeKeyPair: AsymmetricCipherKeyPair =
-        metronome.crypto.Secp256k1Utils.generateSecp256k1KeyPair(secureRandom),
+        metronome.crypto.Secp256k1Utils.generateKeyPair(secureRandom),
       secureRandom: SecureRandom = secureRandom,
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
@@ -184,7 +184,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
           clusterConfig = clusterConfig
         ).allocated.flatMap { case (manager, release) =>
           nodes.update(map =>
-            map + (manager.getLocalInfo._1 -> (manager, info.keyPair, clusterConfig, release))
+            map + (manager.getLocalPeerInfo._1 -> (manager, info.keyPair, clusterConfig, release))
           )
         }
       }
@@ -261,7 +261,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       nodes.get.flatMap { current =>
         Task.parTraverseUnordered(current.values) { case (manager, _, _, _) =>
           broadcastToAllConnections(manager, message).map { receivers =>
-            (manager.getLocalInfo._1 -> receivers)
+            (manager.getLocalPeerInfo._1 -> receivers)
           }
         }
       }
@@ -284,7 +284,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
         ) = current.head
         _ <- randomRelease
         _ <- nodes.update(current => current - randomNodeKey)
-      } yield (randomManager.getLocalInfo._2, nodeKeyPair, clusterConfig)
+      } yield (randomManager.getLocalPeerInfo._2, nodeKeyPair, clusterConfig)
     }
 
     def startNode(
@@ -298,7 +298,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
         clusterConfig = clusterConfig
       ).allocated.flatMap { case (manager, release) =>
         nodes.update { current =>
-          current + (manager.getLocalInfo._1 -> (manager, key, clusterConfig, release))
+          current + (manager.getLocalPeerInfo._1 -> (manager, key, clusterConfig, release))
         }
       }
     }

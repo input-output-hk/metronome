@@ -66,11 +66,11 @@ object RemoteConnectionManagerTestUtils {
   object NodeInfo {
     def generateRandom(secureRandom: SecureRandom): NodeInfo = {
       val keyPair =
-        metronome.crypto.Secp256k1Utils.generateSecp256k1KeyPair(secureRandom)
+        metronome.crypto.Secp256k1Utils.generateKeyPair(secureRandom)
       NodeInfo(
         keyPair,
         Secp256k1Key(
-          metronome.crypto.Secp256k1Utils.secp256k1KeyPairToNodeId(keyPair)
+          metronome.crypto.Secp256k1Utils.keyPairToUncompressed(keyPair)
         )
       )
     }

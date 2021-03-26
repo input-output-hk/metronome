@@ -6,41 +6,41 @@ import io.iohk.metronome.networking.ConnectionHandler.HandledConnection
 import cats.implicits._
 
 class ConnectionsRegister[F[_]: Concurrent, K, M](
-    register: Ref[F, Map[K, HandledConnection[F, K, M]]]
+    registerRef: Ref[F, Map[K, HandledConnection[F, K, M]]]
 ) {
 
   def registerIfAbsent(
       connection: HandledConnection[F, K, M]
   ): F[Option[HandledConnection[F, K, M]]] = {
-    register.modify { current =>
+    registerRef.modify { register =>
       val connectionKey = connection.key
 
-      if (current.contains(connectionKey)) {
-        (current, current.get(connectionKey))
+      if (register.contains(connectionKey)) {
+        (register, register.get(connectionKey))
       } else {
-        (current.updated(connectionKey, connection), None)
+        (register.updated(connectionKey, connection), None)
       }
     }
   }
 
   def isNewConnection(connectionKey: K): F[Boolean] = {
-    register.get.map(currentState => !currentState.contains(connectionKey))
+    registerRef.get.map(register => !register.contains(connectionKey))
   }
 
   def deregisterConnection(
       connection: HandledConnection[F, K, M]
   ): F[Unit] = {
-    register.update(current => current - (connection.key))
+    registerRef.update(register => register - (connection.key))
   }
 
   def getAllRegisteredConnections: F[Set[HandledConnection[F, K, M]]] = {
-    register.get.map(m => m.values.toSet)
+    registerRef.get.map(register => register.values.toSet)
   }
 
   def getConnection(
       connectionKey: K
   ): F[Option[HandledConnection[F, K, M]]] =
-    register.get.map(connections => connections.get(connectionKey))
+    registerRef.get.map(register => register.get(connectionKey))
 
 }
 

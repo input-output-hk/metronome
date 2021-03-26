@@ -20,7 +20,7 @@ class MockEncryptedConnectionProvider(
       Map[Secp256k1Key, MockEncryptedConnection]
     ],
     private val connectionStatistics: ConnectionStatisticsHolder,
-    val localInfo: (Secp256k1Key, InetSocketAddress) =
+    val localPeerInfo: (Secp256k1Key, InetSocketAddress) =
       (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
 ) extends EncryptedConnectionProvider[Task, Secp256k1Key, TestMessage] {
 
@@ -87,7 +87,7 @@ object MockEncryptedConnectionProvider {
           if (withFailure) {
             connection.closeRemoteWithoutInfo
           } else {
-            connection.close()
+            connection.close
           }
         }
     }
@@ -197,7 +197,7 @@ object MockEncryptedConnectionProvider {
         (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
   ) extends EncryptedConnection[Task, Secp256k1Key, TestMessage] {
 
-    override def close(): Task[Unit] = {
+    override def close: Task[Unit] = {
       Task
         .parZip2(incomingEvents.offer(None), closeToken.complete(()).attempt)
         .void

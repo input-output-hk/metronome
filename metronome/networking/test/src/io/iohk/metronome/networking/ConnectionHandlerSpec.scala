@@ -184,15 +184,12 @@ object ConnectionHandlerSpec {
     }
   }
 
-  def buildHandler(): Task[ConnectionHandler[Task, Secp256k1Key, TestMessage]] =
-    ConnectionHandler[Task, Secp256k1Key, TestMessage](_ => Task(()))
-
   def buildHandlerResource(
       cb: HandledConnection[Task, Secp256k1Key, TestMessage] => Task[Unit] =
         _ => Task(())
   ): Resource[Task, ConnectionHandler[Task, Secp256k1Key, TestMessage]] = {
     ConnectionHandler
-      .connectionHandlerResource[Task, Secp256k1Key, TestMessage](cb)
+      .apply[Task, Secp256k1Key, TestMessage](cb)
   }
 
   def newHandledConnection(implicit

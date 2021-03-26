@@ -11,11 +11,11 @@ trait EncryptedConnection[F[_], K, M] {
   def remotePeerInfo: (K, InetSocketAddress)
   def sendMessage(m: M): F[Unit]
   def incomingMessage: F[Option[Either[ConnectionError, M]]]
-  def close(): F[Unit]
+  def close: F[Unit]
 }
 
 trait EncryptedConnectionProvider[F[_], K, M] {
-  def localInfo: (K, InetSocketAddress)
+  def localPeerInfo: (K, InetSocketAddress)
   def connectTo(
       k: K,
       address: InetSocketAddress
@@ -25,7 +25,7 @@ trait EncryptedConnectionProvider[F[_], K, M] {
 }
 
 object EncryptedConnectionProvider {
-  case class HandshakeFailed(ex: Throwable)
+  case class HandshakeFailed(ex: Throwable, remoteAddress: InetSocketAddress)
 
   sealed trait ConnectionError
   case object DecodingError                 extends ConnectionError

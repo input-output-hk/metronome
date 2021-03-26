@@ -25,6 +25,7 @@ object VersionOf {
   val shapeless        = "2.3.3"
   val `scodec-core`    = "1.11.7"
   val `scodec-bits`    = "1.1.12"
+  val `mantis-crypto`  = "3.2.1-SNAPSHOT"
 }
 
 // Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
@@ -188,7 +189,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       "Cryptographic primitives to support HotStuff and BFT proof verification."
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"io.iohk::mantis-crypto:3.2.1-SNAPSHOT",
+      ivy"io.iohk::mantis-crypto:${VersionOf.`mantis-crypto`}",
       ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}"
     )
 

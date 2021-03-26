@@ -1,22 +1,21 @@
 package metronome.crypto
 
 import java.security.SecureRandom
-import io.iohk.ethereum.crypto.generateKeyPair
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import scodec.bits.BitVector
 
 object Secp256k1Utils {
 
-  def generateSecp256k1KeyPair(
+  def generateKeyPair(
       secureRandom: SecureRandom
   ): AsymmetricCipherKeyPair = {
-    generateKeyPair(secureRandom)
+    io.iohk.ethereum.crypto.generateKeyPair(secureRandom)
   }
 
-  /** Returns secp256k1 public key bytes in uncompressed form
+  /** Returns secp256k1 public key bytes in uncompressed form, with compression indicator stripped
     */
-  def secp256k1KeyPairToNodeId(keyPair: AsymmetricCipherKeyPair): BitVector = {
+  def keyPairToUncompressed(keyPair: AsymmetricCipherKeyPair): BitVector = {
     BitVector(
       keyPair.getPublic
         .asInstanceOf[ECPublicKeyParameters]

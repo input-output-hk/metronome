@@ -32,8 +32,8 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   ): F[Unit] = {
     for {
       _ <- Concurrent[F].delay(numberOfRunningConnections.decrement())
-      _ <- handledConnection.close()
       _ <- connectionsRegister.deregisterConnection(handledConnection)
+      _ <- handledConnection.close
     } yield ()
   }
 
@@ -48,7 +48,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
       case Some(_) =>
         //TODO for now we are closing any new connections in case of conflict, we may investigate other strategies
-        possibleNewConnection.close()
+        possibleNewConnection.close
       case None =>
         connectionQueue.offer(possibleNewConnection)
     }
@@ -138,6 +138,15 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
 }
 
 object ConnectionHandler {
+
+  /** Connection which is already handled by connection handler i.e it is registered in registry and handler is subscribed
+    * for incoming messages of that connection
+    *
+    * @param key, key of remote node
+    * @param serverAddress, address of the server of remote node. In case of incoming connection it will be diffrent that
+    *                       underlyingConnection remoteAddress
+    * @param underlyingConnection, encrypted connection to send and receive messages
+    */
   case class HandledConnection[F[_], K, M](
       key: K,
       serverAddress: InetSocketAddress,
@@ -147,8 +156,8 @@ object ConnectionHandler {
       underlyingConnection.sendMessage(m)
     }
 
-    def close(): F[Unit] = {
-      underlyingConnection.close()
+    def close: F[Unit] = {
+      underlyingConnection.close
     }
 
     def incomingMessage: F[Option[Either[ConnectionError, M]]] = {
@@ -180,7 +189,7 @@ object ConnectionHandler {
 
   }
 
-  def apply[F[_]: Concurrent: ContextShift, K, M](
+  private def buildHandler[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
   ): F[ConnectionHandler[F, K, M]] = {
     for {
@@ -198,11 +207,11 @@ object ConnectionHandler {
     )
   }
 
-  def connectionHandlerResource[F[_]: Concurrent: ContextShift, K, M](
+  def apply[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
   ): Resource[F, ConnectionHandler[F, K, M]] = {
     Resource
-      .make(ConnectionHandler(connectionFinishCallback)) { handler =>
+      .make(buildHandler(connectionFinishCallback)) { handler =>
         handler.shutdown
       }
       .flatMap { handler =>
