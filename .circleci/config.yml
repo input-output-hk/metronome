@@ -78,7 +78,7 @@ jobs:
 
             - run:
                 name: install base64
-                command: apt update && apt install -y cl-base64
+                command: sudo apt update && sudo apt install -y cl-base64
 
             - run:
                 name: publish
