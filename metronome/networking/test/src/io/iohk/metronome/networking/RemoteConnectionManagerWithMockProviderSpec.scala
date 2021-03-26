@@ -4,6 +4,7 @@ import cats.effect.Resource
 import io.iohk.metronome.networking.ConnectionHandler.ConnectionAlreadyClosedException
 import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
+import io.iohk.metronome.networking.RemoteConnectionManager.RetryConfig.RandomJitterConfig
 import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
   RetryConfig
@@ -285,8 +286,11 @@ object RemoteConnectionManagerWithMockProviderSpec {
     }
   }
 
-  val quickRetryConfig             = RetryConfig(50.milliseconds, 2, 2.seconds, None)
-  val longRetryConfig: RetryConfig = RetryConfig(5.seconds, 2, 20.seconds, None)
+  val noJitterConfig = RandomJitterConfig.buildJitterConfig(0).get
+  val quickRetryConfig =
+    RetryConfig(50.milliseconds, 2, 2.seconds, noJitterConfig)
+  val longRetryConfig: RetryConfig =
+    RetryConfig(5.seconds, 2, 20.seconds, noJitterConfig)
 
   def buildTestCaseWithNPeers(
       n: Int,

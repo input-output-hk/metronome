@@ -131,8 +131,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       clusterConfig: ClusterConfig[K] = ClusterConfig(
         Set.empty[(K, InetSocketAddress)]
       ),
-      retryConfig: RetryConfig =
-        RetryConfig.default.copy(maxRandomJitter = Some(250.milliseconds))
+      retryConfig: RetryConfig = RetryConfig.default
   )(implicit
       s: Scheduler,
       cs: ContextShift[F]

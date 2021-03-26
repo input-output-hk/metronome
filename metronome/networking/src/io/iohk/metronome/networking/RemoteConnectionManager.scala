@@ -8,6 +8,7 @@ import io.iohk.metronome.networking.ConnectionHandler.{
   HandledConnection,
   MessageReceived
 }
+import io.iohk.metronome.networking.RemoteConnectionManager.RetryConfig.RandomJitterConfig
 import monix.catnap.ConcurrentQueue
 import monix.eval.{TaskLift, TaskLike}
 import monix.reactive.Observable
@@ -70,13 +71,65 @@ object RemoteConnectionManager {
       initialDelay: FiniteDuration,
       backOffFactor: Long,
       maxDelay: FiniteDuration,
-      maxRandomJitter: Option[FiniteDuration]
+      randomJitterConfig: RandomJitterConfig
   )
 
   object RetryConfig {
+    sealed abstract case class RandomJitterConfig private (
+        fractionOfDelay: Double
+    )
+
+    object RandomJitterConfig {
+      import scala.concurrent.duration._
+
+      /** Build random jitter config
+        * @param fractionOfTheDelay, in what range in the computed jitter should lay, it should by in range 0..1
+        */
+      def buildJitterConfig(
+          fractionOfTheDelay: Double
+      ): Option[RandomJitterConfig] = {
+        if (fractionOfTheDelay >= 0 && fractionOfTheDelay <= 1) {
+          Some(new RandomJitterConfig(fractionOfTheDelay) {})
+        } else {
+          None
+        }
+      }
+
+      /** computes new duration with additional random jitter added. Works with millisecond precision i.e if provided duration
+        * will be less than 1 millisecond then no jitter will be added
+        * @param config,jitter config
+        * @param delay, duration to randomize it should positive number otherwise no randomization will happen
+        */
+      def randomizeWithJitter(
+          config: RandomJitterConfig,
+          delay: FiniteDuration
+      ): FiniteDuration = {
+        val fractionDuration =
+          (delay.max(0.milliseconds) * config.fractionOfDelay).toMillis
+        if (fractionDuration == 0) {
+          delay
+        } else {
+          val randomized = ThreadLocalRandom
+            .current()
+            .nextLong(-fractionDuration, fractionDuration)
+          val randomFactor = FiniteDuration(randomized, TimeUnit.MILLISECONDS)
+          delay + randomFactor
+        }
+      }
+
+      /** Default jitter config which will keep random jitter in +/-10% range
+        */
+      val defaultConfig: RandomJitterConfig = buildJitterConfig(0.2).get
+    }
+
     import scala.concurrent.duration._
     def default: RetryConfig = {
-      RetryConfig(500.milliseconds, 2, 30.seconds, maxRandomJitter = None)
+      RetryConfig(
+        500.milliseconds,
+        2,
+        30.seconds,
+        RandomJitterConfig.defaultConfig
+      )
     }
 
   }
@@ -90,20 +143,16 @@ object RemoteConnectionManager {
     val exponentialBackoff =
       math.pow(config.backOffFactor.toDouble, updatedFailureCount).toLong
 
-    val randomJitter =
-      config.maxRandomJitter.fold(FiniteDuration(0, TimeUnit.MILLISECONDS)) {
-        maxJitter =>
-          val randomJitterInMillis =
-            ThreadLocalRandom.current().nextLong(maxJitter.toMillis)
-          FiniteDuration(randomJitterInMillis, TimeUnit.MILLISECONDS)
-      }
-
     val newDelay =
-      ((config.initialDelay * exponentialBackoff)
-        .min(config.maxDelay)) + randomJitter
+      ((config.initialDelay * exponentialBackoff).min(config.maxDelay))
+
+    val newDelayWithJitter = RandomJitterConfig.randomizeWithJitter(
+      config.randomJitterConfig,
+      newDelay
+    )
 
     Timer[F]
-      .sleep(newDelay)
+      .sleep(newDelayWithJitter)
       .as(failedConnectionRequest.copy(numberOfFailures = updatedFailureCount))
 
   }
