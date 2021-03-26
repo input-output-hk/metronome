@@ -1,11 +1,11 @@
 package io.iohk.metronome.networking
 
 import cats.effect.Resource
+import io.iohk.metronome.networking.ConnectionHandler.ConnectionAlreadyClosedException
 import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
 import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
-  ConnectionAlreadyClosedException,
   RetryConfig
 }
 import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils._
@@ -138,7 +138,6 @@ class RemoteConnectionManagerWithMockProviderSpec
       containsFailedPeer <- manager.containsConnection(disconnectedPeer)
       sendResult <- manager
         .sendMessage(disconnectedPeer.key, MessageA(1))
-        .attempt
         .map(result => result.left.getOrElse(null))
       _ <- Task(
         assert(
@@ -165,7 +164,7 @@ class RemoteConnectionManagerWithMockProviderSpec
   ) { case (provider, manager, _) =>
     val randomKey = Secp256k1Key.getFakeRandomKey
     for {
-      sendResult <- manager.sendMessage(randomKey, MessageA(1)).attempt
+      sendResult <- manager.sendMessage(randomKey, MessageA(1))
     } yield {
       assert(sendResult.isLeft)
       assert(

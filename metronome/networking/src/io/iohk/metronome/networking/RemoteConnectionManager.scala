@@ -4,10 +4,8 @@ import cats.effect.concurrent.Deferred
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
-import io.iohk.metronome.networking.ConnectionHandler.HandledConnection
-import io.iohk.metronome.networking.EncryptedConnectionProvider.ConnectionError
-import io.iohk.metronome.networking.RemoteConnectionManager.{
-  ConnectionAlreadyClosedException,
+import io.iohk.metronome.networking.ConnectionHandler.{
+  HandledConnection,
   MessageReceived
 }
 import monix.catnap.ConcurrentQueue
@@ -19,7 +17,6 @@ import scodec.Codec
 import java.net.InetSocketAddress
 import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
-import scala.util.control.NoStackTrace
 
 class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
     connectionHandler: ConnectionHandler[F, K, M],
@@ -35,47 +32,15 @@ class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
   def incomingMessages: Iterant[F, MessageReceived[K, M]] =
     connectionHandler.incomingMessages
 
-  def sendMessage(recipient: K, message: M): F[Unit] = {
-    connectionHandler.getConnection(recipient).flatMap {
-      case Some(connection) =>
-        //Connections could be closed by remote without us noticing, close it on our side and return error to caller
-        connection.sendMessage(message).handleErrorWith { e =>
-          //Todo logging
-          connection.close
-            .flatMap(_ =>
-              Sync[F].raiseError(ConnectionAlreadyClosedException(recipient))
-            )
-        }
-      case None =>
-        Sync[F].raiseError(ConnectionAlreadyClosedException(recipient))
-    }
+  def sendMessage(
+      recipient: K,
+      message: M
+  ): F[Either[ConnectionHandler.ConnectionAlreadyClosedException[K], Unit]] = {
+    connectionHandler.sendMessage(recipient, message)
   }
 }
 //TODO add logging
 object RemoteConnectionManager {
-  case class ConnectionAlreadyClosedException[K](key: K)
-      extends RuntimeException(
-        s"Connection with node ${key}, has already closed"
-      )
-      with NoStackTrace
-
-  private def getConnectionErrorMessage[K](
-      e: ConnectionError,
-      connectionKey: K
-  ): String = {
-    e match {
-      case EncryptedConnectionProvider.DecodingError =>
-        s"Unexpected decoding error on connection with ${connectionKey}"
-      case EncryptedConnectionProvider.UnexpectedError(ex) =>
-        s"Unexpected error ${ex.getMessage} on connection with ${connectionKey}"
-    }
-  }
-
-  case class UnexpectedConnectionError[K](e: ConnectionError, connectionKey: K)
-      extends RuntimeException(getConnectionErrorMessage(e, connectionKey))
-
-  case class MessageReceived[K, M](from: K, message: M)
-
   case class ConnectionSuccess[F[_], K, M](
       encryptedConnection: EncryptedConnection[F, K, M]
   )
@@ -139,9 +104,8 @@ object RemoteConnectionManager {
 
     Timer[F]
       .sleep(newDelay)
-      .map(_ =>
-        failedConnectionRequest.copy(numberOfFailures = updatedFailureCount)
-      )
+      .as(failedConnectionRequest.copy(numberOfFailures = updatedFailureCount))
+
   }
 
   /** Connections are acquired in linear fashion i.e there can be at most one concurrent call to remote peer.
@@ -179,7 +143,7 @@ object RemoteConnectionManager {
         case Right(connection) =>
           val newOutgoingConnections =
             HandledConnection.outgoing(connection.encryptedConnection)
-          connectionsHandler.registerIfAbsent(newOutgoingConnections)
+          connectionsHandler.registerOrClose(newOutgoingConnections)
 
       }
       .completedF
@@ -208,7 +172,7 @@ object RemoteConnectionManager {
               incomingConnectionServerAddress,
               encryptedConnection
             )
-            connectionsHandler.registerIfAbsent(handledConnection)
+            connectionsHandler.registerOrClose(handledConnection)
 
           case None =>
             // unknown connection, just close it

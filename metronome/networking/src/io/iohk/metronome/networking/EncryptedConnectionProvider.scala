@@ -31,4 +31,7 @@ object EncryptedConnectionProvider {
   case object DecodingError                 extends ConnectionError
   case class UnexpectedError(ex: Throwable) extends ConnectionError
 
+  case class ConnectionAlreadyClosed(address: InetSocketAddress)
+      extends RuntimeException
+
 }

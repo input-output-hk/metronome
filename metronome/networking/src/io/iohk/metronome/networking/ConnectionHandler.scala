@@ -1,21 +1,26 @@
 package io.iohk.metronome.networking
 
-import cats.effect.{Concurrent, ContextShift, Resource}
+import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.effect.concurrent.{Deferred, TryableDeferred}
-import io.iohk.metronome.networking.RemoteConnectionManager.{
-  MessageReceived,
-  UnexpectedConnectionError,
-  withCancelToken
-}
+import io.iohk.metronome.networking.RemoteConnectionManager.withCancelToken
 import monix.catnap.ConcurrentQueue
 import monix.execution.atomic.AtomicInt
 import monix.tail.Iterant
 import cats.implicits._
 import cats.effect.implicits._
-import io.iohk.metronome.networking.ConnectionHandler.HandledConnection
-import io.iohk.metronome.networking.EncryptedConnectionProvider.ConnectionError
+import io.iohk.metronome.networking.ConnectionHandler.{
+  ConnectionAlreadyClosedException,
+  HandledConnection,
+  MessageReceived,
+  UnexpectedConnectionError
+}
+import io.iohk.metronome.networking.EncryptedConnectionProvider.{
+  ConnectionAlreadyClosed,
+  ConnectionError
+}
 
 import java.net.InetSocketAddress
+import scala.util.control.NoStackTrace
 
 class ConnectionHandler[F[_]: Concurrent, K, M](
     connectionQueue: ConcurrentQueue[F, HandledConnection[F, K, M]],
@@ -42,12 +47,13 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     *
     * @param possibleNewConnection, possible connection to handle
     */
-  def registerIfAbsent(
+  def registerOrClose(
       possibleNewConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
     connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
       case Some(_) =>
-        //TODO for now we are closing any new connections in case of conflict, we may investigate other strategies
+        //TODO [PM-3092] for now we are closing any new connections in case of conflict, we may investigate other strategies
+        // like keeping old for outgoing and replacing for incoming
         possibleNewConnection.close
       case None =>
         connectionQueue.offer(possibleNewConnection)
@@ -87,11 +93,34 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   def getConnection(key: K): F[Option[HandledConnection[F, K, M]]] =
     connectionsRegister.getConnection(key)
 
+  def sendMessage(
+      recipient: K,
+      message: M
+  ): F[Either[ConnectionAlreadyClosedException[K], Unit]] = {
+    getConnection(recipient).flatMap {
+      case Some(connection) =>
+        connection
+          .sendMessage(message)
+          .attemptNarrow[ConnectionAlreadyClosed]
+          .flatMap {
+            case Left(_) =>
+              connection.close.map { _ =>
+                Left(ConnectionAlreadyClosedException(recipient))
+              }
+
+            case Right(value) =>
+              Concurrent[F].pure(Right(()))
+          }
+      case None =>
+        Concurrent[F].pure(Left(ConnectionAlreadyClosedException(recipient)))
+    }
+  }
+
   private def callCallBackIfNotClosed(
       handledConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
     cancelToken.tryGet.flatMap {
-      case Some(_) => Concurrent[F].unit
+      case Some(_) => Sync[F].unit
       case None    => connectionFinishCallback(handledConnection)
     }
   }
@@ -104,30 +133,29 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     Iterant
       .repeatEvalF(connectionQueue.poll)
       .mapEval { connection =>
-        Concurrent[F].delay(numberOfRunningConnections.increment()).flatMap {
-          _ =>
-            Iterant
-              .repeatEvalF(
-                withCancelToken(cancelToken, connection.incomingMessage)
-              )
-              .takeWhile(_.isDefined)
-              .map(_.get)
-              .mapEval {
-                case Right(m) =>
-                  messageQueue.offer(
-                    MessageReceived(connection.key, m)
-                  )
-                case Left(e) =>
-                  Concurrent[F].raiseError[Unit](
-                    UnexpectedConnectionError(e, connection.key)
-                  )
-              }
-              .guarantee(
-                closeAndDeregisterConnection(connection)
-                  .flatMap(_ => callCallBackIfNotClosed(connection))
-              )
-              .completedL
-              .start
+        Sync[F].delay(numberOfRunningConnections.increment()).flatMap { _ =>
+          Iterant
+            .repeatEvalF(
+              withCancelToken(cancelToken, connection.incomingMessage)
+            )
+            .takeWhile(_.isDefined)
+            .map(_.get)
+            .mapEval {
+              case Right(m) =>
+                messageQueue.offer(
+                  MessageReceived(connection.key, m)
+                )
+              case Left(e) =>
+                Concurrent[F].raiseError[Unit](
+                  UnexpectedConnectionError(e, connection.key)
+                )
+            }
+            .guarantee(
+              closeAndDeregisterConnection(connection)
+                .flatMap(_ => callCallBackIfNotClosed(connection))
+            )
+            .completedL
+            .start
         }
       }
       .completedL
@@ -138,6 +166,28 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
 }
 
 object ConnectionHandler {
+  case class ConnectionAlreadyClosedException[K](key: K)
+      extends RuntimeException(
+        s"Connection with node ${key}, has already closed"
+      )
+      with NoStackTrace
+
+  private def getConnectionErrorMessage[K](
+      e: ConnectionError,
+      connectionKey: K
+  ): String = {
+    e match {
+      case EncryptedConnectionProvider.DecodingError =>
+        s"Unexpected decoding error on connection with ${connectionKey}"
+      case EncryptedConnectionProvider.UnexpectedError(ex) =>
+        s"Unexpected error ${ex.getMessage} on connection with ${connectionKey}"
+    }
+  }
+
+  case class UnexpectedConnectionError[K](e: ConnectionError, connectionKey: K)
+      extends RuntimeException(getConnectionErrorMessage(e, connectionKey))
+
+  case class MessageReceived[K, M](from: K, message: M)
 
   /** Connection which is already handled by connection handler i.e it is registered in registry and handler is subscribed
     * for incoming messages of that connection

@@ -3,9 +3,9 @@ package io.iohk.metronome.networking
 import cats.data.NonEmptyList
 import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
+import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
 import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
-  MessageReceived,
   RetryConfig
 }
 import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils._

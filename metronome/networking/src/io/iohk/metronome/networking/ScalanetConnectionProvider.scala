@@ -2,12 +2,16 @@ package io.iohk.metronome.networking
 
 import cats.effect.{Resource, Sync}
 import io.iohk.metronome.networking.EncryptedConnectionProvider.{
+  ConnectionAlreadyClosed,
   ConnectionError,
   DecodingError,
   HandshakeFailed,
   UnexpectedError
 }
-import io.iohk.scalanet.peergroup.PeerGroup.ServerEvent
+import io.iohk.scalanet.peergroup.PeerGroup.{
+  ChannelBrokenException,
+  ServerEvent
+}
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.{
   Config,
   FramingConfig,
@@ -37,8 +41,16 @@ object ScalanetConnectionProvider {
       underlyingChannel.to.address.inetSocketAddress
     )
 
-    override def sendMessage(m: M): F[Unit] =
-      TaskLift[F].apply(underlyingChannel.sendMessage(m))
+    override def sendMessage(m: M): F[Unit] = {
+      TaskLift[F].apply(underlyingChannel.sendMessage(m).onErrorRecoverWith {
+        case _: ChannelBrokenException[_] =>
+          Task.raiseError(
+            ConnectionAlreadyClosed(
+              underlyingChannel.to.address.inetSocketAddress
+            )
+          )
+      })
+    }
 
     override def incomingMessage: F[Option[Either[ConnectionError, M]]] = {
       TaskLift[F].apply(underlyingChannel.nextChannelEvent.map {

@@ -2,6 +2,7 @@ package io.iohk.metronome.networking
 
 import cats.effect.concurrent.{Deferred, Ref, TryableDeferred}
 import cats.implicits.toFlatMapOps
+import io.iohk.metronome.networking.EncryptedConnectionProvider.ConnectionAlreadyClosed
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
 import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils.{
   Secp256k1Key,
@@ -211,7 +212,7 @@ object MockEncryptedConnectionProvider {
         .race(closeToken.get, sentMessages.update(current => m :: current))
         .flatMap {
           case Left(_) =>
-            Task.raiseError(new RuntimeException("Channel already closed"))
+            Task.raiseError(ConnectionAlreadyClosed(remotePeerInfo._2))
           case Right(_) => Task.now(())
         }
   }

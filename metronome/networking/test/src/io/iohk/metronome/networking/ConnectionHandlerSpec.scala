@@ -8,7 +8,10 @@ import scala.concurrent.duration._
 import RemoteConnectionManagerTestUtils._
 import cats.effect.Resource
 import cats.effect.concurrent.Deferred
-import io.iohk.metronome.networking.ConnectionHandler.HandledConnection
+import io.iohk.metronome.networking.ConnectionHandler.{
+  ConnectionAlreadyClosedException,
+  HandledConnection
+}
 import io.iohk.metronome.networking.ConnectionHandlerSpec.{
   buildHandlerResource,
   buildNConnections,
@@ -18,6 +21,9 @@ import io.iohk.metronome.networking.MockEncryptedConnectionProvider.MockEncrypte
 import monix.eval.Task
 import ConnectionHandlerSpec._
 import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
+import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
+
+import java.net.InetSocketAddress
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
   implicit val testScheduler =
@@ -30,11 +36,64 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
     buildHandlerResource()
   ) { handler =>
     for {
-      handledConnection1 <- newHandledConnection
-      _                  <- handler.registerIfAbsent(handledConnection1._1)
+      handledConnection1 <- newHandledConnection()
+      _                  <- handler.registerOrClose(handledConnection1._1)
       connections        <- handler.getAllActiveConnections
     } yield {
       assert(connections.contains(handledConnection1._1.key))
+    }
+  }
+
+  it should "send message to registered connection" in customTestCaseResourceT(
+    buildHandlerResource()
+  ) { handler =>
+    for {
+      handledConnection1 <- newHandledConnection()
+      _                  <- handler.registerOrClose(handledConnection1._1)
+      connections        <- handler.getAllActiveConnections
+      sendResult         <- handler.sendMessage(handledConnection1._1.key, MessageA(1))
+    } yield {
+      assert(connections.contains(handledConnection1._1.key))
+      assert(sendResult.isRight)
+    }
+  }
+
+  it should "fail to send message to un-registered connection" in customTestCaseResourceT(
+    buildHandlerResource()
+  ) { handler =>
+    for {
+      handledConnection1 <- newHandledConnection()
+      connections        <- handler.getAllActiveConnections
+      sendResult         <- handler.sendMessage(handledConnection1._1.key, MessageA(1))
+    } yield {
+      assert(connections.isEmpty)
+      assert(sendResult.isLeft)
+      assert(
+        sendResult.left.getOrElse(null) == ConnectionAlreadyClosedException(
+          handledConnection1._1.key
+        )
+      )
+    }
+  }
+
+  it should "fail to send message silently failed peer" in customTestCaseResourceT(
+    buildHandlerResource()
+  ) { handler =>
+    for {
+      handledConnection1 <- newHandledConnection()
+      (handled, underLaying) = handledConnection1
+      _           <- underLaying.closeRemoteWithoutInfo
+      _           <- handler.registerOrClose(handledConnection1._1)
+      connections <- handler.getAllActiveConnections
+      sendResult  <- handler.sendMessage(handledConnection1._1.key, MessageA(1))
+    } yield {
+      assert(connections.contains(handledConnection1._1.key))
+      assert(sendResult.isLeft)
+      assert(
+        sendResult.left.getOrElse(null) == ConnectionAlreadyClosedException(
+          handledConnection1._1.key
+        )
+      )
     }
   }
 
@@ -42,14 +101,16 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
     buildHandlerResource()
   ) { handler =>
     for {
-      handledConnection <- newHandledConnection
+      handledConnection <- newHandledConnection()
+      duplicatedConnection <- newHandledConnection(remotePeerInfo =
+        (handledConnection._1.key, handledConnection._1.serverAddress)
+      )
       (handled, underlyingEncrypted) = handledConnection
-      _                           <- handler.registerIfAbsent(handled)
+      _                           <- handler.registerOrClose(handled)
       connections                 <- handler.getAllActiveConnections
-      _                           <- handler.registerIfAbsent(handled)
+      _                           <- handler.registerOrClose(duplicatedConnection._1)
       connectionsAfterDuplication <- handler.getAllActiveConnections
-      closedAfterDuplication      <- underlyingEncrypted.isClosed
-
+      closedAfterDuplication      <- duplicatedConnection._2.isClosed
     } yield {
       assert(connections.contains(handled.key))
       assert(connectionsAfterDuplication.contains(handled.key))
@@ -65,7 +126,7 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
       (handler, release) = handlerAndRelease
       connections <- buildNConnections(expectedNumberOfConnections)
       _ <- Task.traverse(connections)(connection =>
-        handler.registerIfAbsent(connection._1)
+        handler.registerOrClose(connection._1)
       )
       maxNumberOfActiveConnections <- handler.numberOfActiveConnections
         .waitFor(numOfConnections =>
@@ -87,9 +148,9 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
       cb                <- Deferred.tryable[Task, Unit]
       handlerAndRelease <- buildHandlerResource(_ => cb.complete(())).allocated
       (handler, release) = handlerAndRelease
-      connection <- newHandledConnection
+      connection <- newHandledConnection()
       (handledConnection, underlyingEncrypted) = connection
-      _              <- handler.registerIfAbsent(handledConnection)
+      _              <- handler.registerOrClose(handledConnection)
       numberOfActive <- handler.numberOfActiveConnections.waitFor(_ == 1)
       _              <- underlyingEncrypted.pushRemoteEvent(None)
       numberOfActiveAfterDisconnect <- handler.numberOfActiveConnections
@@ -108,9 +169,9 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
       cb                <- Deferred.tryable[Task, Unit]
       handlerAndRelease <- buildHandlerResource(_ => cb.complete(())).allocated
       (handler, release) = handlerAndRelease
-      connection <- newHandledConnection
+      connection <- newHandledConnection()
       (handledConnection, underlyingEncrypted) = connection
-      _              <- handler.registerIfAbsent(handledConnection)
+      _              <- handler.registerOrClose(handledConnection)
       numberOfActive <- handler.numberOfActiveConnections.waitFor(_ == 1)
       _              <- underlyingEncrypted.pushRemoteEvent(Some(Left(DecodingError)))
       numberOfActiveAfterError <- handler.numberOfActiveConnections
@@ -129,9 +190,9 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
       cb                <- Deferred.tryable[Task, Unit]
       handlerAndRelease <- buildHandlerResource(_ => cb.complete(())).allocated
       (handler, release) = handlerAndRelease
-      connection <- newHandledConnection
+      connection <- newHandledConnection()
       (handledConnection, underlyingEncrypted) = connection
-      _              <- handler.registerIfAbsent(handledConnection)
+      _              <- handler.registerOrClose(handledConnection)
       numberOfActive <- handler.numberOfActiveConnections.waitFor(_ == 1)
       _              <- release
       numberOfActiveAfterDisconnect <- handler.numberOfActiveConnections
@@ -151,7 +212,7 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
     for {
       connections <- buildNConnections(expectedNumberOfConnections)
       _ <- Task.traverse(connections)(connection =>
-        handler.registerIfAbsent(connection._1)
+        handler.registerOrClose(connection._1)
       )
       maxNumberOfActiveConnections <- handler.numberOfActiveConnections
         .waitFor(numOfConnections =>
@@ -192,7 +253,10 @@ object ConnectionHandlerSpec {
       .apply[Task, Secp256k1Key, TestMessage](cb)
   }
 
-  def newHandledConnection(implicit
+  def newHandledConnection(
+      remotePeerInfo: (Secp256k1Key, InetSocketAddress) =
+        (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
+  )(implicit
       s: Scheduler
   ): Task[
     (
@@ -201,7 +265,7 @@ object ConnectionHandlerSpec {
     )
   ] = {
     for {
-      enc <- MockEncryptedConnection()
+      enc <- MockEncryptedConnection(remotePeerInfo)
     } yield (HandledConnection.outgoing(enc), enc)
   }
 
@@ -213,7 +277,7 @@ object ConnectionHandlerSpec {
         MockEncryptedConnection
     )
   ]] = {
-    Task.traverse((0 until n).toList)(_ => newHandledConnection)
+    Task.traverse((0 until n).toList)(_ => newHandledConnection())
   }
 
 }
