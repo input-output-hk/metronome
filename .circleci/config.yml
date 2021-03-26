@@ -61,7 +61,6 @@ jobs:
             or:
               - equal: [ master, << pipeline.git.branch >> ]
               - equal: [ develop, << pipeline.git.branch >> ]
-              - equal: [ PM-3093-publish, << pipeline.git.branch >> ]
           steps:
             - run:
                 name: install gpg2

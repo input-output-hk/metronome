@@ -6,7 +6,7 @@ echo $GPG_KEY | base64 --decode | gpg --batch --import
 
 gpg --passphrase $GPG_PASSPHRASE --batch --yes -a -b LICENSE
 
-if [[ "$CIRCLE_BRANCH" == "develop" || "$CIRCLE_BRANCH" == "PM-3093-publish" ]]; then
+if [[ "$CIRCLE_BRANCH" == "develop" ]]; then
 
 mill mill.scalalib.PublishModule/publishAll \
     __.publishArtifacts \
