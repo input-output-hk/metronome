@@ -15,6 +15,7 @@ object VersionOf {
   val config           = "1.4.1"
   val `kind-projector` = "0.11.3"
   val logback          = "1.2.3"
+  val mantis           = "3.2.1-SNAPSHOT"
   val monix            = "3.3.0"
   val prometheus       = "0.10.0"
   val rocksdb          = "6.15.2"
@@ -73,6 +74,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def ivyDeps = Agg(
       ivy"org.typelevel::cats-core:${VersionOf.cats}",
       ivy"org.typelevel::cats-effect:${VersionOf.cats}"
+    )
+
+    override def repositories = super.repositories ++ Seq(
+      MavenRepository("https://oss.sonatype.org/content/repositories/snapshots")
     )
 
     override def scalacOptions = Seq(
@@ -174,7 +179,14 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def description: String =
       "Cryptographic primitives to support HotStuff and BFT proof verification."
 
-    // TODO: Use crypto library from Mantis.
+    override def moduleDeps: Seq[PublishModule] =
+      Seq(core)
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.iohk::mantis-crypto:${VersionOf.mantis}",
+      ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}"
+    )
+
     object test extends TestModule
   }
 
