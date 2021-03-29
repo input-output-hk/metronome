@@ -61,6 +61,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           "lemastero",
           "Piotr Paradzinski",
           "https://github.com/lemastero"
+        ),
+        Developer(
+          "KonradStaniec",
+          "Konrad Staniec",
+          "https://github.com/KonradStaniec"
         )
       )
     )
@@ -145,11 +150,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     )
   }
 
-  /** Generic Peer-to-Peer components that can multiplex protocols
-    * from different modules over a single authenticated TLS connection.
-    */
-  object networking extends SubModule
-
   /** Storage abstractions, e.g. a generic key-value store. */
   object storage extends SubModule {
     override def ivyDeps = super.ivyDeps() ++ Agg(
@@ -190,6 +190,20 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     object test extends TestModule
   }
 
+  /** Generic Peer-to-Peer components that can multiplex protocols
+    * from different modules over a single authenticated TLS connection.
+    */
+  object networking extends SubModule {
+    override def moduleDeps: Seq[JavaModule] =
+      Seq(tracing, crypto)
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.iohk::scalanet:${VersionOf.scalanet}"
+    )
+
+    object test extends TestModule
+  }
+
   /** Generic HotStuff BFT library. */
   object hotstuff extends SubModule {
 
@@ -210,7 +224,14 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       */
     object service extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
-        Seq(storage, tracing, crypto, hotstuff.consensus, hotstuff.forensics)
+        Seq(
+          storage,
+          tracing,
+          crypto,
+          networking,
+          hotstuff.consensus,
+          hotstuff.forensics
+        )
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"io.iohk::scalanet:${VersionOf.scalanet}"
