@@ -12,6 +12,7 @@ object versionFile extends VersionFileModule
 
 object VersionOf {
   val cats             = "2.3.1"
+  val circe            = "0.12.3"
   val config           = "1.4.1"
   val `kind-projector` = "0.11.3"
   val logback          = "1.2.3"
@@ -201,7 +202,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"io.iohk::scalanet:${VersionOf.scalanet}"
     )
 
-    object test extends TestModule
+    object test extends TestModule {
+      override def moduleDeps: Seq[JavaModule] =
+        super.moduleDeps ++ Seq(logging)
+    }
   }
 
   /** Generic HotStuff BFT library. */
@@ -298,7 +302,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       Seq(tracing)
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"com.typesafe.scala-logging::scala-logging:${VersionOf.scalalogging}"
+      ivy"com.typesafe.scala-logging::scala-logging:${VersionOf.scalalogging}",
+      ivy"io.circe::circe-core:${VersionOf.circe}"
     )
   }
 

@@ -1,7 +1,7 @@
 package io.iohk.metronome.networking
 
 import cats.implicits._
-import io.iohk.tracer.Tracer
+import io.iohk.metronome.tracer.Tracer
 
 case class NetworkTracers[F[_], K, M](
     registered: Tracer[F, ConnectionHandler.HandledConnection[F, K, M]],

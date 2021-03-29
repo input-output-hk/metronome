@@ -18,7 +18,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.
   fakeLocalAddress,
   longRetryConfig
 }
-import io.iohk.tracer.Tracer
+import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
 import monix.execution.Scheduler
 import org.scalatest.flatspec.AsyncFlatSpecLike

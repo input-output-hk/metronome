@@ -22,9 +22,8 @@ import monix.eval.Task
 import ConnectionHandlerSpec._
 import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
-
+import io.iohk.metronome.tracer.Tracer
 import java.net.InetSocketAddress
-import io.iohk.tracer.Tracer
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
   implicit val testScheduler =

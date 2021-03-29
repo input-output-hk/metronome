@@ -2,7 +2,8 @@ package io.iohk.metronome.networking
 
 import cats.data.NonEmptyList
 import cats.effect.concurrent.Ref
-import cats.effect.{Concurrent, ContextShift, Resource, Timer}
+import cats.effect.{Concurrent, ContextShift, Resource, Timer, Sync}
+import io.circe.{Json, JsonObject, Encoder}
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
 import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
@@ -13,16 +14,16 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   Cluster,
   buildTestConnectionManager
 }
+import io.iohk.metronome.tracer.Tracer
+import io.iohk.metronome.logging.{HybridLogObject, HybridLog}
 import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
-import io.iohk.tracer.Tracer
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.flatspec.AsyncFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import scodec.Codec
-
 import java.net.InetSocketAddress
 import java.security.SecureRandom
 import scala.concurrent.duration._
@@ -32,6 +33,8 @@ import cats.Applicative
 class RemoteConnectionManagerWithScalanetProviderSpec
     extends AsyncFlatSpecLike
     with Matchers {
+  import RemoteConnectionManagerWithScalanetProviderSpec.secp256k1Encoder
+
   implicit val testScheduler =
     Scheduler.fixedPool(
       "RemoteConnectionManagerSpec",
@@ -131,12 +134,59 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
   val testIncomingQueueSize = 20
 
-  implicit def tracers[F[_]: Applicative, K, M]: NetworkTracers[F, K, M] =
-    NetworkTracers(Tracer.noOpTracer)
+  implicit val secp256k1Encoder: Encoder[Secp256k1Key] =
+    Encoder.instance(key => Json.fromString(key.key.toHex))
+
+  // Just an example of printing logs to STDOUT.
+  // We could instead collect them in memory on a test by test basis.
+  val printLogs = false
+
+  // Just an example of setting up logging.
+  implicit def tracers[F[_]: Sync, K: io.circe.Encoder, M]
+      : NetworkTracers[F, K, M] = {
+    import cats.implicits._
+    import io.circe.syntax._
+    import NetworkEvent._
+
+    val hybridLog: HybridLog[NetworkEvent[K]] =
+      HybridLog.instance[NetworkEvent[K]](
+        source = "networking".some,
+        level = _ => HybridLogObject.Level.Debug,
+        message = {
+          case _: ConnectionRegistered[_]   => "Connection registered."
+          case _: ConnectionDeregistered[_] => "Connection deregistered."
+          case _: ConnectionDiscarded[_]    => "Connection discarded."
+          case _: ConnectionFailed[_]       => "Connection failed."
+        },
+        event = {
+          case e: ConnectionRegistered[_]   => JsonObject("key" -> e.key.asJson)
+          case e: ConnectionDeregistered[_] => JsonObject("key" -> e.key.asJson)
+          case e: ConnectionDiscarded[_]    => JsonObject("key" -> e.key.asJson)
+          case e: ConnectionFailed[_] =>
+            JsonObject(
+              "key" -> e.failure.connectionRequest.key.asJson,
+              "err" -> e.failure.err.getMessage.asJson
+            )
+        }
+      )
+
+    val logTracer: Tracer[F, HybridLogObject] =
+      Tracer.showTracing {
+        new Tracer[F, String] {
+          override def apply(a: => String): F[Unit] =
+            Sync[F].delay(println(a)).whenA(printLogs)
+        }
+      }
+
+    val networkEventTracer: Tracer[F, NetworkEvent[K]] =
+      logTracer.contramap(event => hybridLog(event))
+
+    NetworkTracers(networkEventTracer)
+  }
 
   def buildTestConnectionManager[
       F[_]: Concurrent: TaskLift: TaskLike: Timer,
-      K: Codec,
+      K: Codec: Encoder,
       M: Codec
   ](
       bindAddress: InetSocketAddress = randomAddress(),

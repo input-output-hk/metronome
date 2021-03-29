@@ -1,4 +1,4 @@
-package io.iohk.tracer
+package io.iohk.metronome.tracer
 
 import language.higherKinds
 import cats.{Applicative, Contravariant, FlatMap, Id, Monad, Monoid, Show, ~>}
@@ -17,6 +17,8 @@ object Tracer {
     * - how to enrich type A that is traced
     * - how to squeeze B's to create A's (possibly enrich B with extra stuff, or forget some details)
     * then you have Tracer for B
+    *
+    * To use this, just import `cats` syntax for `Contravariant` and call `.contramap` on `A`.
     */
   implicit def contraTracer[F[_]]: Contravariant[Tracer[F, *]] =
     new Contravariant[Tracer[F, *]] {
