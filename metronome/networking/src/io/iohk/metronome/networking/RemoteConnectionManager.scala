@@ -40,7 +40,7 @@ class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
     connectionHandler.sendMessage(recipient, message)
   }
 }
-//TODO add logging
+
 object RemoteConnectionManager {
   case class ConnectionSuccess[F[_], K, M](
       encryptedConnection: EncryptedConnection[F, K, M]
@@ -170,7 +170,7 @@ object RemoteConnectionManager {
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       connectionsHandler: ConnectionHandler[F, K, M],
       retryConfig: RetryConfig
-  ): F[Unit] = {
+  )(implicit tracers: NetworkTracers[F, K, M]): F[Unit] = {
 
     /** Observable is used here as streaming primitive as it has richer api than Iterant and have mapParallelUnorderedF
       * combinator, which makes it possible to have multiple concurrent retry timers, which are cancelled when whole
@@ -184,11 +184,11 @@ object RemoteConnectionManager {
       }
       .mapParallelUnorderedF(Integer.MAX_VALUE) {
         case Left(failure) =>
-          //TODO add logging of failure
           val failureToLog = failure.err
-          retryConnection(retryConfig, failure.connectionRequest).flatMap(
-            updatedRequest => connectionsToAcquire.offer(updatedRequest)
-          )
+          tracers.failed(failure) >>
+            retryConnection(retryConfig, failure.connectionRequest).flatMap(
+              updatedRequest => connectionsToAcquire.offer(updatedRequest)
+            )
         case Right(connection) =>
           val newOutgoingConnections =
             HandledConnection.outgoing(connection.encryptedConnection)
@@ -308,7 +308,8 @@ object RemoteConnectionManager {
       clusterConfig: ClusterConfig[K],
       retryConfig: RetryConfig
   )(implicit
-      cs: ContextShift[F]
+      cs: ContextShift[F],
+      tracers: NetworkTracers[F, K, M]
   ): Resource[F, RemoteConnectionManager[F, K, M]] = {
     for {
       connectionsToAcquireQueue <- Resource.liftF(
@@ -341,11 +342,13 @@ object RemoteConnectionManager {
         connectionsHandler,
         retryConfig
       ).background
+
       _ <- handleServerConnections(
         encryptedConnectionsProvider,
         connectionsHandler,
         clusterConfig
       ).background
+
     } yield new RemoteConnectionManager[F, K, M](
       connectionsHandler,
       encryptedConnectionsProvider.localPeerInfo

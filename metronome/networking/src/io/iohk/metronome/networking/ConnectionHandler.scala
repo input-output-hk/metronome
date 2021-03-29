@@ -28,7 +28,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
     cancelToken: TryableDeferred[F, Unit],
     connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
-) {
+)(implicit tracers: NetworkTracers[F, K, M]) {
 
   private val numberOfRunningConnections = AtomicInt(0)
 
@@ -36,6 +36,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       handledConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
     for {
+      _ <- tracers.deregistered(handledConnection)
       _ <- Concurrent[F].delay(numberOfRunningConnections.decrement())
       _ <- connectionsRegister.deregisterConnection(handledConnection)
       _ <- handledConnection.close
@@ -54,9 +55,12 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       case Some(_) =>
         //TODO [PM-3092] for now we are closing any new connections in case of conflict, we may investigate other strategies
         // like keeping old for outgoing and replacing for incoming
-        possibleNewConnection.close
+        tracers.discarded(possibleNewConnection) >>
+          possibleNewConnection.close
+
       case None =>
-        connectionQueue.offer(possibleNewConnection)
+        tracers.registered(possibleNewConnection) >>
+          connectionQueue.offer(possibleNewConnection)
     }
   }
 
@@ -241,6 +245,8 @@ object ConnectionHandler {
 
   private def buildHandler[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
+  )(implicit
+      tracers: NetworkTracers[F, K, M]
   ): F[ConnectionHandler[F, K, M]] = {
     for {
       cancelToken         <- Deferred.tryable[F, Unit]
@@ -263,6 +269,8 @@ object ConnectionHandler {
     */
   def apply[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
+  )(implicit
+      tracers: NetworkTracers[F, K, M]
   ): Resource[F, ConnectionHandler[F, K, M]] = {
     Resource
       .make(buildHandler(connectionFinishCallback)) { handler =>

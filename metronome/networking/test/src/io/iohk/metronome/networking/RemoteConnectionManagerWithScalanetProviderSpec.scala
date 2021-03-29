@@ -15,6 +15,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
 }
 import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
+import io.iohk.tracer.Tracer
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
@@ -26,6 +27,7 @@ import java.net.InetSocketAddress
 import java.security.SecureRandom
 import scala.concurrent.duration._
 import monix.execution.UncaughtExceptionReporter
+import cats.Applicative
 
 class RemoteConnectionManagerWithScalanetProviderSpec
     extends AsyncFlatSpecLike
@@ -128,6 +130,9 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   val standardFraming =
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
   val testIncomingQueueSize = 20
+
+  implicit def tracers[F[_]: Applicative, K, M]: NetworkTracers[F, K, M] =
+    NetworkTracers(Tracer.noOpTracer)
 
   def buildTestConnectionManager[
       F[_]: Concurrent: TaskLift: TaskLike: Timer,

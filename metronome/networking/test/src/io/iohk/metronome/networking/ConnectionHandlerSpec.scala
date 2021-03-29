@@ -24,6 +24,7 @@ import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
 
 import java.net.InetSocketAddress
+import io.iohk.tracer.Tracer
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
   implicit val testScheduler =
@@ -244,6 +245,9 @@ object ConnectionHandlerSpec {
       task.restartUntil(condition).timeout(timeOut)
     }
   }
+
+  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+    NetworkTracers(Tracer.noOpTracer)
 
   def buildHandlerResource(
       cb: HandledConnection[Task, Secp256k1Key, TestMessage] => Task[Unit] =
