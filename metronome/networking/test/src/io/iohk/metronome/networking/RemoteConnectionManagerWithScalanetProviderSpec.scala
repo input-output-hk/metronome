@@ -14,7 +14,6 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   Cluster,
   buildTestConnectionManager
 }
-import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.logging.{HybridLogObject, HybridLog, LogTracer}
 import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
@@ -28,7 +27,6 @@ import java.net.InetSocketAddress
 import java.security.SecureRandom
 import scala.concurrent.duration._
 import monix.execution.UncaughtExceptionReporter
-import cats.Applicative
 
 class RemoteConnectionManagerWithScalanetProviderSpec
     extends AsyncFlatSpecLike
@@ -140,7 +138,6 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   // Just an example of setting up logging.
   implicit def tracers[F[_]: Sync, K: io.circe.Encoder, M]
       : NetworkTracers[F, K, M] = {
-    import cats.implicits._
     import io.circe.syntax._
     import NetworkEvent._
 

@@ -3,7 +3,6 @@ package io.iohk.metronome.logging
 import io.circe.JsonObject
 import io.circe.syntax._
 import java.time.Instant
-import scala.reflect.ClassTag
 import cats.Show
 
 /** A hybrid log has a human readable message, which is intended to be static,
