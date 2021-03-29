@@ -1,7 +1,7 @@
 package metronome.hotstuff.consensus.basic
 
 import metronome.crypto.{GroupSignature, PartialSignature}
-import metronome.hotstuff.consensus.{ViewNumber, Federation}
+import metronome.hotstuff.consensus.{ViewNumber, Federation, LeaderSelection}
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Properties, Gen, Prop}
 import org.scalacheck.Arbitrary.arbitrary
@@ -47,6 +47,8 @@ object HotStuffProtocolCommands extends Commands {
     override def blockHash(b: TestBlock)       = b.blockHash
     override def parentBlockHash(b: TestBlock) = b.parentBlockHash
   }
+
+  implicit val leaderSelection = LeaderSelection.Hashing
 
   // Going to use publicKey == -1 * signingKey.
   def mockSigningKey(pk: TestAgreement.PKey): TestAgreement.SKey = -1 * pk
@@ -149,8 +151,9 @@ object HotStuffProtocolCommands extends Commands {
     // Using a signing key that works with the mock validation.
     def signingKey = mockSigningKey(publicKey)
 
-    def isLeader = viewNumber % n == ownIndex
-    def leader   = federation((viewNumber % n).toInt)
+    def leaderIndex = leaderSelection.leaderOf(viewNumber, n)
+    def isLeader    = leaderIndex == ownIndex
+    def leader      = federation(leaderIndex)
 
     def quorumSize = (n + f) / 2 + 1
   }

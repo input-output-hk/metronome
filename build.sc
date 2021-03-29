@@ -15,6 +15,7 @@ object VersionOf {
   val config           = "1.4.1"
   val `kind-projector` = "0.11.3"
   val logback          = "1.2.3"
+  val mantis           = "3.2.1-SNAPSHOT"
   val monix            = "3.3.0"
   val prometheus       = "0.10.0"
   val rocksdb          = "6.15.2"
@@ -25,7 +26,6 @@ object VersionOf {
   val shapeless        = "2.3.3"
   val `scodec-core`    = "1.11.7"
   val `scodec-bits`    = "1.1.12"
-  val `mantis-crypto`  = "3.2.1-SNAPSHOT"
 }
 
 // Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
@@ -150,20 +150,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     )
   }
 
-  /** Generic Peer-to-Peer components that can multiplex protocols
-    * from different modules over a single authenticated TLS connection.
-    */
-  object networking extends SubModule {
-    override def moduleDeps: Seq[JavaModule] =
-      Seq(tracing, crypto)
-
-    override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"io.iohk::scalanet:${VersionOf.scalanet}"
-    )
-
-    object test extends TestModule
-  }
-
   /** Storage abstractions, e.g. a generic key-value store. */
   object storage extends SubModule {
     override def ivyDeps = super.ivyDeps() ++ Agg(
@@ -193,9 +179,26 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def description: String =
       "Cryptographic primitives to support HotStuff and BFT proof verification."
 
+    override def moduleDeps: Seq[PublishModule] =
+      Seq(core)
+
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"io.iohk::mantis-crypto:${VersionOf.`mantis-crypto`}",
+      ivy"io.iohk::mantis-crypto:${VersionOf.mantis}",
       ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}"
+    )
+
+    object test extends TestModule
+  }
+
+  /** Generic Peer-to-Peer components that can multiplex protocols
+    * from different modules over a single authenticated TLS connection.
+    */
+  object networking extends SubModule {
+    override def moduleDeps: Seq[JavaModule] =
+      Seq(tracing, crypto)
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.iohk::scalanet:${VersionOf.scalanet}"
     )
 
     object test extends TestModule
@@ -221,7 +224,14 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       */
     object service extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
-        Seq(storage, tracing, crypto, hotstuff.consensus, hotstuff.forensics)
+        Seq(
+          storage,
+          tracing,
+          crypto,
+          networking,
+          hotstuff.consensus,
+          hotstuff.forensics
+        )
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"io.iohk::scalanet:${VersionOf.scalanet}"

@@ -7,6 +7,8 @@ import org.scalatest.prop.TableDrivenPropertyChecks._
 
 class FederationSpec extends AnyFlatSpec with Matchers with Inside {
 
+  implicit val ls = LeaderSelection.RoundRobin
+
   behavior of "Federation"
 
   it should "not create an empty federation" in {

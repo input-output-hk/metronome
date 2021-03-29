@@ -59,6 +59,12 @@ To run a single test class, use the `.single` method with the full path to the s
 mill __.storage.test.single io.iohk.metronome.storage.KVStoreStateSpec
 ```
 
+To experiment with the code, start an interactive session:
+
+```console
+mill -i metronome[2.13.4].hotstuff.consensus.console
+```
+
 ### Formatting the codebase
 
 Please configure your editor to use `scalafmt` on save. CI will be configured to check formatting.

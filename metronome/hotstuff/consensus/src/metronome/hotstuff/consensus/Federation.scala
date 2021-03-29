@@ -27,7 +27,7 @@ abstract case class Federation[PKey](
     publicKeys: IndexedSeq[PKey],
     // Maximum number of Byzantine nodes.
     maxFaulty: Int
-) {
+)(implicit ls: LeaderSelection) {
   private val publicKeySet = publicKeys.toSet
 
   /** Size of the federation. */
@@ -40,7 +40,7 @@ abstract case class Federation[PKey](
     publicKeySet.contains(publicKey)
 
   def leaderOf(viewNumber: ViewNumber): PKey =
-    publicKeys((viewNumber % size).toInt)
+    publicKeys(implicitly[LeaderSelection].leaderOf(viewNumber, size))
 }
 
 object Federation {
@@ -48,7 +48,7 @@ object Federation {
   /** Create a federation with the highest possible fault tolerance. */
   def apply[PKey](
       publicKeys: IndexedSeq[PKey]
-  ): Either[String, Federation[PKey]] =
+  )(implicit ls: LeaderSelection): Either[String, Federation[PKey]] =
     apply(publicKeys, maxByzantine(publicKeys.size))
 
   /** Create a federation with the fault tolerance possibly reduced from the theoretical
@@ -59,7 +59,7 @@ object Federation {
   def apply[PKey](
       publicKeys: IndexedSeq[PKey],
       maxFaulty: Int
-  ): Either[String, Federation[PKey]] = {
+  )(implicit ls: LeaderSelection): Either[String, Federation[PKey]] = {
     val f = maxByzantine(publicKeys.size)
     if (publicKeys.isEmpty) {
       Left("The federation cannot be empty!")

@@ -13,6 +13,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   Cluster,
   buildTestConnectionManager
 }
+import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
@@ -24,12 +25,24 @@ import scodec.Codec
 import java.net.InetSocketAddress
 import java.security.SecureRandom
 import scala.concurrent.duration._
+import monix.execution.UncaughtExceptionReporter
 
 class RemoteConnectionManagerWithScalanetProviderSpec
     extends AsyncFlatSpecLike
     with Matchers {
   implicit val testScheduler =
-    Scheduler.fixedPool("RemoteConnectionManagerSpec", 16)
+    Scheduler.fixedPool(
+      "RemoteConnectionManagerSpec",
+      16,
+      reporter = UncaughtExceptionReporter {
+        case ex: IllegalStateException
+            if ex.getMessage.contains("executor not accepting a task") =>
+        case ex: PeerGroup.ChannelBrokenException[_] =>
+        // Probably test already closed with some task running in the background.
+        case ex =>
+          UncaughtExceptionReporter.default.reportFailure(ex)
+      }
+    )
 
   implicit val timeOut = 10.seconds
 
