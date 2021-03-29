@@ -13,6 +13,14 @@ trait Tracer[F[_], -A] {
 
 object Tracer {
 
+  def instance[F[_], A](f: (=> A) => F[Unit]): Tracer[F, A] =
+    new Tracer[F, A] {
+      override def apply(a: => A): F[Unit] = f(a)
+    }
+
+  def const[F[_], A](f: F[Unit]): Tracer[F, A] =
+    instance(_ => f)
+
   /** If you know:
     * - how to enrich type A that is traced
     * - how to squeeze B's to create A's (possibly enrich B with extra stuff, or forget some details)
