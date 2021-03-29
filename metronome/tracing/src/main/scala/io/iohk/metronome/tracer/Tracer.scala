@@ -3,7 +3,7 @@ package io.iohk.metronome.tracer
 import language.higherKinds
 import cats.{Applicative, Contravariant, FlatMap, Id, Monad, Monoid, Show, ~>}
 
-/** Contravariant tracer
+/** Contravariant tracer.
   *
   * Ported from https://github.com/input-output-hk/contra-tracer/blob/master/src/Control/Tracer.hs
   */

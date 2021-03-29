@@ -29,6 +29,7 @@ object HybridLogObject {
     case object Warn  extends Level
     case object Info  extends Level
     case object Debug extends Level
+    case object Trace extends Level
   }
 
   implicit val show: Show[HybridLogObject] = Show.show {

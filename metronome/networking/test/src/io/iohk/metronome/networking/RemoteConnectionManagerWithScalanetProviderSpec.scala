@@ -15,7 +15,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   buildTestConnectionManager
 }
 import io.iohk.metronome.tracer.Tracer
-import io.iohk.metronome.logging.{HybridLogObject, HybridLog}
+import io.iohk.metronome.logging.{HybridLogObject, HybridLog, LogTracer}
 import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
@@ -137,10 +137,6 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   implicit val secp256k1Encoder: Encoder[Secp256k1Key] =
     Encoder.instance(key => Json.fromString(key.key.toHex))
 
-  // Just an example of printing logs to STDOUT.
-  // We could instead collect them in memory on a test by test basis.
-  val printLogs = false
-
   // Just an example of setting up logging.
   implicit def tracers[F[_]: Sync, K: io.circe.Encoder, M]
       : NetworkTracers[F, K, M] = {
@@ -148,40 +144,26 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     import io.circe.syntax._
     import NetworkEvent._
 
-    val hybridLog: HybridLog[NetworkEvent[K]] =
+    def peerJson(key: K, address: InetSocketAddress) =
+      JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
+
+    implicit val hybridLog: HybridLog[NetworkEvent[K]] =
       HybridLog.instance[NetworkEvent[K]](
-        source = "networking".some,
         level = _ => HybridLogObject.Level.Debug,
-        message = {
-          case _: ConnectionRegistered[_]   => "Connection registered."
-          case _: ConnectionDeregistered[_] => "Connection deregistered."
-          case _: ConnectionDiscarded[_]    => "Connection discarded."
-          case _: ConnectionFailed[_]       => "Connection failed."
-        },
+        message = _.getClass.getSimpleName,
         event = {
-          case e: ConnectionRegistered[_]   => JsonObject("key" -> e.key.asJson)
-          case e: ConnectionDeregistered[_] => JsonObject("key" -> e.key.asJson)
-          case e: ConnectionDiscarded[_]    => JsonObject("key" -> e.key.asJson)
+          case e: ConnectionRegistered[_]   => peerJson(e.key, e.address)
+          case e: ConnectionDeregistered[_] => peerJson(e.key, e.address)
+          case e: ConnectionDiscarded[_]    => peerJson(e.key, e.address)
           case e: ConnectionFailed[_] =>
-            JsonObject(
-              "key" -> e.failure.connectionRequest.key.asJson,
-              "err" -> e.failure.err.getMessage.asJson
-            )
+            peerJson(
+              e.failure.connectionRequest.key,
+              e.failure.connectionRequest.address
+            ).add("err", e.failure.err.getMessage.asJson)
         }
       )
 
-    val logTracer: Tracer[F, HybridLogObject] =
-      Tracer.showTracing {
-        new Tracer[F, String] {
-          override def apply(a: => String): F[Unit] =
-            Sync[F].delay(println(a)).whenA(printLogs)
-        }
-      }
-
-    val networkEventTracer: Tracer[F, NetworkEvent[K]] =
-      logTracer.contramap(event => hybridLog(event))
-
-    NetworkTracers(networkEventTracer)
+    NetworkTracers(LogTracer.hybrid[F, NetworkEvent[K]])
   }
 
   def buildTestConnectionManager[

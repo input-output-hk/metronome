@@ -11,7 +11,7 @@
 
     <logger name="io.iohk.scalanet.peergroup" level="OFF"/>
 
-    <root level="WARN">
+    <root level="ERROR">
         <appender-ref ref="STDOUT"/>
     </root>
 

@@ -8,17 +8,17 @@ sealed trait NetworkEvent[K]
 object NetworkEvent {
   case class ConnectionRegistered[K](
       key: K,
-      serverAddress: InetSocketAddress
+      address: InetSocketAddress
   ) extends NetworkEvent[K]
 
   case class ConnectionDeregistered[K](
       key: K,
-      serverAddress: InetSocketAddress
+      address: InetSocketAddress
   ) extends NetworkEvent[K]
 
   case class ConnectionDiscarded[K](
       key: K,
-      serverAddress: InetSocketAddress
+      address: InetSocketAddress
   ) extends NetworkEvent[K]
 
   case class ConnectionFailed[K](
