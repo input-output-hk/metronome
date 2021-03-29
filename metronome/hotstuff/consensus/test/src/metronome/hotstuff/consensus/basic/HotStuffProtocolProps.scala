@@ -121,7 +121,7 @@ object HotStuffProtocolCommands extends Commands {
         } else {
           val h = hash(phase, viewNumber, blockHash)
 
-          signature.sig.size == federation.size - federation.maxFaulty &&
+          signature.sig.size == federation.quorumSize &&
           signature.sig.forall { sig =>
             federation.publicKeys.exists { publicKey =>
               publicKey == unsign(sig, h)
@@ -152,7 +152,7 @@ object HotStuffProtocolCommands extends Commands {
     def isLeader = viewNumber % n == ownIndex
     def leader   = federation((viewNumber % n).toInt)
 
-    def `n - f` = n - f
+    def quorumSize = (n + f) / 2 + 1
   }
 
   // Keep a variable state in our System Under Test.
@@ -181,7 +181,8 @@ object HotStuffProtocolCommands extends Commands {
         phase = state.phase,
         publicKey = state.publicKey,
         signingKey = state.signingKey,
-        federation = Federation(state.federation),
+        federation = Federation(state.federation, state.f)
+          .getOrElse(sys.error("Invalid federation!")),
         prepareQC = genesisQC,
         lockedQC = genesisQC,
         lastExecutedBlockHash = genesisQC.blockHash,
@@ -196,9 +197,8 @@ object HotStuffProtocolCommands extends Commands {
 
   override def genInitialState: Gen[State] =
     for {
-      // Pick the max Byzantine nodes first, then size the federation based on that.
-      f <- Gen.choose(0, 3)
-      n = 3 * f + 1
+      n <- Gen.choose(1, 10)
+      f <- Gen.choose(0, (n - 1) / 3)
 
       ownIndex <- Gen.choose(0, n - 1)
 
@@ -482,7 +482,7 @@ object HotStuffProtocolCommands extends Commands {
       blockHash <- genLazy {
         state.maybeBlockHash.getOrElse(sys.error("No block for quorum."))
       }
-      pks <- Gen.pick(state.`n - f`, state.federation)
+      pks <- Gen.pick(state.quorumSize, state.federation)
       // The replicas is expecting the Q.C. for the previous phase.
       phase = votingPhaseFor(state.phase).getOrElse(
         sys.error(s"No voting phase for ${state.phase}")
@@ -623,8 +623,8 @@ object HotStuffProtocolCommands extends Commands {
       "NewView" |: {
         if (
           state.phase == Phase.Prepare &&
-          state.newViewsFrom.size != state.`n - f` &&
-          nextS.newViewsFrom.size == state.`n - f`
+          state.newViewsFrom.size != state.quorumSize &&
+          nextS.newViewsFrom.size == state.quorumSize
         ) {
           result match {
             case Success(Right((next, effects))) =>
@@ -637,7 +637,7 @@ object HotStuffProtocolCommands extends Commands {
 
               "n-f collected" |: all(
                 s"stays in the phase (${state.phase} -> ${next.phase})" |: next.phase == state.phase,
-                "records newView" |: next.newViews.size == state.`n - f`,
+                "records newView" |: next.newViews.size == state.quorumSize,
                 "creates a block and nothing else" |: effects.size == 1 &&
                   effects.head.isInstanceOf[Effect.CreateBlock[_]],
                 s"selects the highest QC: $highestView ?= $newViewsMax" |: highestView == newViewsMax
@@ -783,8 +783,8 @@ object HotStuffProtocolCommands extends Commands {
             val nextS = nextState(state)
             val maybeBroadcast =
               if (
-                state.votesFrom.size < state.`n - f` &&
-                nextS.votesFrom.size == state.`n - f`
+                state.votesFrom.size < state.quorumSize &&
+                nextS.votesFrom.size == state.quorumSize
               ) {
                 "n - f collected" |: all(
                   "broadcast to all" |: effects.size == state.federation.size,
