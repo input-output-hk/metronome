@@ -208,13 +208,18 @@ object MockEncryptedConnectionProvider {
       incomingEvents.poll
 
     override def sendMessage(m: TestMessage): Task[Unit] =
-      Task
-        .race(closeToken.get, sentMessages.update(current => m :: current))
-        .flatMap {
-          case Left(_) =>
-            Task.raiseError(ConnectionAlreadyClosed(remotePeerInfo._2))
-          case Right(_) => Task.now(())
-        }
+      closeToken.tryGet.flatMap {
+        case Some(_) =>
+          Task.raiseError(ConnectionAlreadyClosed(remotePeerInfo._2))
+        case None =>
+          Task
+            .race(closeToken.get, sentMessages.update(current => m :: current))
+            .flatMap {
+              case Left(_) =>
+                Task.raiseError(ConnectionAlreadyClosed(remotePeerInfo._2))
+              case Right(_) => Task.now(())
+            }
+      }
   }
 
   object MockEncryptedConnection {
