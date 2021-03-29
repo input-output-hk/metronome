@@ -13,6 +13,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   Cluster,
   buildTestConnectionManager
 }
+import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
@@ -36,6 +37,8 @@ class RemoteConnectionManagerWithScalanetProviderSpec
       reporter = UncaughtExceptionReporter {
         case ex: IllegalStateException
             if ex.getMessage.contains("executor not accepting a task") =>
+        case ex: PeerGroup.ChannelBrokenException[_] =>
+        // Probably test already closed with some task running in the background.
         case ex =>
           UncaughtExceptionReporter.default.reportFailure(ex)
       }
