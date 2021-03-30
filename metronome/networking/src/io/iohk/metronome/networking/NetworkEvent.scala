@@ -31,4 +31,7 @@ object NetworkEvent {
       error: EncryptedConnectionProvider.ConnectionError
   ) extends NetworkEvent[K]
 
+  /** Incoming connection from someone outside the federation. */
+  case class ConnectionUnknown[K](peer: Peer[K]) extends NetworkEvent[K]
+
 }

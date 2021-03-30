@@ -151,6 +151,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
         level = _ => HybridLogObject.Level.Debug,
         message = _.getClass.getSimpleName,
         event = {
+          case e: ConnectionUnknown[_]      => e.peer.asJsonObject
           case e: ConnectionRegistered[_]   => e.peer.asJsonObject
           case e: ConnectionDeregistered[_] => e.peer.asJsonObject
           case e: ConnectionDiscarded[_]    => e.peer.asJsonObject

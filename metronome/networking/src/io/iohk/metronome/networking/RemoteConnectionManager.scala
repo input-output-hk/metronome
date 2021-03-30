@@ -204,7 +204,7 @@ object RemoteConnectionManager {
       pg: EncryptedConnectionProvider[F, K, M],
       connectionsHandler: ConnectionHandler[F, K, M],
       clusterConfig: ClusterConfig[K]
-  ): F[Unit] = {
+  )(implicit tracers: NetworkTracers[F, K, M]): F[Unit] = {
     Iterant
       .repeatEvalF(pg.incomingConnection)
       .takeWhile(_.isDefined)
@@ -225,7 +225,8 @@ object RemoteConnectionManager {
 
           case None =>
             // unknown connection, just close it
-            encryptedConnection.close
+            tracers.unknown(encryptedConnection) >>
+              encryptedConnection.close
         }
       }
       .completedL

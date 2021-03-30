@@ -8,7 +8,8 @@ case class NetworkTracers[F[_], K, M](
     deregistered: Tracer[F, ConnectionHandler.HandledConnection[F, K, M]],
     discarded: Tracer[F, ConnectionHandler.HandledConnection[F, K, M]],
     failed: Tracer[F, RemoteConnectionManager.ConnectionFailure[K]],
-    error: Tracer[F, NetworkTracers.HandledConnectionError[F, K, M]]
+    error: Tracer[F, NetworkTracers.HandledConnectionError[F, K, M]],
+    unknown: Tracer[F, EncryptedConnection[F, K, M]]
 )
 
 object NetworkTracers {
@@ -41,9 +42,12 @@ object NetworkTracers {
             fail.err
           )
         },
-      error = tracer.contramap[HandledConnectionError[F, K, M]] {
-        case (conn, err) =>
+      error =
+        tracer.contramap[HandledConnectionError[F, K, M]] { case (conn, err) =>
           ConnectionError(Peer(conn.key, conn.serverAddress), err)
+        },
+      unknown = tracer.contramap[EncryptedConnection[F, K, M]] { conn =>
+        ConnectionUnknown((Peer.apply[K] _).tupled(conn.remotePeerInfo))
       }
     )
 }
