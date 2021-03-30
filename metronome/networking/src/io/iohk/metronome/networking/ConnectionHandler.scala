@@ -10,6 +10,7 @@ import cats.implicits._
 import cats.effect.implicits._
 import io.iohk.metronome.networking.ConnectionHandler.{
   ConnectionAlreadyClosedException,
+  FinishedConnection,
   HandledConnection,
   MessageReceived,
   UnexpectedConnectionError
@@ -27,7 +28,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     connectionsRegister: ConnectionsRegister[F, K, M],
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
     cancelToken: TryableDeferred[F, Unit],
-    connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
+    connectionFinishCallback: FinishedConnection[K] => F[Unit]
 )(implicit tracers: NetworkTracers[F, K, M]) {
 
   private val numberOfRunningConnections = AtomicInt(0)
@@ -65,6 +66,21 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
         tracers.registered(possibleNewConnection) >>
           connectionQueue.offer(possibleNewConnection)
     }
+  }
+
+  def registerIncoming(
+      serverAddress: InetSocketAddress,
+      encryptedConnection: EncryptedConnection[F, K, M]
+  ): F[Unit] = {
+    registerOrClose(
+      HandledConnection.incoming(serverAddress, encryptedConnection)
+    )
+  }
+
+  def registerOutgoing(
+      encryptedConnection: EncryptedConnection[F, K, M]
+  ): F[Unit] = {
+    registerOrClose(HandledConnection.outgoing(encryptedConnection))
   }
 
   /** Checks if handler already handles connection o peer with provided key
@@ -130,7 +146,13 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   ): F[Unit] = {
     cancelToken.tryGet.flatMap {
       case Some(_) => Sync[F].unit
-      case None    => connectionFinishCallback(handledConnection)
+      case None =>
+        connectionFinishCallback(
+          FinishedConnection(
+            handledConnection.key,
+            handledConnection.serverAddress
+          )
+        )
     }
   }
 
@@ -208,7 +230,7 @@ object ConnectionHandler {
     *                       underlyingConnection remoteAddress
     * @param underlyingConnection, encrypted connection to send and receive messages
     */
-  case class HandledConnection[F[_], K, M](
+  sealed abstract case class HandledConnection[F[_], K, M] private (
       key: K,
       serverAddress: InetSocketAddress,
       underlyingConnection: EncryptedConnection[F, K, M]
@@ -227,31 +249,31 @@ object ConnectionHandler {
   }
 
   object HandledConnection {
-    def outgoing[F[_], K, M](
+    private[ConnectionHandler] def outgoing[F[_], K, M](
         encryptedConnection: EncryptedConnection[F, K, M]
     ): HandledConnection[F, K, M] = {
-      HandledConnection(
+      new HandledConnection(
         encryptedConnection.remotePeerInfo._1,
         encryptedConnection.remotePeerInfo._2,
         encryptedConnection
-      )
+      ) {}
     }
 
-    def incoming[F[_], K, M](
+    private[ConnectionHandler] def incoming[F[_], K, M](
         serverAddress: InetSocketAddress,
         encryptedConnection: EncryptedConnection[F, K, M]
     ): HandledConnection[F, K, M] = {
-      HandledConnection(
+      new HandledConnection(
         encryptedConnection.remotePeerInfo._1,
         serverAddress,
         encryptedConnection
-      )
+      ) {}
     }
 
   }
 
   private def buildHandler[F[_]: Concurrent: ContextShift, K, M](
-      connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
+      connectionFinishCallback: FinishedConnection[K] => F[Unit]
   )(implicit
       tracers: NetworkTracers[F, K, M]
   ): F[ConnectionHandler[F, K, M]] = {
@@ -270,17 +292,22 @@ object ConnectionHandler {
     )
   }
 
+  case class FinishedConnection[K](
+      connectionKey: K,
+      connectionServerAddress: InetSocketAddress
+  )
+
   /** Starts connection handler, and polling form connections
     *
-    * @param connectionFinishCallback, callback to be called when connection is finished and get deregistred
+    * @param connectionFinishCallback, callback to be called when connection is finished and get de-registered
     */
   def apply[F[_]: Concurrent: ContextShift, K, M](
-      connectionFinishCallback: HandledConnection[F, K, M] => F[Unit]
+      connectionFinishCallback: FinishedConnection[K] => F[Unit]
   )(implicit
       tracers: NetworkTracers[F, K, M]
   ): Resource[F, ConnectionHandler[F, K, M]] = {
     Resource
-      .make(buildHandler(connectionFinishCallback)) { handler =>
+      .make(buildHandler[F, K, M](connectionFinishCallback)) { handler =>
         handler.shutdown
       }
       .flatMap { handler =>
