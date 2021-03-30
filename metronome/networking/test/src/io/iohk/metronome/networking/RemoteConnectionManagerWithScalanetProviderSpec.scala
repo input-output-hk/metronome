@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, ContextShift, Resource, Timer, Sync}
 import io.circe.{Json, JsonObject, Encoder}
+import io.iohk.metronome.crypto.Secp256k1Utils
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
 import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
@@ -175,7 +176,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   ](
       bindAddress: InetSocketAddress = randomAddress(),
       nodeKeyPair: AsymmetricCipherKeyPair =
-        metronome.crypto.Secp256k1Utils.generateKeyPair(secureRandom),
+        Secp256k1Utils.generateKeyPair(secureRandom),
       secureRandom: SecureRandom = secureRandom,
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,

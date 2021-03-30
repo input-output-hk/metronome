@@ -1,17 +1,17 @@
 package io.iohk.metronome.networking
 
 import cats.effect.Resource
+import io.iohk.metronome.crypto.Secp256k1Utils
+import java.net.{InetSocketAddress, ServerSocket}
+import java.security.SecureRandom
 import monix.eval.Task
 import monix.execution.Scheduler
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.Assertion
-import scodec.Codec
-import scodec.bits.BitVector
-
-import java.net.{InetSocketAddress, ServerSocket}
-import java.security.SecureRandom
 import scala.concurrent.Future
 import scala.util.Random
+import scodec.bits.BitVector
+import scodec.Codec
 
 object RemoteConnectionManagerTestUtils {
   def customTestCaseResourceT[T](
@@ -66,11 +66,11 @@ object RemoteConnectionManagerTestUtils {
   object NodeInfo {
     def generateRandom(secureRandom: SecureRandom): NodeInfo = {
       val keyPair =
-        metronome.crypto.Secp256k1Utils.generateKeyPair(secureRandom)
+        Secp256k1Utils.generateKeyPair(secureRandom)
       NodeInfo(
         keyPair,
         Secp256k1Key(
-          metronome.crypto.Secp256k1Utils.keyPairToUncompressed(keyPair)
+          Secp256k1Utils.keyPairToUncompressed(keyPair)
         )
       )
     }
