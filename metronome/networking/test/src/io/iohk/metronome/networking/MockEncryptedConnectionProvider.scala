@@ -240,6 +240,8 @@ object MockEncryptedConnectionProvider {
     ) {
       lazy val key = connection.remotePeerInfo._1
 
+      lazy val address = connection.remotePeerInfo._2
+
       def pushRemoteEvent(
           ev: Option[
             Either[EncryptedConnectionProvider.ConnectionError, TestMessage]

@@ -5,7 +5,7 @@ import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
 import io.iohk.metronome.networking.ConnectionHandler.{
-  HandledConnection,
+  FinishedConnection,
   MessageReceived
 }
 import io.iohk.metronome.networking.RemoteConnectionManager.RetryConfig.RandomJitterConfig
@@ -190,9 +190,7 @@ object RemoteConnectionManager {
             updatedRequest => connectionsToAcquire.offer(updatedRequest)
           )
         case Right(connection) =>
-          val newOutgoingConnections =
-            HandledConnection.outgoing(connection.encryptedConnection)
-          connectionsHandler.registerOrClose(newOutgoingConnections)
+          connectionsHandler.registerOutgoing(connection.encryptedConnection)
 
       }
       .completedF
@@ -217,11 +215,10 @@ object RemoteConnectionManager {
           encryptedConnection.remotePeerInfo._1
         ) match {
           case Some(incomingConnectionServerAddress) =>
-            val handledConnection = HandledConnection.incoming(
+            connectionsHandler.registerIncoming(
               incomingConnectionServerAddress,
               encryptedConnection
             )
-            connectionsHandler.registerOrClose(handledConnection)
 
           case None =>
             // unknown connection, just close it
@@ -244,12 +241,12 @@ object RemoteConnectionManager {
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       retryConfig: RetryConfig
   ) {
-    def finish(handledConnection: HandledConnection[F, K, M]): F[Unit] = {
+    def finish(finishedConnection: FinishedConnection[K]): F[Unit] = {
       retryConnection(
         retryConfig,
         OutGoingConnectionRequest.initial(
-          handledConnection.key,
-          handledConnection.serverAddress
+          finishedConnection.connectionKey,
+          finishedConnection.connectionServerAddress
         )
       ).flatMap(req => connectionsToAcquire.offer(req))
     }
@@ -329,7 +326,7 @@ object RemoteConnectionManager {
         retryConfig
       )
 
-      connectionsHandler <- ConnectionHandler.apply(
+      connectionsHandler <- ConnectionHandler.apply[F, K, M](
         // when each connection will finished it the callback will be called, and connection will be put to connections to acquire
         // queue
         handledConnectionFinisher.finish
