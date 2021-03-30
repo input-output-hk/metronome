@@ -26,7 +26,13 @@ object Tracer {
     * - how to squeeze B's to create A's (possibly enrich B with extra stuff, or forget some details)
     * then you have Tracer for B
     *
-    * To use this, just import `cats` syntax for `Contravariant` and call `.contramap` on `A`.
+    * Example
+    * ```
+    * import cats.syntax.contravariant._
+    *
+    * val atracer: Tracer[F, A] = ???
+    * val btracer: Tracer[F, B] = atracer.contramap[B](b => b.toA)
+    * ```.
     */
   implicit def contraTracer[F[_]]: Contravariant[Tracer[F, *]] =
     new Contravariant[Tracer[F, *]] {
