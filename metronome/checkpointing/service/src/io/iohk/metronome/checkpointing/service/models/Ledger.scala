@@ -13,7 +13,7 @@ import io.iohk.metronome.checkpointing.interpreter.models.Transaction
   */
 case class Ledger(
     maybeLastCheckpoint: Option[Transaction.CheckpointCandidate],
-    proposerBlocks: Set[Transaction.ProposerBlock]
+    proposerBlocks: Vector[Transaction.ProposerBlock]
 ) {
 
   /** Apply a validated transaction to produce the next ledger state.
@@ -25,13 +25,16 @@ case class Ledger(
   def apply(transaction: Validated[Transaction]): Ledger =
     (transaction: Transaction) match {
       case t @ Transaction.ProposerBlock(_) =>
-        copy(proposerBlocks = proposerBlocks + t)
+        if (proposerBlocks.contains(t))
+          this
+        else
+          copy(proposerBlocks = proposerBlocks :+ t)
 
       case t @ Transaction.CheckpointCandidate(_) =>
-        Ledger(Some(t), Set.empty)
+        Ledger(Some(t), Vector.empty)
     }
 }
 
 object Ledger {
-  val empty = Ledger(None, Set.empty)
+  val empty = Ledger(None, Vector.empty)
 }
