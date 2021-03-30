@@ -33,11 +33,19 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
 
   private val numberOfRunningConnections = AtomicInt(0)
 
+  private def incrementRunningConnections: F[Unit] = {
+    Concurrent[F].delay(numberOfRunningConnections.increment())
+  }
+
+  private def decrementRunningConnections: F[Unit] = {
+    Concurrent[F].delay(numberOfRunningConnections.decrement())
+  }
+
   private def closeAndDeregisterConnection(
       handledConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
     val close = for {
-      _ <- Concurrent[F].delay(numberOfRunningConnections.decrement())
+      _ <- decrementRunningConnections
       _ <- connectionsRegister.deregisterConnection(handledConnection)
       _ <- handledConnection.close
     } yield ()
@@ -52,7 +60,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     *
     * @param possibleNewConnection, possible connection to handle
     */
-  def registerOrClose(
+  private def registerOrClose(
       possibleNewConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
     connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
@@ -164,7 +172,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     Iterant
       .repeatEvalF(connectionQueue.poll)
       .mapEval { connection =>
-        Sync[F].delay(numberOfRunningConnections.increment()).flatMap { _ =>
+        incrementRunningConnections >>
           Iterant
             .repeatEvalF(
               withCancelToken(cancelToken, connection.incomingMessage)
@@ -189,7 +197,6 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             )
             .completedL
             .start
-        }
       }
       .completedL
   }
