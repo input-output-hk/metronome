@@ -51,37 +51,33 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     } yield ()
   }
 
-  /** Registers connections and start handling incoming messages in background, in case connection is already handled
+  /** Registers incoming connections and start handling incoming messages in background, in case connection is already handled
     * it closes it
     *
-    * @param possibleNewConnection, possible connection to handle
+    * @param serverAddress, server address of incoming connection which should already be known
+    * @param encryptedConnection, established connection
     */
-  private def registerOrClose(
-      possibleNewConnection: HandledConnection[F, K, M]
-  ): F[Unit] = {
-    connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
-      case Some(_) =>
-        //TODO [PM-3092] for now we are closing any new connections in case of conflict, we may investigate other strategies
-        // like keeping old for outgoing and replacing for incoming
-        possibleNewConnection.close
-      case None =>
-        connectionQueue.offer(possibleNewConnection)
-    }
-  }
-
   def registerIncoming(
       serverAddress: InetSocketAddress,
       encryptedConnection: EncryptedConnection[F, K, M]
   ): F[Unit] = {
-    registerOrClose(
-      HandledConnection.incoming(serverAddress, encryptedConnection)
-    )
+    HandledConnection
+      .incoming(serverAddress, encryptedConnection)
+      .flatMap(connection => connectionQueue.offer(connection))
+
   }
 
+  /** Registers out connections and start handling incoming messages in background, in case connection is already handled
+    * it closes it
+    *
+    * @param encryptedConnection, established connection
+    */
   def registerOutgoing(
       encryptedConnection: EncryptedConnection[F, K, M]
   ): F[Unit] = {
-    registerOrClose(HandledConnection.outgoing(encryptedConnection))
+    HandledConnection
+      .outgoing(encryptedConnection)
+      .flatMap(connection => connectionQueue.offer(connection))
   }
 
   /** Checks if handler already handles connection o peer with provided key
@@ -155,6 +151,19 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     }
   }
 
+  private def registerOrDiscard(
+      possibleNewConnection: HandledConnection[F, K, M]
+  ): F[Option[HandledConnection[F, K, M]]] = {
+    connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
+      case Some(oldConnection) =>
+        //TODO [PM-3092] for now we are closing any new connections in case of conflict, we may investigate other strategies
+        // like keeping old for outgoing and replacing for incoming
+        possibleNewConnection.close.as(None)
+      case None =>
+        Concurrent[F].pure(Some(possibleNewConnection))
+    }
+  }
+
   /** Connections multiplexer, it receives both incoming and outgoing connections and start reading incoming messages from
     * them concurrently, putting them on received messages queue.
     * In case of error or stream finish it cleans up all resources.
@@ -162,6 +171,8 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   private def handleConnections: F[Unit] = {
     Iterant
       .repeatEvalF(connectionQueue.poll)
+      .mapEval(registerOrDiscard)
+      .collect { case Some(conn) => conn }
       .mapEval { connection =>
         incrementRunningConnections >>
           Iterant
@@ -182,6 +193,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             }
             .guarantee(
               closeAndDeregisterConnection(connection)
+                .guarantee(connection.deregisterListener.complete(()))
                 .flatMap(_ => callCallBackIfNotClosed(connection))
             )
             .completedL
@@ -229,7 +241,8 @@ object ConnectionHandler {
   sealed abstract case class HandledConnection[F[_], K, M] private (
       key: K,
       serverAddress: InetSocketAddress,
-      underlyingConnection: EncryptedConnection[F, K, M]
+      underlyingConnection: EncryptedConnection[F, K, M],
+      deregisterListener: Deferred[F, Unit]
   ) {
     def sendMessage(m: M): F[Unit] = {
       underlyingConnection.sendMessage(m)
@@ -245,25 +258,32 @@ object ConnectionHandler {
   }
 
   object HandledConnection {
-    private[ConnectionHandler] def outgoing[F[_], K, M](
+    private[ConnectionHandler] def outgoing[F[_]: Concurrent, K, M](
         encryptedConnection: EncryptedConnection[F, K, M]
-    ): HandledConnection[F, K, M] = {
-      new HandledConnection(
-        encryptedConnection.remotePeerInfo._1,
-        encryptedConnection.remotePeerInfo._2,
-        encryptedConnection
-      ) {}
+    ): F[HandledConnection[F, K, M]] = {
+      Deferred[F, Unit].map { listener =>
+        new HandledConnection(
+          encryptedConnection.remotePeerInfo._1,
+          encryptedConnection.remotePeerInfo._2,
+          encryptedConnection,
+          listener
+        ) {}
+      }
     }
 
-    private[ConnectionHandler] def incoming[F[_], K, M](
+    private[ConnectionHandler] def incoming[F[_]: Concurrent, K, M](
         serverAddress: InetSocketAddress,
         encryptedConnection: EncryptedConnection[F, K, M]
-    ): HandledConnection[F, K, M] = {
-      new HandledConnection(
-        encryptedConnection.remotePeerInfo._1,
-        serverAddress,
-        encryptedConnection
-      ) {}
+    ): F[HandledConnection[F, K, M]] = {
+      Deferred[F, Unit].map { listener =>
+        new HandledConnection(
+          encryptedConnection.remotePeerInfo._1,
+          serverAddress,
+          encryptedConnection,
+          listener
+        ) {}
+      }
+
     }
 
   }
