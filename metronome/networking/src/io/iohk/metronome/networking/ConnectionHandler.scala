@@ -164,9 +164,10 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       case Some(oldConnection) =>
         //TODO [PM-3092] for now we are closing any new connections in case of conflict, we may investigate other strategies
         // like keeping old for outgoing and replacing for incoming
-        possibleNewConnection.close.as(None)
+        tracers.discarded(possibleNewConnection) >> possibleNewConnection.close.as(None)
       case None =>
-        Concurrent[F].pure(Some(possibleNewConnection))
+        tracers.registered(possibleNewConnection) >> Concurrent[F].pure(Some(possibleNewConnection))
+
     }
   }
 
