@@ -1,7 +1,5 @@
 package io.iohk.metronome.networking
 
-// import cats._
-// import cats.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.effect.concurrent.{Deferred, TryableDeferred}
 import io.iohk.metronome.networking.RemoteConnectionManager.withCancelToken
@@ -113,12 +111,14 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
           .attemptNarrow[ConnectionAlreadyClosed]
           .flatMap {
             case Left(_) =>
-              connection.close.as(
-                Left(ConnectionAlreadyClosedException(recipient))
-              )
+              // Closing the connection will cause it to be re-queued for reconnection.
+              tracers.sendError(connection) >>
+                connection.close.as(
+                  Left(ConnectionAlreadyClosedException(recipient))
+                )
 
             case Right(_) =>
-              Concurrent[F].pure(Right(()))
+              tracers.sent((connection, message)).as(Right(()))
           }
       case None =>
         Concurrent[F].pure(Left(ConnectionAlreadyClosedException(recipient)))
@@ -151,11 +151,12 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             .map(_.get)
             .mapEval[Unit] {
               case Right(m) =>
-                messageQueue.offer(
-                  MessageReceived(connection.key, m)
-                )
+                tracers.received((connection, m)) >>
+                  messageQueue.offer(
+                    MessageReceived(connection.key, m)
+                  )
               case Left(e) =>
-                tracers.error((connection, e)) >>
+                tracers.receiveError((connection, e)) >>
                   Concurrent[F].raiseError[Unit](
                     UnexpectedConnectionError(e, connection.key)
                   )

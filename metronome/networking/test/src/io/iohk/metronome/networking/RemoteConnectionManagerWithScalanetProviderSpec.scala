@@ -146,8 +146,8 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
         JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
       }
 
-    implicit val hybridLog: HybridLog[NetworkEvent[K]] =
-      HybridLog.instance[NetworkEvent[K]](
+    implicit val hybridLog: HybridLog[NetworkEvent[K, M]] =
+      HybridLog.instance[NetworkEvent[K, M]](
         level = _ => HybridLogObject.Level.Debug,
         message = _.getClass.getSimpleName,
         event = {
@@ -155,14 +155,17 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
           case e: ConnectionRegistered[_]   => e.peer.asJsonObject
           case e: ConnectionDeregistered[_] => e.peer.asJsonObject
           case e: ConnectionDiscarded[_]    => e.peer.asJsonObject
+          case e: ConnectionSendError[_]    => e.peer.asJsonObject
           case e: ConnectionFailed[_] =>
             e.peer.asJsonObject.add("error", e.error.toString.asJson)
-          case e: ConnectionError[_] =>
+          case e: ConnectionReceiveError[_] =>
             e.peer.asJsonObject.add("error", e.error.toString.asJson)
+          case e: NetworkEvent.MessageReceived[_, _] => e.peer.asJsonObject
+          case e: NetworkEvent.MessageSent[_, _]     => e.peer.asJsonObject
         }
       )
 
-    NetworkTracers(LogTracer.hybrid[F, NetworkEvent[K]])
+    NetworkTracers(LogTracer.hybrid[F, NetworkEvent[K, M]])
   }
 
   def buildTestConnectionManager[
