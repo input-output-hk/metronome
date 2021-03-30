@@ -22,7 +22,7 @@ import monix.eval.Task
 import ConnectionHandlerSpec._
 import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
-
+import io.iohk.metronome.tracer.Tracer
 import java.net.InetSocketAddress
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
@@ -244,6 +244,9 @@ object ConnectionHandlerSpec {
       task.restartUntil(condition).timeout(timeOut)
     }
   }
+
+  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+    NetworkTracers(Tracer.noOpTracer)
 
   def buildHandlerResource(
       cb: HandledConnection[Task, Secp256k1Key, TestMessage] => Task[Unit] =

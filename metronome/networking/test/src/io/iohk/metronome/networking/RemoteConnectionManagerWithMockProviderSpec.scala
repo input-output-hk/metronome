@@ -18,6 +18,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.
   fakeLocalAddress,
   longRetryConfig
 }
+import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
 import monix.execution.Scheduler
 import org.scalatest.flatspec.AsyncFlatSpecLike
@@ -340,6 +341,9 @@ object RemoteConnectionManagerWithMockProviderSpec {
 
   val defalutAllowed = Secp256k1Key.getFakeRandomKey
   val defaultToMake  = Secp256k1Key.getFakeRandomKey
+
+  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+    NetworkTracers(Tracer.noOpTracer)
 
   def buildConnectionsManagerWithMockProvider(
       ec: MockEncryptedConnectionProvider,

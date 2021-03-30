@@ -12,6 +12,7 @@ object versionFile extends VersionFileModule
 
 object VersionOf {
   val cats             = "2.3.1"
+  val circe            = "0.12.3"
   val config           = "1.4.1"
   val `kind-projector` = "0.11.3"
   val logback          = "1.2.3"
@@ -20,10 +21,10 @@ object VersionOf {
   val prometheus       = "0.10.0"
   val rocksdb          = "6.15.2"
   val scalacheck       = "1.15.2"
-  val scalalogging     = "3.9.2"
   val scalatest        = "3.2.5"
   val scalanet         = "0.7.0"
   val shapeless        = "2.3.3"
+  val slf4j            = "1.7.30"
   val `scodec-core`    = "1.11.7"
   val `scodec-bits`    = "1.1.12"
 }
@@ -128,6 +129,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[JavaModule] =
         super.moduleDeps ++ Seq(logging)
 
+      // Enable logging in tests.
+      // Control the visibility using ./test/resources/logback.xml
+      // Alternatively, capture logs in memory.
       override def ivyDeps = Agg(
         ivy"org.scalatest::scalatest:${VersionOf.scalatest}",
         ivy"org.scalacheck::scalacheck:${VersionOf.scalacheck}",
@@ -201,7 +205,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"io.iohk::scalanet:${VersionOf.scalanet}"
     )
 
-    object test extends TestModule
+    object test extends TestModule {
+      override def moduleDeps: Seq[JavaModule] =
+        super.moduleDeps ++ Seq(logging)
+    }
   }
 
   /** Generic HotStuff BFT library. */
@@ -292,13 +299,18 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
-  /** Implements tracing abstractions to do structured logging. */
+  /** Implements tracing abstractions to do structured logging.
+    *
+    * To actually emit logs, a dependant module also has to add
+    * a dependency on e.g. logback.
+    */
   object logging extends SubModule {
     override def moduleDeps: Seq[JavaModule] =
       Seq(tracing)
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"com.typesafe.scala-logging::scala-logging:${VersionOf.scalalogging}"
+      ivy"org.slf4j:slf4j-api:${VersionOf.slf4j}",
+      ivy"io.circe::circe-core:${VersionOf.circe}"
     )
   }
 
