@@ -29,7 +29,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
     cancelToken: TryableDeferred[F, Unit],
     connectionFinishCallback: FinishedConnection[K] => F[Unit]
-) {
+)(implicit tracers: NetworkTracers[F, K, M]) {
 
   private val numberOfRunningConnections = AtomicInt(0)
 
@@ -44,11 +44,15 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   private def closeAndDeregisterConnection(
       handledConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
-    for {
+    val close = for {
       _ <- decrementRunningConnections
       _ <- connectionsRegister.deregisterConnection(handledConnection)
       _ <- handledConnection.close
     } yield ()
+
+    close.guarantee {
+      tracers.deregistered(handledConnection)
+    }
   }
 
   /** Registers incoming connections and start handling incoming messages in background, in case connection is already handled
@@ -124,12 +128,14 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
           .attemptNarrow[ConnectionAlreadyClosed]
           .flatMap {
             case Left(_) =>
-              connection.close.as(
-                Left(ConnectionAlreadyClosedException(recipient))
-              )
+              // Closing the connection will cause it to be re-queued for reconnection.
+              tracers.sendError(connection) >>
+                connection.close.as(
+                  Left(ConnectionAlreadyClosedException(recipient))
+                )
 
             case Right(_) =>
-              Concurrent[F].pure(Right(()))
+              tracers.sent((connection, message)).as(Right(()))
           }
       case None =>
         Concurrent[F].pure(Left(ConnectionAlreadyClosedException(recipient)))
@@ -181,15 +187,17 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             )
             .takeWhile(_.isDefined)
             .map(_.get)
-            .mapEval {
+            .mapEval[Unit] {
               case Right(m) =>
-                messageQueue.offer(
-                  MessageReceived(connection.key, m)
-                )
+                tracers.received((connection, m)) >>
+                  messageQueue.offer(
+                    MessageReceived(connection.key, m)
+                  )
               case Left(e) =>
-                Concurrent[F].raiseError[Unit](
-                  UnexpectedConnectionError(e, connection.key)
-                )
+                tracers.receiveError((connection, e)) >>
+                  Concurrent[F].raiseError[Unit](
+                    UnexpectedConnectionError(e, connection.key)
+                  )
             }
             .guarantee(
               closeAndDeregisterConnection(connection)
@@ -290,6 +298,8 @@ object ConnectionHandler {
 
   private def buildHandler[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: FinishedConnection[K] => F[Unit]
+  )(implicit
+      tracers: NetworkTracers[F, K, M]
   ): F[ConnectionHandler[F, K, M]] = {
     for {
       cancelToken         <- Deferred.tryable[F, Unit]
@@ -317,6 +327,8 @@ object ConnectionHandler {
     */
   def apply[F[_]: Concurrent: ContextShift, K, M](
       connectionFinishCallback: FinishedConnection[K] => F[Unit]
+  )(implicit
+      tracers: NetworkTracers[F, K, M]
   ): Resource[F, ConnectionHandler[F, K, M]] = {
     Resource
       .make(buildHandler[F, K, M](connectionFinishCallback)) { handler =>

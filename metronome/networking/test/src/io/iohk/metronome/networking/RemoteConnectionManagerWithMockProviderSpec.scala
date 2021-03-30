@@ -18,6 +18,7 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.
   fakeLocalAddress,
   longRetryConfig
 }
+import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
 import monix.execution.Scheduler
 import org.scalatest.flatspec.AsyncFlatSpecLike
@@ -40,12 +41,16 @@ class RemoteConnectionManagerWithMockProviderSpec
       buildConnectionsManagerWithMockProvider(provider)
         .use { connectionManager =>
           for {
-            _                   <- Task.sleep(800.milliseconds)
+            _                   <- Task.sleep(1.second)
             stats               <- provider.getStatistics
             acquiredConnections <- connectionManager.getAcquiredConnections
           } yield {
             assert(stats.maxInFlightConnections == 1)
-            assert(stats.connectionCounts.get(defaultToMake).contains(3))
+            assert(
+              stats.connectionCounts
+                .get(defaultToMake)
+                .exists(count => count == 2 || count == 3)
+            )
             assert(acquiredConnections.isEmpty)
           }
         }
@@ -62,7 +67,7 @@ class RemoteConnectionManagerWithMockProviderSpec
       )
         .use { connectionManager =>
           for {
-            _                   <- Task.sleep(800.milliseconds)
+            _                   <- Task.sleep(1.second)
             stats               <- provider.getStatistics
             acquiredConnections <- connectionManager.getAcquiredConnections
           } yield {
@@ -217,6 +222,7 @@ class RemoteConnectionManagerWithMockProviderSpec
       _                        <- manager.waitForNConnections(1)
       containsIncoming         <- manager.containsConnection(incomingConnection)
       duplicatedIncoming       <- provider.newIncomingPeer(clusterPeers.head)
+      _                        <- Task.sleep(500.millis) // Let the offered connection be processed.
       duplicatedIncomingClosed <- duplicatedIncoming.isClosed
     } yield {
       assert(initialAcquired.isEmpty)
@@ -233,6 +239,7 @@ class RemoteConnectionManagerWithMockProviderSpec
       randomAcquiredConnection <- provider.getAllRegisteredPeers.map(_.head)
       _                        <- randomAcquiredConnection.pushRemoteEvent(Some(Left(DecodingError)))
       _                        <- manager.waitForNConnections(1)
+      _                        <- Task.sleep(500.millis) // Let the offered connection be processed.
       errorIsClosed            <- randomAcquiredConnection.isClosed
     } yield {
       assert(initialAcquired.size == 2)
@@ -334,6 +341,9 @@ object RemoteConnectionManagerWithMockProviderSpec {
 
   val defalutAllowed = Secp256k1Key.getFakeRandomKey
   val defaultToMake  = Secp256k1Key.getFakeRandomKey
+
+  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+    NetworkTracers(Tracer.noOpTracer)
 
   def buildConnectionsManagerWithMockProvider(
       ec: MockEncryptedConnectionProvider,

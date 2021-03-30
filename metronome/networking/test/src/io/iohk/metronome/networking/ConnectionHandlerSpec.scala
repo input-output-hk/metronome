@@ -18,7 +18,7 @@ import monix.eval.Task
 import monix.execution.Scheduler
 import org.scalatest.flatspec.AsyncFlatSpecLike
 import org.scalatest.matchers.should.Matchers
-
+import io.iohk.metronome.tracer.Tracer
 import scala.concurrent.duration._
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
@@ -235,6 +235,9 @@ object ConnectionHandlerSpec {
       task.restartUntil(condition).timeout(timeOut)
     }
   }
+
+  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+    NetworkTracers(Tracer.noOpTracer)
 
   def buildHandlerResource(
       cb: FinishedConnection[Secp256k1Key] => Task[Unit] = _ => Task(())

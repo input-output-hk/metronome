@@ -1,9 +1,9 @@
-package io.iohk.tracer
+package io.iohk.metronome.tracer
 
 import language.higherKinds
 import cats.{Applicative, Contravariant, FlatMap, Id, Monad, Monoid, Show, ~>}
 
-/** Contravariant tracer
+/** Contravariant tracer.
   *
   * Ported from https://github.com/input-output-hk/contra-tracer/blob/master/src/Control/Tracer.hs
   */
@@ -13,10 +13,26 @@ trait Tracer[F[_], -A] {
 
 object Tracer {
 
+  def instance[F[_], A](f: (=> A) => F[Unit]): Tracer[F, A] =
+    new Tracer[F, A] {
+      override def apply(a: => A): F[Unit] = f(a)
+    }
+
+  def const[F[_], A](f: F[Unit]): Tracer[F, A] =
+    instance(_ => f)
+
   /** If you know:
     * - how to enrich type A that is traced
     * - how to squeeze B's to create A's (possibly enrich B with extra stuff, or forget some details)
     * then you have Tracer for B
+    *
+    * Example
+    * ```
+    * import cats.syntax.contravariant._
+    *
+    * val atracer: Tracer[F, A] = ???
+    * val btracer: Tracer[F, B] = atracer.contramap[B](b => b.toA)
+    * ```.
     */
   implicit def contraTracer[F[_]]: Contravariant[Tracer[F, *]] =
     new Contravariant[Tracer[F, *]] {

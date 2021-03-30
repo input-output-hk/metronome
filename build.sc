@@ -12,20 +12,21 @@ object versionFile extends VersionFileModule
 
 object VersionOf {
   val cats             = "2.3.1"
+  val circe            = "0.12.3"
   val config           = "1.4.1"
   val `kind-projector` = "0.11.3"
   val logback          = "1.2.3"
+  val mantis           = "3.2.1-SNAPSHOT"
   val monix            = "3.3.0"
   val prometheus       = "0.10.0"
   val rocksdb          = "6.15.2"
   val scalacheck       = "1.15.2"
-  val scalalogging     = "3.9.2"
   val scalatest        = "3.2.5"
   val scalanet         = "0.7.0"
   val shapeless        = "2.3.3"
+  val slf4j            = "1.7.30"
   val `scodec-core`    = "1.11.7"
   val `scodec-bits`    = "1.1.12"
-  val `mantis-crypto`  = "3.2.1-SNAPSHOT"
 }
 
 // Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
@@ -128,6 +129,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[JavaModule] =
         super.moduleDeps ++ Seq(logging)
 
+      // Enable logging in tests.
+      // Control the visibility using ./test/resources/logback.xml
+      // Alternatively, capture logs in memory.
       override def ivyDeps = Agg(
         ivy"org.scalatest::scalatest:${VersionOf.scalatest}",
         ivy"org.scalacheck::scalacheck:${VersionOf.scalacheck}",
@@ -148,20 +152,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def ivyDeps = Agg(
       ivy"com.chuusai::shapeless:${VersionOf.shapeless}"
     )
-  }
-
-  /** Generic Peer-to-Peer components that can multiplex protocols
-    * from different modules over a single authenticated TLS connection.
-    */
-  object networking extends SubModule {
-    override def moduleDeps: Seq[JavaModule] =
-      Seq(tracing, crypto)
-
-    override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"io.iohk::scalanet:${VersionOf.scalanet}"
-    )
-
-    object test extends TestModule
   }
 
   /** Storage abstractions, e.g. a generic key-value store. */
@@ -193,12 +183,32 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def description: String =
       "Cryptographic primitives to support HotStuff and BFT proof verification."
 
+    override def moduleDeps: Seq[PublishModule] =
+      Seq(core)
+
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"io.iohk::mantis-crypto:${VersionOf.`mantis-crypto`}",
+      ivy"io.iohk::mantis-crypto:${VersionOf.mantis}",
       ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}"
     )
 
     object test extends TestModule
+  }
+
+  /** Generic Peer-to-Peer components that can multiplex protocols
+    * from different modules over a single authenticated TLS connection.
+    */
+  object networking extends SubModule {
+    override def moduleDeps: Seq[JavaModule] =
+      Seq(tracing, crypto)
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.iohk::scalanet:${VersionOf.scalanet}"
+    )
+
+    object test extends TestModule {
+      override def moduleDeps: Seq[JavaModule] =
+        super.moduleDeps ++ Seq(logging)
+    }
   }
 
   /** Generic HotStuff BFT library. */
@@ -221,7 +231,14 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       */
     object service extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
-        Seq(storage, tracing, crypto, hotstuff.consensus, hotstuff.forensics)
+        Seq(
+          storage,
+          tracing,
+          crypto,
+          networking,
+          hotstuff.consensus,
+          hotstuff.forensics
+        )
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"io.iohk::scalanet:${VersionOf.scalanet}"
@@ -282,13 +299,18 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
-  /** Implements tracing abstractions to do structured logging. */
+  /** Implements tracing abstractions to do structured logging.
+    *
+    * To actually emit logs, a dependant module also has to add
+    * a dependency on e.g. logback.
+    */
   object logging extends SubModule {
     override def moduleDeps: Seq[JavaModule] =
       Seq(tracing)
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"com.typesafe.scala-logging::scala-logging:${VersionOf.scalalogging}"
+      ivy"org.slf4j:slf4j-api:${VersionOf.slf4j}",
+      ivy"io.circe::circe-core:${VersionOf.circe}"
     )
   }
 
