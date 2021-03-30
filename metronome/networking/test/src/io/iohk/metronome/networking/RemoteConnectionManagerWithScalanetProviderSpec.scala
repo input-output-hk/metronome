@@ -141,22 +141,23 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     import io.circe.syntax._
     import NetworkEvent._
 
-    def peerJson(key: K, address: InetSocketAddress) =
-      JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
+    implicit val peerEncoder: Encoder.AsObject[Peer[K]] =
+      Encoder.AsObject.instance { case Peer(key, address) =>
+        JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
+      }
 
     implicit val hybridLog: HybridLog[NetworkEvent[K]] =
       HybridLog.instance[NetworkEvent[K]](
         level = _ => HybridLogObject.Level.Debug,
         message = _.getClass.getSimpleName,
         event = {
-          case e: ConnectionRegistered[_]   => peerJson(e.key, e.address)
-          case e: ConnectionDeregistered[_] => peerJson(e.key, e.address)
-          case e: ConnectionDiscarded[_]    => peerJson(e.key, e.address)
+          case e: ConnectionRegistered[_]   => e.peer.asJsonObject
+          case e: ConnectionDeregistered[_] => e.peer.asJsonObject
+          case e: ConnectionDiscarded[_]    => e.peer.asJsonObject
           case e: ConnectionFailed[_] =>
-            peerJson(
-              e.failure.connectionRequest.key,
-              e.failure.connectionRequest.address
-            ).add("err", e.failure.err.getMessage.asJson)
+            e.peer.asJsonObject.add("error", e.error.toString.asJson)
+          case e: ConnectionError[_] =>
+            e.peer.asJsonObject.add("error", e.error.toString.asJson)
         }
       )
 

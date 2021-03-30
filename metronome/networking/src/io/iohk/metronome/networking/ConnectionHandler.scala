@@ -1,5 +1,7 @@
 package io.iohk.metronome.networking
 
+// import cats._
+// import cats.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.effect.concurrent.{Deferred, TryableDeferred}
 import io.iohk.metronome.networking.RemoteConnectionManager.withCancelToken
@@ -35,12 +37,15 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   private def closeAndDeregisterConnection(
       handledConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
-    for {
-      _ <- tracers.deregistered(handledConnection)
+    val close = for {
       _ <- Concurrent[F].delay(numberOfRunningConnections.decrement())
       _ <- connectionsRegister.deregisterConnection(handledConnection)
       _ <- handledConnection.close
     } yield ()
+
+    close.guarantee {
+      tracers.deregistered(handledConnection)
+    }
   }
 
   /** Registers connections and start handling incoming messages in background, in case connection is already handled
@@ -144,15 +149,16 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             )
             .takeWhile(_.isDefined)
             .map(_.get)
-            .mapEval {
+            .mapEval[Unit] {
               case Right(m) =>
                 messageQueue.offer(
                   MessageReceived(connection.key, m)
                 )
               case Left(e) =>
-                Concurrent[F].raiseError[Unit](
-                  UnexpectedConnectionError(e, connection.key)
-                )
+                tracers.error((connection, e)) >>
+                  Concurrent[F].raiseError[Unit](
+                    UnexpectedConnectionError(e, connection.key)
+                  )
             }
             .guarantee(
               closeAndDeregisterConnection(connection)
