@@ -46,8 +46,7 @@ object Ledger {
   val empty = Ledger(None, Vector.empty)
 
   def hash(ledger: Ledger): Hash = {
-    import RLPCodecs.`RLPCodec[Ledger]`
-    val bytes = rlp.encode(ledger)
-    Keccak256(bytes)
+    import RLPCodecs._
+    Keccak256(rlp.encode(ledger))
   }
 }

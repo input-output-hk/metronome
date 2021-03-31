@@ -8,23 +8,22 @@ import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 import scodec.bits.{BitVector, ByteVector}
 
 object RLPCodecs {
-  implicit val `RLPCodec[BitVector]` : RLPCodec[BitVector] =
+  implicit val rlpBitVector: RLPCodec[BitVector] =
     implicitly[RLPCodec[Array[Byte]]].xmap(BitVector(_), _.toByteArray)
 
-  implicit val `RLPCodec[ByteVector]` : RLPCodec[ByteVector] =
+  implicit val rlpByteVector: RLPCodec[ByteVector] =
     implicitly[RLPCodec[Array[Byte]]].xmap(ByteVector(_), _.toArray)
 
-  implicit val `RLPCodec[Transaction.ProposerBlock]`
-      : RLPCodec[Transaction.ProposerBlock] =
+  implicit val rlpProposerBlock: RLPCodec[Transaction.ProposerBlock] =
     deriveLabelledGenericRLPCodec
 
-  implicit val `RLPCodec[Transaction.CheckpointCandidate]`
+  implicit val rlpCheckpointCandidate
       : RLPCodec[Transaction.CheckpointCandidate] =
     deriveLabelledGenericRLPCodec
 
-  implicit def `RLPCodec[Vector[T]]`[T: RLPCodec]: RLPCodec[Vector[T]] =
+  implicit def rlpVector[T: RLPCodec]: RLPCodec[Vector[T]] =
     seqEncDec[T]().xmap(_.toVector, _.toSeq)
 
-  implicit val `RLPCodec[Ledger]` : RLPCodec[Ledger] =
+  implicit val rlpLedger: RLPCodec[Ledger] =
     deriveLabelledGenericRLPCodec
 }
