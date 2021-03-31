@@ -50,4 +50,9 @@ object LedgerProps extends Properties("Ledger") {
           updated.proposerBlocks.isEmpty
     }
   }
+
+  property("hash") = forAll { (ledger1: Ledger, ledger2: Ledger) =>
+    ledger1 == ledger2 && ledger1.hash == ledger2.hash ||
+    ledger1 != ledger2 && ledger1.hash != ledger2.hash
+  }
 }
