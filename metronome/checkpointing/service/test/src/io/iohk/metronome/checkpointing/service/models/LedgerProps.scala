@@ -10,11 +10,14 @@ object LedgerProps extends Properties("Ledger") {
 
   property("update") = forAll { (ledger: Ledger, transaction: Transaction) =>
     val updated = ledger.update(Validated[Transaction](transaction))
+
     transaction match {
+      case _: Transaction.ProposerBlock
+          if ledger.proposerBlocks.contains(transaction) =>
+        updated == ledger
+
       case _: Transaction.ProposerBlock =>
-        (!ledger.proposerBlocks.contains(transaction) &&
-          updated.proposerBlocks.last == transaction ||
-          updated.proposerBlocks.contains(transaction)) &&
+        updated.proposerBlocks.last == transaction &&
           updated.proposerBlocks.distinct == updated.proposerBlocks &&
           updated.maybeLastCheckpoint == ledger.maybeLastCheckpoint
 
