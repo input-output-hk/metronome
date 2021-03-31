@@ -24,7 +24,10 @@ import java.net.InetSocketAddress
 import scala.util.control.NoStackTrace
 
 class ConnectionHandler[F[_]: Concurrent, K, M](
-    connectionQueue: ConcurrentQueue[F, HandledConnection[F, K, M]],
+    connectionQueue: ConcurrentQueue[
+      F,
+      (HandledConnection[F, K, M], Option[HandledConnection[F, K, M]])
+    ],
     connectionsRegister: ConnectionsRegister[F, K, M],
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
     cancelToken: TryableDeferred[F, Unit],
@@ -55,6 +58,18 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     }
   }
 
+  private def register(
+      possibleNewConnection: HandledConnection[F, K, M]
+  ): F[Unit] = {
+    connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
+      case Some(oldConnection) =>
+        // in case of conflict we let the downstream logic to take care of detailed handling of it
+        connectionQueue.offer((possibleNewConnection, Some(oldConnection)))
+      case None =>
+        connectionQueue.offer((possibleNewConnection, None))
+    }
+  }
+
   /** Registers incoming connections and start handling incoming messages in background, in case connection is already handled
     * it closes it
     *
@@ -67,7 +82,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   ): F[Unit] = {
     HandledConnection
       .incoming(serverAddress, encryptedConnection)
-      .flatMap(connection => connectionQueue.offer(connection))
+      .flatMap(connection => register(connection))
 
   }
 
@@ -81,7 +96,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   ): F[Unit] = {
     HandledConnection
       .outgoing(encryptedConnection)
-      .flatMap(connection => connectionQueue.offer(connection))
+      .flatMap(connection => register(connection))
   }
 
   /** Checks if handler already handles connection o peer with provided key
@@ -157,17 +172,20 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     }
   }
 
-  private def registerOrDiscard(
-      possibleNewConnection: HandledConnection[F, K, M]
+  def handleConflict(
+      newConnectionWithPossibleConflict: (
+          HandledConnection[F, K, M],
+          Option[HandledConnection[F, K, M]]
+      )
   ): F[Option[HandledConnection[F, K, M]]] = {
-    connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
-      case Some(oldConnection) =>
-        //TODO [PM-3092] for now we are closing any new connections in case of conflict, we may investigate other strategies
-        // like keeping old for outgoing and replacing for incoming
-        tracers.discarded(possibleNewConnection) >> possibleNewConnection.close.as(None)
-      case None =>
-        tracers.registered(possibleNewConnection) >> Concurrent[F].pure(Some(possibleNewConnection))
+    val (newConnection, possibleOldConnection) =
+      newConnectionWithPossibleConflict
 
+    possibleOldConnection match {
+      case Some(value) =>
+        newConnection.close.as(None: Option[HandledConnection[F, K, M]])
+      case None =>
+        Concurrent[F].pure(Some(newConnection))
     }
   }
 
@@ -178,8 +196,8 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   private def handleConnections: F[Unit] = {
     Iterant
       .repeatEvalF(connectionQueue.poll)
-      .mapEval(registerOrDiscard)
-      .collect { case Some(conn) => conn }
+      .mapEval(handleConflict)
+      .collect { case Some(newConnection) => newConnection }
       .mapEval { connection =>
         incrementRunningConnections >>
           Iterant
@@ -307,7 +325,10 @@ object ConnectionHandler {
       acquiredConnections <- ConnectionsRegister.empty[F, K, M]
       messageQueue        <- ConcurrentQueue.unbounded[F, MessageReceived[K, M]]()
       connectionQueue <- ConcurrentQueue
-        .unbounded[F, HandledConnection[F, K, M]]()
+        .unbounded[
+          F,
+          (HandledConnection[F, K, M], Option[HandledConnection[F, K, M]])
+        ]()
     } yield new ConnectionHandler[F, K, M](
       connectionQueue,
       acquiredConnections,
