@@ -22,7 +22,7 @@ case class Ledger(
     * by this point, so we know for example that the new checkpoint is
     * a valid extension of the previous one.
     */
-  def apply(transaction: Validated[Transaction]): Ledger =
+  def update(transaction: Validated[Transaction]): Ledger =
     (transaction: Transaction) match {
       case t @ Transaction.ProposerBlock(_) =>
         if (proposerBlocks.contains(t))
