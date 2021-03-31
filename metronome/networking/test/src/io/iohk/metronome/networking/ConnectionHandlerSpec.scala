@@ -1,7 +1,7 @@
 package io.iohk.metronome.networking
 
 import cats.effect.Resource
-import cats.effect.concurrent.Deferred
+import cats.effect.concurrent.{Deferred, Ref}
 import io.iohk.metronome.networking.ConnectionHandler.{
   ConnectionAlreadyClosedException,
   FinishedConnection
@@ -19,6 +19,8 @@ import monix.execution.Scheduler
 import org.scalatest.flatspec.AsyncFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 import io.iohk.metronome.tracer.Tracer
+
+import java.net.InetSocketAddress
 import scala.concurrent.duration._
 
 class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
@@ -92,7 +94,7 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
     }
   }
 
-  it should "not register and close duplicated connection" in customTestCaseResourceT(
+  it should "not register and close duplicated outgoing connection" in customTestCaseResourceT(
     buildHandlerResource()
   ) { handler =>
     for {
@@ -109,7 +111,31 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
       assert(connections.contains(newConnection.key))
       assert(connectionsAfterDuplication.contains(newConnection.key))
       assert(closedAfterDuplication)
+    }
+  }
 
+  it should "replace incoming connections" in customTestCaseResourceT(
+    buildHandlerResourceWithCallbackCounter
+  ) { case (handler, counter) =>
+    for {
+      initialConnection <- MockEncryptedConnection()
+      duplicatedConnection <- MockEncryptedConnection(
+        (initialConnection.key, initialConnection.address)
+      )
+      _                           <- handler.registerIncoming(fakeLocalAddress, initialConnection)
+      connections                 <- handler.getAllActiveConnections
+      _                           <- handler.registerIncoming(fakeLocalAddress, duplicatedConnection)
+      _                           <- initialConnection.isClosed.waitFor(closed => closed)
+      connectionsAfterDuplication <- handler.getAllActiveConnections
+      initialClosed               <- initialConnection.isClosed
+      duplicatedClosed            <- duplicatedConnection.isClosed
+      numberOfCalledCallbacks     <- counter.get
+    } yield {
+      assert(connections.contains(initialConnection.key))
+      assert(connectionsAfterDuplication.contains(initialConnection.key))
+      assert(initialClosed)
+      assert(!duplicatedClosed)
+      assert(numberOfCalledCallbacks == 0)
     }
   }
 
@@ -230,6 +256,8 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
 }
 
 object ConnectionHandlerSpec {
+  val fakeLocalAddress = new InetSocketAddress("localhost", 9081)
+
   implicit class TaskOps[A](task: Task[A]) {
     def waitFor(condition: A => Boolean)(implicit timeOut: FiniteDuration) = {
       task.restartUntil(condition).timeout(timeOut)
@@ -244,6 +272,18 @@ object ConnectionHandlerSpec {
   ): Resource[Task, ConnectionHandler[Task, Secp256k1Key, TestMessage]] = {
     ConnectionHandler
       .apply[Task, Secp256k1Key, TestMessage](cb)
+  }
+
+  def buildHandlerResourceWithCallbackCounter: Resource[
+    Task,
+    (ConnectionHandler[Task, Secp256k1Key, TestMessage], Ref[Task, Long])
+  ] = {
+    for {
+      counter <- Resource.liftF(Ref.of[Task, Long](0L))
+      handler <- buildHandlerResource(_ =>
+        counter.update(current => current + 1)
+      )
+    } yield (handler, counter)
   }
 
   def buildNConnections(n: Int)(implicit

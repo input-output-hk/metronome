@@ -213,21 +213,23 @@ class RemoteConnectionManagerWithMockProviderSpec
     }
   }
 
-  it should "not allow duplicated incoming peer" in customTestCaseResourceT(
+  it should "prefer most fresh incoming connection" in customTestCaseResourceT(
     buildTestCaseWithNPeers(2, shouldBeOnline = false, longRetryConfig)
   ) { case (provider, manager, clusterPeers) =>
     for {
       initialAcquired          <- manager.getAcquiredConnections
-      incomingConnection       <- provider.newIncomingPeer(clusterPeers.head)
+      firstIncoming            <- provider.newIncomingPeer(clusterPeers.head)
       _                        <- manager.waitForNConnections(1)
-      containsIncoming         <- manager.containsConnection(incomingConnection)
+      containsIncoming         <- manager.containsConnection(firstIncoming)
       duplicatedIncoming       <- provider.newIncomingPeer(clusterPeers.head)
       _                        <- Task.sleep(500.millis) // Let the offered connection be processed.
       duplicatedIncomingClosed <- duplicatedIncoming.isClosed
+      firstIncomingClosed      <- firstIncoming.isClosed
     } yield {
       assert(initialAcquired.isEmpty)
       assert(containsIncoming)
-      assert(duplicatedIncomingClosed)
+      assert(!duplicatedIncomingClosed)
+      assert(firstIncomingClosed)
     }
   }
 
