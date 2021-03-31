@@ -98,19 +98,22 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
     buildHandlerResource()
   ) { handler =>
     for {
-      newConnection <- MockEncryptedConnection()
+      initialConnection <- MockEncryptedConnection()
       duplicatedConnection <- MockEncryptedConnection(
-        (newConnection.key, newConnection.address)
+        (initialConnection.key, initialConnection.address)
       )
-      _                           <- handler.registerOutgoing(newConnection)
+      _                           <- handler.registerOutgoing(initialConnection)
       connections                 <- handler.getAllActiveConnections
       _                           <- handler.registerOutgoing(duplicatedConnection)
       connectionsAfterDuplication <- handler.getAllActiveConnections
-      closedAfterDuplication      <- duplicatedConnection.isClosed
+      _                           <- duplicatedConnection.isClosed.waitFor(closed => closed)
+      duplicatedClosed            <- duplicatedConnection.isClosed
+      initialClosed               <- initialConnection.isClosed
     } yield {
-      assert(connections.contains(newConnection.key))
-      assert(connectionsAfterDuplication.contains(newConnection.key))
-      assert(closedAfterDuplication)
+      assert(connections.contains(initialConnection.key))
+      assert(connectionsAfterDuplication.contains(initialConnection.key))
+      assert(duplicatedClosed)
+      assert(!initialClosed)
     }
   }
 
