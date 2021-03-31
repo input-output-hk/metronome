@@ -23,6 +23,10 @@ class ConnectionsRegister[F[_]: Concurrent, K, M](
     }
   }
 
+  def registerConnection(connection: HandledConnection[F, K, M]): F[Unit] = {
+    registerRef.update(register => register + (connection.key -> connection))
+  }
+
   def isNewConnection(connectionKey: K): F[Boolean] = {
     registerRef.get.map(register => !register.contains(connectionKey))
   }
