@@ -18,6 +18,15 @@ object ArbitraryInstances {
       Gen.listOfN(32, arbitrary[Byte]).map(ByteVector(_)).map(Hash(_))
     }
 
+  implicit val arbHeaderHash: Arbitrary[Block.Header.Hash] =
+    Arbitrary(arbitrary[Hash].map(Block.Header.Hash(_)))
+
+  implicit val arbBodyHash: Arbitrary[Block.Body.Hash] =
+    Arbitrary(arbitrary[Hash].map(Block.Body.Hash(_)))
+
+  implicit val arbLedgerHash: Arbitrary[Ledger.Hash] =
+    Arbitrary(arbitrary[Hash].map(Ledger.Hash(_)))
+
   implicit val arbProposerBlock: Arbitrary[Transaction.ProposerBlock] =
     Arbitrary {
       arbitrary[BitVector].map(Transaction.ProposerBlock(_))
@@ -48,9 +57,9 @@ object ArbitraryInstances {
   implicit val arbBlock: Arbitrary[Block] =
     Arbitrary {
       for {
-        parentHash    <- arbitrary[Hash]
-        preStateHash  <- arbitrary[Hash]
-        postStateHash <- arbitrary[Hash]
+        parentHash    <- arbitrary[Block.Header.Hash]
+        preStateHash  <- arbitrary[Ledger.Hash]
+        postStateHash <- arbitrary[Ledger.Hash]
         transactions  <- arbitrary[Vector[Transaction]]
         body = Block.Body(transactions)
         header = Block.Header(

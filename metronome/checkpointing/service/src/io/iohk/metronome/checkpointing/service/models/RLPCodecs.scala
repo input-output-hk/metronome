@@ -19,6 +19,15 @@ object RLPCodecs {
   implicit val hashRLPCodec: RLPCodec[Hash] =
     implicitly[RLPCodec[ByteVector]].xmap(Hash(_), identity)
 
+  implicit val headerHashRLPCodec: RLPCodec[Block.Header.Hash] =
+    implicitly[RLPCodec[ByteVector]].xmap(Block.Header.Hash(_), identity)
+
+  implicit val bodyHashRLPCodec: RLPCodec[Block.Body.Hash] =
+    implicitly[RLPCodec[ByteVector]].xmap(Block.Body.Hash(_), identity)
+
+  implicit val ledgerHashRLPCodec: RLPCodec[Ledger.Hash] =
+    implicitly[RLPCodec[ByteVector]].xmap(Ledger.Hash(_), identity)
+
   implicit val rlpProposerBlock: RLPCodec[Transaction.ProposerBlock] =
     deriveLabelledGenericRLPCodec
 

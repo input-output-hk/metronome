@@ -14,8 +14,7 @@ import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 case class Ledger(
     maybeLastCheckpoint: Option[Transaction.CheckpointCandidate],
     proposerBlocks: Vector[Transaction.ProposerBlock]
-) extends RLPHash[Ledger] {
-  override protected val encoder = RLPCodecs.rlpLedger
+) extends RLPHash[Ledger, Ledger.Hash] {
 
   /** Apply a validated transaction to produce the next ledger state.
     *
@@ -36,6 +35,6 @@ case class Ledger(
     }
 }
 
-object Ledger {
+object Ledger extends RLPHashCompanion[Ledger]()(RLPCodecs.rlpLedger) {
   val empty = Ledger(None, Vector.empty)
 }
