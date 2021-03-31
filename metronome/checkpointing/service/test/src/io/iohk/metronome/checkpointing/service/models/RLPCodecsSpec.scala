@@ -74,9 +74,9 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
         )
       )
 
-      override val decoded: Ledger = ledger
+      override val decoded = ledger
 
-      override val encoded: RLPEncodeable =
+      override val encoded =
         RLPList(     // Ledger
           RLPList(   // Option
             RLPList( // CheckpointCandidate
@@ -89,6 +89,20 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
             ),
             RLPList(RLPValue(ledger.proposerBlocks(1).value.toByteArray))
           )
+        )
+    }
+  }
+
+  test {
+    new Example[Transaction] {
+      val transaction = sample[Transaction.ProposerBlock]
+
+      override val decoded = transaction
+
+      override val encoded =
+        RLPList(                     // ProposerBlock
+          RLPValue(Array(1.toByte)), // Tag
+          RLPValue(transaction.value.toByteArray)
         )
     }
   }

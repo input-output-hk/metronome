@@ -1,9 +1,7 @@
 package io.iohk.metronome.checkpointing.service.models
 
-import io.iohk.ethereum.rlp
 import io.iohk.metronome.core.Validated
 import io.iohk.metronome.checkpointing.interpreter.models.Transaction
-import io.iohk.metronome.crypto.hash.{Hash, Keccak256}
 
 /** Current state of the ledger after applying all previous blocks.
   *
@@ -16,12 +14,8 @@ import io.iohk.metronome.crypto.hash.{Hash, Keccak256}
 case class Ledger(
     maybeLastCheckpoint: Option[Transaction.CheckpointCandidate],
     proposerBlocks: Vector[Transaction.ProposerBlock]
-) {
-
-  /** Calculate the hash of the ledger so we can put it in blocks
-    * and refer to it when syncing state between federation members.
-    */
-  lazy val hash: Hash = Ledger.hash(this)
+) extends RLPHash[Ledger] {
+  override protected val encoder = RLPCodecs.rlpLedger
 
   /** Apply a validated transaction to produce the next ledger state.
     *
@@ -44,9 +38,4 @@ case class Ledger(
 
 object Ledger {
   val empty = Ledger(None, Vector.empty)
-
-  def hash(ledger: Ledger): Hash = {
-    import RLPCodecs._
-    Keccak256(rlp.encode(ledger))
-  }
 }
