@@ -34,6 +34,11 @@ object Block {
 
   case class Header(
       parentHash: Hash,
+      // Hash of the Ledger before executing the block.
+      preStateHash: Hash,
+      // Hash of the Ledger after executing the block.
+      postStateHash: Hash,
+      // Hash of the transactions in the body.
       bodyHash: Hash
   ) extends RLPHash[Header] {
     protected override val encoder = RLPCodecs.rlpBlockHeader

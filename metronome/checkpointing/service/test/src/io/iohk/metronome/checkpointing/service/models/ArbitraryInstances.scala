@@ -48,10 +48,17 @@ object ArbitraryInstances {
   implicit val arbBlock: Arbitrary[Block] =
     Arbitrary {
       for {
-        parentHash   <- arbitrary[Hash]
-        transactions <- arbitrary[Vector[Transaction]]
-        body   = Block.Body(transactions)
-        header = Block.Header(parentHash, body.hash)
+        parentHash    <- arbitrary[Hash]
+        preStateHash  <- arbitrary[Hash]
+        postStateHash <- arbitrary[Hash]
+        transactions  <- arbitrary[Vector[Transaction]]
+        body = Block.Body(transactions)
+        header = Block.Header(
+          parentHash,
+          preStateHash,
+          postStateHash,
+          body.hash
+        )
       } yield Block.make(header, body)
     }
 }

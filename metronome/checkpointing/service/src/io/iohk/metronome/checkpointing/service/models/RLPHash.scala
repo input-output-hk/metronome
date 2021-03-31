@@ -14,5 +14,5 @@ object RLPHash {
 trait RLPHash[T] { self: T =>
   protected implicit def encoder: RLPEncoder[T]
 
-  lazy val hash = RLPHash[T](self)
+  lazy val hash: Hash = RLPHash[T](self)
 }
