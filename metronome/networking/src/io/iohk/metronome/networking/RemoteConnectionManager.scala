@@ -172,6 +172,19 @@ object RemoteConnectionManager {
       retryConfig: RetryConfig
   )(implicit tracers: NetworkTracers[F, K, M]): F[Unit] = {
 
+    def connectWithErrors(
+        connectionToAcquire: OutGoingConnectionRequest[K]
+    ): F[Either[ConnectionFailure[K], Unit]] = {
+      connectTo(encryptedConnectionProvider, connectionToAcquire).flatMap {
+        case Left(err) =>
+          Concurrent[F].pure(Left(err))
+        case Right(connection) =>
+          connectionsHandler
+            .registerOutgoing(connection.encryptedConnection)
+            .as(Right(()))
+      }
+    }
+
     /** Observable is used here as streaming primitive as it has richer api than Iterant and have mapParallelUnorderedF
       * combinator, which makes it possible to have multiple concurrent retry timers, which are cancelled when whole
       * outer stream is cancelled
@@ -179,19 +192,15 @@ object RemoteConnectionManager {
     Observable
       .repeatEvalF(connectionsToAcquire.poll)
       .filterEvalF(request => connectionsHandler.isNewConnection(request.key))
-      .mapEvalF { connectionToAcquire =>
-        connectTo(encryptedConnectionProvider, connectionToAcquire)
-      }
+      .mapEvalF(connectWithErrors)
       .mapParallelUnorderedF(Integer.MAX_VALUE) {
         case Left(failure) =>
-          val failureToLog = failure.err
           tracers.failed(failure) >>
             retryConnection(retryConfig, failure.connectionRequest).flatMap(
               updatedRequest => connectionsToAcquire.offer(updatedRequest)
             )
-        case Right(connection) =>
-          connectionsHandler.registerOutgoing(connection.encryptedConnection)
-
+        case Right(_) =>
+          Concurrent[F].pure(())
       }
       .completedF
   }
