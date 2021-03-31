@@ -1,6 +1,5 @@
 package io.iohk.metronome.networking
 
-import cats.effect.concurrent.Deferred
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
@@ -237,15 +236,6 @@ object RemoteConnectionManager {
       }
       .completedL
   }
-
-  def withCancelToken[F[_]: Concurrent, A](
-      token: Deferred[F, Unit],
-      ops: F[Option[A]]
-  ): F[Option[A]] =
-    Concurrent[F].race(token.get, ops).map {
-      case Left(()) => None
-      case Right(x) => x
-    }
 
   class HandledConnectionFinisher[F[_]: Concurrent: Timer, K, M](
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],

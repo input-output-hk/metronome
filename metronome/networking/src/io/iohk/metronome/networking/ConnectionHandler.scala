@@ -1,24 +1,28 @@
 package io.iohk.metronome.networking
 
-import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.effect.concurrent.{Deferred, TryableDeferred}
-import io.iohk.metronome.networking.RemoteConnectionManager.withCancelToken
-import monix.catnap.ConcurrentQueue
-import monix.execution.atomic.AtomicInt
-import monix.tail.Iterant
-import cats.implicits._
 import cats.effect.implicits._
+import cats.effect.{Concurrent, ContextShift, Resource, Sync}
+import cats.implicits._
+import io.iohk.metronome.networking.ConnectionHandler.HandledConnection.{
+  HandledConnectionCloseReason,
+  ManagerShutdown,
+  RemoteClosed,
+  RemoteError
+}
 import io.iohk.metronome.networking.ConnectionHandler.{
   ConnectionAlreadyClosedException,
   FinishedConnection,
   HandledConnection,
-  MessageReceived,
-  UnexpectedConnectionError
+  MessageReceived
 }
 import io.iohk.metronome.networking.EncryptedConnectionProvider.{
   ConnectionAlreadyClosed,
   ConnectionError
 }
+import monix.catnap.ConcurrentQueue
+import monix.execution.atomic.AtomicInt
+import monix.tail.Iterant
 
 import java.net.InetSocketAddress
 import scala.util.control.NoStackTrace
@@ -81,7 +85,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       encryptedConnection: EncryptedConnection[F, K, M]
   ): F[Unit] = {
     HandledConnection
-      .incoming(serverAddress, encryptedConnection)
+      .incoming(cancelToken, serverAddress, encryptedConnection)
       .flatMap(connection => register(connection))
 
   }
@@ -95,7 +99,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       encryptedConnection: EncryptedConnection[F, K, M]
   ): F[Unit] = {
     HandledConnection
-      .outgoing(encryptedConnection)
+      .outgoing(cancelToken, encryptedConnection)
       .flatMap(connection => register(connection))
   }
 
@@ -145,7 +149,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             case Left(_) =>
               // Closing the connection will cause it to be re-queued for reconnection.
               tracers.sendError(connection) >>
-                connection.close.as(
+                connection.closeAlreadyClosed.as(
                   Left(ConnectionAlreadyClosedException(recipient))
                 )
 
@@ -170,6 +174,17 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
           )
         )
     }
+  }
+
+  private def callCallBackWithConnection(
+      handledConnection: HandledConnection[F, K, M]
+  ): F[Unit] = {
+    connectionFinishCallback(
+      FinishedConnection(
+        handledConnection.key,
+        handledConnection.serverAddress
+      )
+    )
   }
 
   def handleConflict(
@@ -202,26 +217,32 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
         incrementRunningConnections >>
           Iterant
             .repeatEvalF(
-              withCancelToken(cancelToken, connection.incomingMessage)
+              connection.incomingMessage
             )
             .takeWhile(_.isDefined)
             .map(_.get)
-            .mapEval[Unit] {
-              case Right(m) =>
-                tracers.received((connection, m)) >>
-                  messageQueue.offer(
-                    MessageReceived(connection.key, m)
-                  )
-              case Left(e) =>
-                tracers.receiveError((connection, e)) >>
-                  Concurrent[F].raiseError[Unit](
-                    UnexpectedConnectionError(e, connection.key)
-                  )
+            .mapEval[Unit] { m =>
+              tracers.received((connection, m)) >>
+                messageQueue.offer(
+                  MessageReceived(connection.key, m)
+                )
             }
             .guarantee(
-              closeAndDeregisterConnection(connection)
-                .guarantee(connection.deregisterListener.complete(()))
-                .flatMap(_ => callCallBackIfNotClosed(connection))
+              // at this point closeReason will always be filled
+              connection.closeReason.get.flatMap {
+                case HandledConnection.RemoteClosed =>
+                  closeAndDeregisterConnection(
+                    connection
+                  ) >> callCallBackWithConnection(connection)
+                case RemoteError(e) =>
+                  tracers.receiveError(
+                    (connection, e)
+                  ) >> closeAndDeregisterConnection(
+                    connection
+                  ) >> callCallBackWithConnection(connection)
+                case HandledConnection.ManagerShutdown =>
+                  closeAndDeregisterConnection(connection)
+              }
             )
             .completedL
             .start
@@ -265,11 +286,13 @@ object ConnectionHandler {
     *                       underlyingConnection remoteAddress
     * @param underlyingConnection, encrypted connection to send and receive messages
     */
-  sealed abstract case class HandledConnection[F[_], K, M] private (
+  sealed abstract case class HandledConnection[F[_]: Concurrent, K, M] private (
+      globalCancelToken: TryableDeferred[F, Unit],
       key: K,
       serverAddress: InetSocketAddress,
       underlyingConnection: EncryptedConnection[F, K, M],
-      deregisterListener: Deferred[F, Unit]
+      deregisterListener: Deferred[F, Unit],
+      closeReason: Deferred[F, HandledConnectionCloseReason]
   ) {
     def sendMessage(m: M): F[Unit] = {
       underlyingConnection.sendMessage(m)
@@ -279,38 +302,79 @@ object ConnectionHandler {
       underlyingConnection.close
     }
 
-    def incomingMessage: F[Option[Either[ConnectionError, M]]] = {
-      underlyingConnection.incomingMessage
+    def closeAlreadyClosed: F[Unit] = {
+      completeWithReason(RemoteClosed) >> underlyingConnection.close
+    }
+
+    private def completeWithReason(r: HandledConnectionCloseReason): F[Unit] =
+      closeReason.complete(r).attempt.void
+
+    private def handleIncomingEvent(
+        incomingEvent: Option[Either[ConnectionError, M]]
+    ): F[Option[M]] = {
+      incomingEvent match {
+        case Some(Right(m)) => Concurrent[F].pure(Some(m))
+        case Some(Left(e))  => completeWithReason(RemoteError(e)).as(None)
+        case None           => completeWithReason(RemoteClosed).as(None)
+      }
+    }
+
+    def incomingMessage: F[Option[M]] = {
+      Concurrent[F]
+        .race(globalCancelToken.get, underlyingConnection.incomingMessage)
+        .flatMap {
+          case Left(_)  => completeWithReason(ManagerShutdown).as(None)
+          case Right(e) => handleIncomingEvent(e)
+        }
     }
   }
 
   object HandledConnection {
+    sealed abstract class HandledConnectionCloseReason
+    case object RemoteClosed extends HandledConnectionCloseReason
+    case class RemoteError(e: ConnectionError)
+        extends HandledConnectionCloseReason
+    case object ManagerShutdown extends HandledConnectionCloseReason
+
+    private def buildLifeCycleListeners[F[_]: Concurrent]
+        : F[(Deferred[F, HandledConnectionCloseReason], Deferred[F, Unit])] = {
+      for {
+        closeReason        <- Deferred[F, HandledConnectionCloseReason]
+        deregisterListener <- Deferred[F, Unit]
+      } yield (closeReason, deregisterListener)
+    }
+
     private[ConnectionHandler] def outgoing[F[_]: Concurrent, K, M](
+        globalCancelToken: TryableDeferred[F, Unit],
         encryptedConnection: EncryptedConnection[F, K, M]
     ): F[HandledConnection[F, K, M]] = {
-      Deferred[F, Unit].map { listener =>
-        new HandledConnection(
+      buildLifeCycleListeners[F].map { case (closeReason, deregisterListener) =>
+        new HandledConnection[F, K, M](
+          globalCancelToken,
           encryptedConnection.remotePeerInfo._1,
           encryptedConnection.remotePeerInfo._2,
           encryptedConnection,
-          listener
+          deregisterListener,
+          closeReason
         ) {}
       }
     }
 
     private[ConnectionHandler] def incoming[F[_]: Concurrent, K, M](
+        globalCancelToken: TryableDeferred[F, Unit],
         serverAddress: InetSocketAddress,
         encryptedConnection: EncryptedConnection[F, K, M]
     ): F[HandledConnection[F, K, M]] = {
-      Deferred[F, Unit].map { listener =>
-        new HandledConnection(
+      buildLifeCycleListeners[F].map { case (closeReason, deregisterListener) =>
+        new HandledConnection[F, K, M](
+          globalCancelToken,
           encryptedConnection.remotePeerInfo._1,
           serverAddress,
           encryptedConnection,
-          listener
+          deregisterListener,
+          closeReason
         ) {}
       }
-
     }
 
   }
