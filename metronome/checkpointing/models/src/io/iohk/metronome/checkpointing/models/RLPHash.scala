@@ -1,4 +1,4 @@
-package io.iohk.metronome.checkpointing.service.models
+package io.iohk.metronome.checkpointing.models
 
 import io.iohk.ethereum.rlp
 import io.iohk.ethereum.rlp.RLPEncoder

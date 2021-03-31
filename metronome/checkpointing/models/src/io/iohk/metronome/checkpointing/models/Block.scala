@@ -1,6 +1,4 @@
-package io.iohk.metronome.checkpointing.service.models
-
-import io.iohk.metronome.checkpointing.interpreter.models.Transaction
+package io.iohk.metronome.checkpointing.models
 
 /** Represents what the HotStuff paper called "nodes" as the "tree",
   * with the transactions in the body being the "commands".

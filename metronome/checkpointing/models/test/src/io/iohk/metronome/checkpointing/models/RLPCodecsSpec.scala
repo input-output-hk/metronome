@@ -1,7 +1,6 @@
-package io.iohk.metronome.checkpointing.service.models
+package io.iohk.metronome.checkpointing.models
 
 import io.iohk.ethereum.rlp._
-import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 import org.scalactic.Equality
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

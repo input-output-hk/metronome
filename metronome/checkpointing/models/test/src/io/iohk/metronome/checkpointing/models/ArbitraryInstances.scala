@@ -1,7 +1,6 @@
-package io.iohk.metronome.checkpointing.service.models
+package io.iohk.metronome.checkpointing.models
 
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
 import scodec.bits.BitVector

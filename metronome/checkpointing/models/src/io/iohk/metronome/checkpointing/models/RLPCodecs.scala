@@ -1,4 +1,4 @@
-package io.iohk.metronome.checkpointing.service.models
+package io.iohk.metronome.checkpointing.models
 
 import io.iohk.ethereum.rlp.RLPCodec
 import io.iohk.ethereum.rlp.RLPCodec.Ops
@@ -6,7 +6,6 @@ import io.iohk.ethereum.rlp.RLPImplicitDerivations._
 import io.iohk.ethereum.rlp.RLPImplicits._
 import io.iohk.ethereum.rlp.{RLPEncoder, RLPList}
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 import scodec.bits.{BitVector, ByteVector}
 
 object RLPCodecs {
