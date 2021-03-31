@@ -6,6 +6,13 @@ import io.iohk.metronome.checkpointing.interpreter.models.Transaction
   * with the transactions in the body being the "commands".
   *
   * The block contents are specific to the checkpointing application.
+  *
+  * The header and body are separated because headers have to part
+  * of the Checkpoint Certificate; there's no need to repeat all
+  * the transactions there, the Merkle root will make it possible
+  * to prove that a given CheckpointCandidate transaction was
+  * indeed part of the block. The headers are needed for parent-child
+  * validation in the certificate as well.
   */
 sealed abstract case class Block(
     header: Block.Header,
@@ -39,6 +46,10 @@ object Block {
       postStateHash: Ledger.Hash,
       // Hash of the transactions in the body.
       bodyHash: Body.Hash
+      // TODO (PM-3102): Add merkle root for contents.
+      // Instead of the hash of the body, should we use the
+      // the Merkle root of the transactions?
+      // Or should that be an additional field?
   ) extends RLPHash[Header, Header.Hash]
 
   object Header extends RLPHashCompanion[Header]()(RLPCodecs.rlpBlockHeader)
