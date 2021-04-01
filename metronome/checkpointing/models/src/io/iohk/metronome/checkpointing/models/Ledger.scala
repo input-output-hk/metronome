@@ -12,7 +12,7 @@ import io.iohk.metronome.core.Validated
   */
 case class Ledger(
     maybeLastCheckpoint: Option[Transaction.CheckpointCandidate],
-    proposerBlocks: Vector[Transaction.ProposerBlock]
+    proposerBlocks: IndexedSeq[Transaction.ProposerBlock]
 ) extends RLPHash[Ledger, Ledger.Hash] {
 
   /** Apply a validated transaction to produce the next ledger state.

@@ -27,6 +27,9 @@ object RLPCodecs {
   implicit val ledgerHashRLPCodec: RLPCodec[Ledger.Hash] =
     implicitly[RLPCodec[ByteVector]].xmap(Ledger.Hash(_), identity)
 
+  implicit val merkleHashRLPCodec: RLPCodec[MerkleTree.Hash] =
+    implicitly[RLPCodec[ByteVector]].xmap(MerkleTree.Hash(_), identity)
+
   implicit val rlpProposerBlock: RLPCodec[Transaction.ProposerBlock] =
     deriveLabelledGenericRLPCodec
 
@@ -34,7 +37,7 @@ object RLPCodecs {
       : RLPCodec[Transaction.CheckpointCandidate] =
     deriveLabelledGenericRLPCodec
 
-  implicit def rlpVector[T: RLPCodec]: RLPCodec[Vector[T]] =
+  implicit def rlpIndexedSeq[T: RLPCodec]: RLPCodec[IndexedSeq[T]] =
     seqEncDec[T]().xmap(_.toVector, _.toSeq)
 
   implicit val rlpLedger: RLPCodec[Ledger] =

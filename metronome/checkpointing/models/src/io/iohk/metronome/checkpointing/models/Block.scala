@@ -34,24 +34,30 @@ object Block {
   def make(
       header: Header,
       body: Body
-  ) = makeUnsafe(header = header.copy(bodyHash = body.hash), body = body)
+  ) = makeUnsafe(
+    header = header.copy(
+      bodyHash = body.hash,
+      // TODO (PM-3102): Compute Root Hash over the transactions.
+      contentMerkleRoot = MerkleTree.Hash.empty
+    ),
+    body = body
+  )
 
   case class Header(
       parentHash: Header.Hash,
       // Hash of the Ledger after executing the block.
       postStateHash: Ledger.Hash,
       // Hash of the transactions in the body.
-      bodyHash: Body.Hash
-      // TODO (PM-3102): Add merkle root for contents.
-      // Instead of the hash of the body, should we use the
-      // the Merkle root of the transactions?
-      // Or should that be an additional field?
+      bodyHash: Body.Hash,
+      // Merkle root of the transactions in the body.
+      // TODO (PM-3102): Should this just replace the `bodyHash`?
+      contentMerkleRoot: MerkleTree.Hash
   ) extends RLPHash[Header, Header.Hash]
 
   object Header extends RLPHashCompanion[Header]()(RLPCodecs.rlpBlockHeader)
 
   case class Body(
-      transactions: Vector[Transaction]
+      transactions: IndexedSeq[Transaction]
   ) extends RLPHash[Body, Body.Hash]
 
   object Body extends RLPHashCompanion[Body]()(RLPCodecs.rlpBlockBody)

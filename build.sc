@@ -215,7 +215,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   object hotstuff extends SubModule {
 
     /** Pure consensus models. */
-    object consensus extends SubModule {
+    object consensus extends SubModule with Publishing {
+      override def description: String =
+        "Pure HotStuff consensus models."
+
       override def moduleDeps: Seq[PublishModule] =
         Seq(core, crypto)
 
@@ -260,7 +263,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
 
       override def moduleDeps: Seq[PublishModule] =
-        Seq(core, crypto)
+        Seq(core, crypto, hotstuff.consensus)
 
       object test extends TestModule
     }

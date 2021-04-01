@@ -26,6 +26,9 @@ object ArbitraryInstances {
   implicit val arbLedgerHash: Arbitrary[Ledger.Hash] =
     Arbitrary(arbitrary[Hash].map(Ledger.Hash(_)))
 
+  implicit val arbMerkleHash: Arbitrary[MerkleTree.Hash] =
+    Arbitrary(arbitrary[Hash].map(MerkleTree.Hash(_)))
+
   implicit val arbProposerBlock: Arbitrary[Transaction.ProposerBlock] =
     Arbitrary {
       arbitrary[BitVector].map(Transaction.ProposerBlock(_))
@@ -56,15 +59,17 @@ object ArbitraryInstances {
   implicit val arbBlock: Arbitrary[Block] =
     Arbitrary {
       for {
-        parentHash    <- arbitrary[Block.Header.Hash]
-        postStateHash <- arbitrary[Ledger.Hash]
-        transactions  <- arbitrary[Vector[Transaction]]
+        parentHash        <- arbitrary[Block.Header.Hash]
+        postStateHash     <- arbitrary[Ledger.Hash]
+        transactions      <- arbitrary[Vector[Transaction]]
+        contentMerkleRoot <- arbitrary[MerkleTree.Hash]
         body = Block.Body(transactions)
         header = Block.Header(
           parentHash,
           postStateHash,
-          body.hash
+          body.hash,
+          contentMerkleRoot
         )
-      } yield Block.make(header, body)
+      } yield Block.makeUnsafe(header, body)
     }
 }
