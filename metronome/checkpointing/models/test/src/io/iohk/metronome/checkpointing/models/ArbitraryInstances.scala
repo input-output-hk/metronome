@@ -83,7 +83,7 @@ object ArbitraryInstances {
   implicit val arbBlockHeader: Arbitrary[Block.Header] =
     Arbitrary(arbitrary[Block].map(_.header))
 
-  implicit val arbGSig: Arbitrary[ECDSASignature] =
+  implicit val arbECDSASignature: Arbitrary[ECDSASignature] =
     Arbitrary {
       for {
         r <- Gen.posNum[BigInt]
