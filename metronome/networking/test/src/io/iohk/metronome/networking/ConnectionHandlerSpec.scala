@@ -142,6 +142,47 @@ class ConnectionHandlerSpec extends AsyncFlatSpecLike with Matchers {
     }
   }
 
+  it should "treat last conflicting incoming connection as live one" in customTestCaseResourceT(
+    buildHandlerResourceWithCallbackCounter
+  ) { case (handler, counter) =>
+    val numberOfConflictingConnections = 4
+
+    for {
+      initialConnection <- MockEncryptedConnection()
+      duplicatedConnections <- Task.traverse(
+        (0 until numberOfConflictingConnections).toList
+      )(_ =>
+        MockEncryptedConnection(
+          (initialConnection.key, initialConnection.address)
+        )
+      )
+
+      _           <- handler.registerIncoming(fakeLocalAddress, initialConnection)
+      connections <- handler.getAllActiveConnections
+      (closed, last) = (
+        duplicatedConnections.dropRight(1),
+        duplicatedConnections.last
+      )
+      _ <- Task.traverse(duplicatedConnections)(duplicated =>
+        handler.registerIncoming(fakeLocalAddress, duplicated)
+      )
+      allDuplicatesClosed <- Task
+        .sequence(closed.map(connection => connection.isClosed))
+        .map(statusList => statusList.forall(closed => closed))
+        .waitFor(allClosed => allClosed)
+      lastClosed                      <- last.isClosed
+      numberOfCalledCallbacks         <- counter.get
+      activeConnectionsAfterConflicts <- handler.getAllActiveConnections
+    } yield {
+      assert(connections.contains(initialConnection.key))
+      assert(allDuplicatesClosed)
+      assert(!lastClosed)
+      assert(numberOfCalledCallbacks == 0)
+      assert(activeConnectionsAfterConflicts.size == 1)
+
+    }
+  }
+
   it should "close all connections in background when released" in customTestCaseT {
     val expectedNumberOfConnections = 4
     for {

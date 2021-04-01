@@ -2,16 +2,9 @@ package io.iohk.metronome.networking
 
 import cats.effect.concurrent.{Deferred, TryableDeferred}
 import cats.effect.implicits._
-import cats.effect.{Concurrent, ContextShift, Resource}
+import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.implicits._
-import io.iohk.metronome.networking.ConnectionHandler.HandledConnection.{
-  HandledConnectionCloseReason,
-  HandledConnectionDirection,
-  ManagerShutdown,
-  RemoteClosed,
-  RemoteError,
-  ReplaceRequested
-}
+import io.iohk.metronome.networking.ConnectionHandler.HandledConnection._
 import io.iohk.metronome.networking.ConnectionHandler.{
   ConnectionAlreadyClosedException,
   FinishedConnection,
@@ -32,7 +25,7 @@ import scala.util.control.NoStackTrace
 class ConnectionHandler[F[_]: Concurrent, K, M](
     connectionQueue: ConcurrentQueue[
       F,
-      (HandledConnection[F, K, M], Option[HandledConnection[F, K, M]])
+      (HandledConnection[F, K, M], Boolean)
     ],
     connectionsRegister: ConnectionsRegister[F, K, M],
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
@@ -68,11 +61,11 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       possibleNewConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
     connectionsRegister.registerIfAbsent(possibleNewConnection).flatMap {
-      case Some(oldConnection) =>
-        // in case of conflict we let the downstream logic to take care of detailed handling of it
-        connectionQueue.offer((possibleNewConnection, Some(oldConnection)))
-      case None =>
-        connectionQueue.offer((possibleNewConnection, None))
+      maybeConflicting =>
+        // in case of conflict we deal with it in the background
+        connectionQueue.offer(
+          (possibleNewConnection, maybeConflicting.isDefined)
+        )
     }
   }
 
@@ -138,6 +131,11 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   def getConnection(key: K): F[Option[HandledConnection[F, K, M]]] =
     connectionsRegister.getConnection(key)
 
+  /** Send message to remote peer if its connected
+    *
+    * @param recipient, key of the remote peer
+    * @param message message to send
+    */
   def sendMessage(
       recipient: K,
       message: M
@@ -163,6 +161,66 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     }
   }
 
+  private def handleConflict(
+      newConnectionWithPossibleConflict: (
+          HandledConnection[F, K, M],
+          Boolean
+      )
+  ): F[Option[HandledConnection[F, K, M]]] = {
+    val (newConnection, conflictHappened) =
+      newConnectionWithPossibleConflict
+
+    if (conflictHappened) {
+      connectionsRegister.registerIfAbsent(newConnection).flatMap {
+        case Some(oldConnection) =>
+          newConnection.connectionDirection match {
+            case HandledConnection.IncomingConnection =>
+              // even though we have connection to this peer, they are calling us. One of the reason may be, that they failed and
+              // we did not notice. Lets try to replace old connection with new one.
+              replaceConnection(newConnection, oldConnection)
+
+            case HandledConnection.OutgoingConnection =>
+              // for some reason we were calling while we already have connection, most probably we have received incoming
+              // connection during call. Close this new connection, and keep the old one
+              newConnection.close.as(None: Option[HandledConnection[F, K, M]])
+          }
+        case None =>
+          // in the meantime between detection of conflict, and processing it old connection has dropped. Register new one
+          Concurrent[F].pure(Some(newConnection))
+      }
+    } else {
+      Concurrent[F].pure(Some(newConnection))
+    }
+  }
+
+  /** Safely replaces old connection from remote peer with new connection with same remote peer.
+    *
+    * 1. The callback for old connection will not be called. As from the perspective of outside world connection is never
+    *    finished
+    * 2. From the point of view of outside world connection never leaves connection registry i.e during replacing all call to
+    *    registerOutgoing or registerIncoming will report conflicts to be handled
+    */
+  private def replaceConnection(
+      newConnection: HandledConnection[F, K, M],
+      oldConnection: HandledConnection[F, K, M]
+  ): F[Option[HandledConnection[F, K, M]]] = {
+    for {
+      result <- oldConnection.requestReplace(newConnection)
+      maybeNew <- result match {
+        case ConnectionHandler.ReplaceFinished =>
+          // Replace succeeded, old connection should already be closed and discarded, pass the new one forward
+          Concurrent[F].pure(
+            Some(newConnection): Option[HandledConnection[F, K, M]]
+          )
+        case ConnectionHandler.ConnectionAlreadyDisconnected =>
+          // during or just before replace, old connection disconnected for some other reason, t
+          // he reconnect call back will be fired either way so close the new connection
+          newConnection.close.as(None: Option[HandledConnection[F, K, M]])
+      }
+
+    } yield maybeNew
+  }
+
   private def callCallBackWithConnection(
       handledConnection: HandledConnection[F, K, M]
   ): F[Unit] = {
@@ -174,60 +232,44 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     )
   }
 
-  def handleConflict(
-      newConnectionWithPossibleConflict: (
-          HandledConnection[F, K, M],
-          Option[HandledConnection[F, K, M]]
-      )
-  ): F[Option[HandledConnection[F, K, M]]] = {
-    val (newConnection, possibleOldConnection) =
-      newConnectionWithPossibleConflict
-
-    possibleOldConnection match {
-      case Some(oldConnection) =>
-        newConnection.connectionDirection match {
-          case HandledConnection.IncomingConnection =>
-            // even though we have connection to this peer, they are calling us. One of the reason may be, that they failed and
-            // we did not notice. Lets replace old connection with new one.
-            replaceConnection(newConnection, oldConnection).flatMap {
-              case ConnectionReplaced =>
-                // Replace succeeded, old connection should already be closed and discarded, pass the new one forward
-                Concurrent[F].pure(Some(newConnection))
-              case ConnectionAlreadyClosed =>
-                // during replace, old connection failed for some other reason, the reconnect call back will be fired either way,
-                // so close the new connection
-                newConnection.close.as(None: Option[HandledConnection[F, K, M]])
-            }
-
-          case HandledConnection.OutgoingConnection =>
-            // for some reason we were calling while we already have connection, most probably we have received incoming
-            // connection during call. Close this new connection, and keep the old one
-            newConnection.close.as(None: Option[HandledConnection[F, K, M]])
-        }
-
-      case None =>
-        Concurrent[F].pure(Some(newConnection))
-    }
+  private def handleReplace(
+      replaceRequest: ReplaceRequested[F, K, M]
+  ): F[Unit] = {
+    connectionsRegister
+      .getConnection(replaceRequest.newConnection.key)
+      .flatMap {
+        case Some(oldConnection) =>
+          // close connection just in case someone who requested replace forgot it
+          oldConnection.close
+        case None =>
+          // this case should not happen, as we handle each connection in separate fiber, and only this fiber can remove
+          // connection with given key.
+          Concurrent[F].pure(())
+      } >> connectionsRegister.registerConnection(
+      replaceRequest.newConnection
+    ) >> replaceRequest.signalReplaceSuccess
   }
 
-  sealed abstract class ReplaceResult
-  case object ConnectionReplaced      extends ReplaceResult
-  case object ConnectionAlreadyClosed extends ReplaceResult
-
-  private def replaceConnection(
-      newConnection: HandledConnection[F, K, M],
-      oldConnection: HandledConnection[F, K, M]
-  ): F[ReplaceResult] = {
-    Deferred[F, Unit].flatMap { replacer =>
-      val replaceRequest = ReplaceRequested[F, K, M](newConnection, replacer)
-      oldConnection.closeReason.complete(replaceRequest).attempt.flatMap {
-        case Left(_) =>
-          Concurrent[F].unit.as(ConnectionAlreadyClosed: ReplaceResult)
-        case Right(_) =>
-          oldConnection.close >> replacer.get
-            .as(ConnectionReplaced: ReplaceResult)
-
-      }
+  private def handleConnectionFinish(
+      connection: HandledConnection[F, K, M]
+  ): F[Unit] = {
+    // at this point closeReason will always be filled
+    connection.closeReason.get.flatMap {
+      case HandledConnection.RemoteClosed =>
+        closeAndDeregisterConnection(
+          connection
+        ) >> callCallBackWithConnection(connection)
+      case RemoteError(e) =>
+        tracers.receiveError(
+          (connection, e)
+        ) >> closeAndDeregisterConnection(
+          connection
+        ) >> callCallBackWithConnection(connection)
+      case HandledConnection.ManagerShutdown =>
+        closeAndDeregisterConnection(connection)
+      case replaceRequest: ReplaceRequested[F, K, M] =>
+        // override old connection with new one, connection count is not changed, and callback is not called
+        handleReplace(replaceRequest)
     }
   }
 
@@ -255,27 +297,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
                 )
             }
             .guarantee(
-              // at this point closeReason will always be filled
-              connection.closeReason.get.flatMap {
-                case HandledConnection.RemoteClosed =>
-                  closeAndDeregisterConnection(
-                    connection
-                  ) >> callCallBackWithConnection(connection)
-                case RemoteError(e) =>
-                  tracers.receiveError(
-                    (connection, e)
-                  ) >> closeAndDeregisterConnection(
-                    connection
-                  ) >> callCallBackWithConnection(connection)
-                case HandledConnection.ManagerShutdown =>
-                  closeAndDeregisterConnection(connection)
-                case r: ReplaceRequested[F, K, M] =>
-                  // override old connection with new one, connection count is not changed, and callback is not called
-                  connectionsRegister.registerConnection(
-                    r.newConnection
-                  ) >> r.replaced.complete(())
-
-              }
+              handleConnectionFinish(connection)
             )
             .completedL
             .start
@@ -311,6 +333,10 @@ object ConnectionHandler {
 
   case class MessageReceived[K, M](from: K, message: M)
 
+  sealed abstract class ReplaceResult
+  case object ReplaceFinished               extends ReplaceResult
+  case object ConnectionAlreadyDisconnected extends ReplaceResult
+
   /** Connection which is already handled by connection handler i.e it is registered in registry and handler is subscribed
     * for incoming messages of that connection
     *
@@ -337,6 +363,21 @@ object ConnectionHandler {
 
     def closeAlreadyClosed: F[Unit] = {
       completeWithReason(RemoteClosed) >> underlyingConnection.close
+    }
+
+    def requestReplace(
+        newConnection: HandledConnection[F, K, M]
+    ): F[ReplaceResult] = {
+      ReplaceRequested.requestReplace(newConnection).flatMap { request =>
+        closeReason.complete(request).attempt.flatMap {
+          case Left(_) =>
+            Concurrent[F].pure(ConnectionAlreadyDisconnected: ReplaceResult)
+          case Right(_) =>
+            underlyingConnection.close >>
+              request.waitForReplaceToFinish >>
+              Concurrent[F].pure(ReplaceFinished: ReplaceResult)
+        }
+      }
     }
 
     private def completeWithReason(r: HandledConnectionCloseReason): F[Unit] =
@@ -368,10 +409,23 @@ object ConnectionHandler {
     case class RemoteError(e: ConnectionError)
         extends HandledConnectionCloseReason
     case object ManagerShutdown extends HandledConnectionCloseReason
-    case class ReplaceRequested[F[_], K, M](
-        newConnection: HandledConnection[F, K, M],
+    class ReplaceRequested[F[_]: Sync, K, M](
+        val newConnection: HandledConnection[F, K, M],
         replaced: Deferred[F, Unit]
-    ) extends HandledConnectionCloseReason
+    ) extends HandledConnectionCloseReason {
+      def signalReplaceSuccess: F[Unit]   = replaced.complete(()).attempt.void
+      def waitForReplaceToFinish: F[Unit] = replaced.get
+    }
+
+    object ReplaceRequested {
+      def requestReplace[F[_]: Concurrent, K, M](
+          newConnection: HandledConnection[F, K, M]
+      ): F[ReplaceRequested[F, K, M]] = {
+        for {
+          signal <- Deferred[F, Unit]
+        } yield new ReplaceRequested(newConnection, signal)
+      }
+    }
 
     sealed abstract class HandledConnectionDirection
     case object IncomingConnection extends HandledConnectionDirection
@@ -431,7 +485,7 @@ object ConnectionHandler {
       connectionQueue <- ConcurrentQueue
         .unbounded[
           F,
-          (HandledConnection[F, K, M], Option[HandledConnection[F, K, M]])
+          (HandledConnection[F, K, M], Boolean)
         ]()
     } yield new ConnectionHandler[F, K, M](
       connectionQueue,
