@@ -1,12 +1,22 @@
 package io.iohk.metronome.checkpointing.models
 
+import cats.data.NonEmptyList
+import io.iohk.ethereum.rlp.{RLPEncoder, RLPList}
 import io.iohk.ethereum.rlp.RLPCodec
 import io.iohk.ethereum.rlp.RLPCodec.Ops
+import io.iohk.ethereum.rlp.RLPException
 import io.iohk.ethereum.rlp.RLPImplicitDerivations._
 import io.iohk.ethereum.rlp.RLPImplicits._
-import io.iohk.ethereum.rlp.{RLPEncoder, RLPList}
+import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.crypto.hash.Hash
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Phase,
+  VotingPhase,
+  QuorumCertificate
+}
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import scodec.bits.{BitVector, ByteVector}
+import io.iohk.ethereum.rlp.RLPValue
 
 object RLPCodecs {
   implicit val rlpBitVector: RLPCodec[BitVector] =
@@ -40,6 +50,15 @@ object RLPCodecs {
   implicit def rlpIndexedSeq[T: RLPCodec]: RLPCodec[IndexedSeq[T]] =
     seqEncDec[T]().xmap(_.toVector, _.toSeq)
 
+  implicit def rlpNonEmptyList[T: RLPCodec]: RLPCodec[NonEmptyList[T]] =
+    seqEncDec[T]().xmap(
+      xs =>
+        NonEmptyList.fromList(xs.toList).getOrElse {
+          RLPException.decodeError("NonEmptyList", "List cannot be empty.")
+        },
+      _.toList
+    )
+
   implicit val rlpLedger: RLPCodec[Ledger] =
     deriveLabelledGenericRLPCodec
 
@@ -69,6 +88,12 @@ object RLPCodecs {
             rest.decodeAs[ProposerBlock]("transaction")
           case CheckpointCandidateTag =>
             rest.decodeAs[CheckpointCandidate]("transaction")
+          case unknown =>
+            RLPException.decodeError(
+              "Transaction",
+              s"Unknown tag: $unknown",
+              List(tag)
+            )
         }
       }
     )
@@ -95,4 +120,67 @@ object RLPCodecs {
         Block.makeUnsafe(h, b)
       }
     )
+
+  implicit val rlpMerkleProof: RLPCodec[MerkleTree.Proof] =
+    deriveLabelledGenericRLPCodec
+
+  implicit val rlpViewNumber: RLPCodec[ViewNumber] =
+    implicitly[RLPCodec[Long]].xmap(ViewNumber(_), identity)
+
+  implicit val rlpVotingPhase: RLPCodec[VotingPhase] =
+    RLPCodec.instance[VotingPhase](
+      phase => {
+        val tag: Short = phase match {
+          case Phase.Prepare   => 1
+          case Phase.PreCommit => 2
+          case Phase.Commit    => 3
+        }
+        RLPEncoder.encode(tag)
+      },
+      { case tag: RLPValue =>
+        tag.decodeAs[Short]("phase") match {
+          case 1 => Phase.Prepare
+          case 2 => Phase.PreCommit
+          case 3 => Phase.Commit
+          case u =>
+            RLPException.decodeError(
+              "phase",
+              s"Unknown phase tag: $u",
+              List(tag)
+            )
+        }
+      }
+    )
+
+  val rlpECDSaSignature: RLPCodec[CheckpointingAgreement.PSig] =
+    deriveLabelledGenericRLPCodec
+
+  implicit val rlpGroupSignature
+      : RLPCodec[CheckpointingAgreement.GroupSignature] =
+    deriveLabelledGenericRLPCodec
+
+  // Derviation doesn't seem to work on generic case class.
+  implicit val rlpQuorumCertificate
+      : RLPCodec[QuorumCertificate[CheckpointingAgreement]] =
+    RLPCodec.instance[QuorumCertificate[CheckpointingAgreement]](
+      { case QuorumCertificate(phase, viewNumber, blockHash, signature) =>
+        RLPList(
+          RLPEncoder.encode(phase),
+          RLPEncoder.encode(viewNumber),
+          RLPEncoder.encode(blockHash),
+          RLPEncoder.encode(signature)
+        )
+      },
+      { case RLPList(phase, viewNumber, blockHash, signature) =>
+        QuorumCertificate[CheckpointingAgreement](
+          phase.decodeAs[VotingPhase]("phase"),
+          viewNumber.decodeAs[ViewNumber]("viewNumber"),
+          blockHash.decodeAs[CheckpointingAgreement.Hash]("blockHash"),
+          signature.decodeAs[CheckpointingAgreement.GroupSignature]("signature")
+        )
+      }
+    )
+
+  implicit val rlpCheckpointCertificate: RLPCodec[CheckpointCertificate] =
+    deriveLabelledGenericRLPCodec
 }
