@@ -1,12 +1,18 @@
 package io.iohk.metronome.checkpointing.models
 
+import cats.data.NonEmptyList
+import io.iohk.ethereum.crypto.ECDSASignature
 import io.iohk.ethereum.rlp._
+import io.iohk.metronome.crypto.GroupSignature
+import io.iohk.metronome.checkpointing.CheckpointingAgreement
+import io.iohk.metronome.hotstuff.consensus.basic.{Phase, QuorumCertificate}
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import org.scalacheck.Arbitrary
+import org.scalacheck.Arbitrary.arbitrary
 import org.scalactic.Equality
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scala.reflect.ClassTag
-import org.scalacheck.Arbitrary
-import org.scalacheck.Arbitrary.arbitrary
 
 /** Concrete examples of RLP encoding, so we can make sure the structure is what we expect.
   *
@@ -63,7 +69,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
 
   test {
     new Example[Ledger] {
-      val ledger = Ledger(
+      override val decoded = Ledger(
         maybeLastCheckpoint = Some(
           sample[Transaction.CheckpointCandidate]
         ),
@@ -73,20 +79,18 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
         )
       )
 
-      override val decoded = ledger
-
       override val encoded =
         RLPList(     // Ledger
           RLPList(   // Option
             RLPList( // CheckpointCandidate
-              RLPValue(ledger.maybeLastCheckpoint.get.value.toByteArray)
+              RLPValue(decoded.maybeLastCheckpoint.get.value.toByteArray)
             )
           ),
           RLPList(   // Vector
             RLPList( // ProposerBlock
-              RLPValue(ledger.proposerBlocks(0).value.toByteArray)
+              RLPValue(decoded.proposerBlocks(0).value.toByteArray)
             ),
-            RLPList(RLPValue(ledger.proposerBlocks(1).value.toByteArray))
+            RLPList(RLPValue(decoded.proposerBlocks(1).value.toByteArray))
           )
         )
     }
@@ -94,14 +98,86 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
 
   test {
     new Example[Transaction] {
-      val transaction = sample[Transaction.ProposerBlock]
-
-      override val decoded = transaction
+      override val decoded = sample[Transaction.ProposerBlock]
 
       override val encoded =
         RLPList(                     // ProposerBlock
           RLPValue(Array(1.toByte)), // Tag
-          RLPValue(transaction.value.toByteArray)
+          RLPValue(decoded.value.toByteArray)
+        )
+    }
+  }
+
+  test {
+    new Example[CheckpointCertificate] {
+      val decoded = CheckpointCertificate(
+        headers = NonEmptyList.of(
+          sample[Block.Header],
+          sample[Block.Header]
+        ),
+        checkpoint = sample[Transaction.CheckpointCandidate],
+        proof = MerkleTree.Proof(
+          leafIndex = 2,
+          leafCount = 4,
+          siblingPath = Vector(sample[MerkleTree.Hash], sample[MerkleTree.Hash])
+        ),
+        commitQC = QuorumCertificate[CheckpointingAgreement](
+          phase = Phase.Commit,
+          viewNumber = ViewNumber(10),
+          blockHash = sample[Block.Header.Hash],
+          signature = GroupSignature(
+            List(
+              sample[ECDSASignature],
+              sample[ECDSASignature]
+            )
+          )
+        )
+      )
+
+      override val encoded =
+        RLPList(     // CheckpointCertificate
+          RLPList(   // NonEmptyList
+            RLPList( // BlockHeader
+              RLPValue(decoded.headers.head.parentHash.toArray),
+              RLPValue(decoded.headers.head.preStateHash.toArray),
+              RLPValue(decoded.headers.head.postStateHash.toArray),
+              RLPValue(decoded.headers.head.bodyHash.toArray),
+              RLPValue(decoded.headers.head.contentMerkleRoot.toArray)
+            ),
+            RLPList( // BlockHeader
+              RLPValue(decoded.headers.last.parentHash.toArray),
+              RLPValue(decoded.headers.last.preStateHash.toArray),
+              RLPValue(decoded.headers.last.postStateHash.toArray),
+              RLPValue(decoded.headers.last.bodyHash.toArray),
+              RLPValue(decoded.headers.last.contentMerkleRoot.toArray)
+            )
+          ),
+          RLPList( // CheckpointCandidate
+            RLPValue(decoded.checkpoint.value.toByteArray)
+          ),
+          RLPList( // Proof
+            RLPValue(Array(decoded.proof.leafIndex.toByte)),
+            RLPValue(Array(decoded.proof.leafCount.toByte)),
+            RLPList( // siblingPath
+              RLPValue(decoded.proof.siblingPath.head.toArray),
+              RLPValue(decoded.proof.siblingPath.last.toArray)
+            )
+          ),
+          RLPList(                      // QuorumCertificate
+            RLPValue(Array(3.toByte)),  // Commit
+            RLPValue(Array(10.toByte)), // ViewNumber
+            RLPValue(decoded.commitQC.blockHash.toArray),
+            RLPList(      // GroupSignature
+              RLPList(    // sig
+                RLPValue( // ECDSASignature
+                  decoded.commitQC.signature.sig.head.toBytes.toArray[Byte]
+                ),
+                RLPValue(
+                  decoded.commitQC.signature.sig.last.toBytes.toArray[Byte]
+                )
+              )
+            )
+          )
         )
     }
   }

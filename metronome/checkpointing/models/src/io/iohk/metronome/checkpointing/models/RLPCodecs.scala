@@ -1,6 +1,7 @@
 package io.iohk.metronome.checkpointing.models
 
 import cats.data.NonEmptyList
+import io.iohk.ethereum.crypto.ECDSASignature
 import io.iohk.ethereum.rlp.{RLPEncoder, RLPList}
 import io.iohk.ethereum.rlp.RLPCodec
 import io.iohk.ethereum.rlp.RLPCodec.Ops
@@ -9,14 +10,13 @@ import io.iohk.ethereum.rlp.RLPImplicitDerivations._
 import io.iohk.ethereum.rlp.RLPImplicits._
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.crypto.hash.Hash
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Phase,
   VotingPhase,
   QuorumCertificate
 }
-import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import scodec.bits.{BitVector, ByteVector}
-import io.iohk.ethereum.rlp.RLPValue
 
 object RLPCodecs {
   implicit val rlpBitVector: RLPCodec[BitVector] =
@@ -137,7 +137,7 @@ object RLPCodecs {
         }
         RLPEncoder.encode(tag)
       },
-      { case tag: RLPValue =>
+      { case tag =>
         tag.decodeAs[Short]("phase") match {
           case 1 => Phase.Prepare
           case 2 => Phase.PreCommit
@@ -152,8 +152,22 @@ object RLPCodecs {
       }
     )
 
-  val rlpECDSaSignature: RLPCodec[CheckpointingAgreement.PSig] =
-    deriveLabelledGenericRLPCodec
+  implicit val rlpECDSASignature: RLPCodec[ECDSASignature] =
+    RLPCodec.instance[ECDSASignature](
+      sig => RLPEncoder.encode(sig.toBytes),
+      { case enc =>
+        val bytes = enc.decodeAs[ByteVector]("signature")
+        ECDSASignature
+          .fromBytes(akka.util.ByteString.fromArrayUnsafe(bytes.toArray))
+          .getOrElse {
+            RLPException.decodeError(
+              "ECDSASignature",
+              "Invalid signature format.",
+              List(enc)
+            )
+          }
+      }
+    )
 
   implicit val rlpGroupSignature
       : RLPCodec[CheckpointingAgreement.GroupSignature] =

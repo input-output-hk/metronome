@@ -1,5 +1,6 @@
 package io.iohk.metronome.checkpointing.models
 
+import io.iohk.ethereum.crypto.ECDSASignature
 import io.iohk.ethereum.rlp
 import io.iohk.ethereum.rlp.RLPCodec
 import org.scalacheck._
@@ -22,4 +23,6 @@ object RLPCodecsProps extends Properties("RLPCodecs") {
   propRoundTrip[Ledger]
   propRoundTrip[Transaction]
   propRoundTrip[Block]
+  propRoundTrip[ECDSASignature]
+  propRoundTrip[CheckpointCertificate]
 }
