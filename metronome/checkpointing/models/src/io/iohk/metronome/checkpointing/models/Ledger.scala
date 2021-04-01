@@ -6,7 +6,7 @@ import io.iohk.metronome.core.Validated
   *
   * Basically it's the last checkpoint, plus any accumulated proposer blocks
   * since then. Initially the last checkpoint is empty; conceptually it could
-  * the the genesis block of the PoW chain, but we don't know what that is
+  * be the genesis block of the PoW chain, but we don't know what that is
   * until we talk to the interpreter, and we also can't produce it on our
   * own since it's opaque data.
   */
