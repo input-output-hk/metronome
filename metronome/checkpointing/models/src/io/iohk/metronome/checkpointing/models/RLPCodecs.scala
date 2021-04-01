@@ -144,7 +144,7 @@ object RLPCodecs {
           case 3 => Phase.Commit
           case u =>
             RLPException.decodeError(
-              "phase",
+              "VotingPhase",
               s"Unknown phase tag: $u",
               List(tag)
             )
