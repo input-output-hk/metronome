@@ -42,6 +42,16 @@ class ConnectionsRegister[F[_]: Concurrent, K, M](
   ): F[Option[HandledConnection[F, K, M]]] =
     registerRef.get.map(register => register.get(connectionKey))
 
+  def replace(
+      connection: HandledConnection[F, K, M]
+  ): F[Option[HandledConnection[F, K, M]]] = {
+    registerRef.modify { register =>
+      register.updated(connection.key, connection) -> register.get(
+        connection.key
+      )
+    }
+  }
+
 }
 
 object ConnectionsRegister {

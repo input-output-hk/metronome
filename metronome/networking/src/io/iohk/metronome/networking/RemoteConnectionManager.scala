@@ -1,11 +1,10 @@
 package io.iohk.metronome.networking
 
-import cats.effect.concurrent.Deferred
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
 import io.iohk.metronome.networking.ConnectionHandler.{
-  HandledConnection,
+  FinishedConnection,
   MessageReceived
 }
 import io.iohk.metronome.networking.RemoteConnectionManager.RetryConfig.RandomJitterConfig
@@ -172,6 +171,19 @@ object RemoteConnectionManager {
       retryConfig: RetryConfig
   )(implicit tracers: NetworkTracers[F, K, M]): F[Unit] = {
 
+    def connectWithErrors(
+        connectionToAcquire: OutGoingConnectionRequest[K]
+    ): F[Either[ConnectionFailure[K], Unit]] = {
+      connectTo(encryptedConnectionProvider, connectionToAcquire).flatMap {
+        case Left(err) =>
+          Concurrent[F].pure(Left(err))
+        case Right(connection) =>
+          connectionsHandler
+            .registerOutgoing(connection.encryptedConnection)
+            .as(Right(()))
+      }
+    }
+
     /** Observable is used here as streaming primitive as it has richer api than Iterant and have mapParallelUnorderedF
       * combinator, which makes it possible to have multiple concurrent retry timers, which are cancelled when whole
       * outer stream is cancelled
@@ -179,21 +191,15 @@ object RemoteConnectionManager {
     Observable
       .repeatEvalF(connectionsToAcquire.poll)
       .filterEvalF(request => connectionsHandler.isNewConnection(request.key))
-      .mapEvalF { connectionToAcquire =>
-        connectTo(encryptedConnectionProvider, connectionToAcquire)
-      }
+      .mapEvalF(connectWithErrors)
       .mapParallelUnorderedF(Integer.MAX_VALUE) {
         case Left(failure) =>
-          val failureToLog = failure.err
           tracers.failed(failure) >>
             retryConnection(retryConfig, failure.connectionRequest).flatMap(
               updatedRequest => connectionsToAcquire.offer(updatedRequest)
             )
-        case Right(connection) =>
-          val newOutgoingConnections =
-            HandledConnection.outgoing(connection.encryptedConnection)
-          connectionsHandler.registerOrClose(newOutgoingConnections)
-
+        case Right(_) =>
+          Concurrent[F].pure(())
       }
       .completedF
   }
@@ -217,11 +223,10 @@ object RemoteConnectionManager {
           encryptedConnection.remotePeerInfo._1
         ) match {
           case Some(incomingConnectionServerAddress) =>
-            val handledConnection = HandledConnection.incoming(
+            connectionsHandler.registerIncoming(
               incomingConnectionServerAddress,
               encryptedConnection
             )
-            connectionsHandler.registerOrClose(handledConnection)
 
           case None =>
             // unknown connection, just close it
@@ -232,25 +237,16 @@ object RemoteConnectionManager {
       .completedL
   }
 
-  def withCancelToken[F[_]: Concurrent, A](
-      token: Deferred[F, Unit],
-      ops: F[Option[A]]
-  ): F[Option[A]] =
-    Concurrent[F].race(token.get, ops).map {
-      case Left(()) => None
-      case Right(x) => x
-    }
-
   class HandledConnectionFinisher[F[_]: Concurrent: Timer, K, M](
       connectionsToAcquire: ConcurrentQueue[F, OutGoingConnectionRequest[K]],
       retryConfig: RetryConfig
   ) {
-    def finish(handledConnection: HandledConnection[F, K, M]): F[Unit] = {
+    def finish(finishedConnection: FinishedConnection[K]): F[Unit] = {
       retryConnection(
         retryConfig,
         OutGoingConnectionRequest.initial(
-          handledConnection.key,
-          handledConnection.serverAddress
+          finishedConnection.connectionKey,
+          finishedConnection.connectionServerAddress
         )
       ).flatMap(req => connectionsToAcquire.offer(req))
     }
@@ -331,7 +327,7 @@ object RemoteConnectionManager {
         retryConfig
       )
 
-      connectionsHandler <- ConnectionHandler.apply(
+      connectionsHandler <- ConnectionHandler.apply[F, K, M](
         // when each connection will finished it the callback will be called, and connection will be put to connections to acquire
         // queue
         handledConnectionFinisher.finish
