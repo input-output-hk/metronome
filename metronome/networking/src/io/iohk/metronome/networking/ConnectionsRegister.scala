@@ -23,10 +23,6 @@ class ConnectionsRegister[F[_]: Concurrent, K, M](
     }
   }
 
-  def registerConnection(connection: HandledConnection[F, K, M]): F[Unit] = {
-    registerRef.update(register => register + (connection.key -> connection))
-  }
-
   def isNewConnection(connectionKey: K): F[Boolean] = {
     registerRef.get.map(register => !register.contains(connectionKey))
   }
@@ -45,6 +41,16 @@ class ConnectionsRegister[F[_]: Concurrent, K, M](
       connectionKey: K
   ): F[Option[HandledConnection[F, K, M]]] =
     registerRef.get.map(register => register.get(connectionKey))
+
+  def replace(
+      connection: HandledConnection[F, K, M]
+  ): F[Option[HandledConnection[F, K, M]]] = {
+    registerRef.modify { register =>
+      register.updated(connection.key, connection) -> register.get(
+        connection.key
+      )
+    }
+  }
 
 }
 

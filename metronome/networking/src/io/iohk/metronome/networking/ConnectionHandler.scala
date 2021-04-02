@@ -1,12 +1,13 @@
 package io.iohk.metronome.networking
 
-import cats.effect.concurrent.{Deferred, TryableDeferred}
+import cats.effect.concurrent.Deferred
 import cats.effect.implicits._
 import cats.effect.{Concurrent, ContextShift, Resource, Sync}
 import cats.implicits._
 import io.iohk.metronome.networking.ConnectionHandler.HandledConnection._
 import io.iohk.metronome.networking.ConnectionHandler.{
   ConnectionAlreadyClosedException,
+  ConnectionWithConflictFlag,
   FinishedConnection,
   HandledConnection,
   MessageReceived
@@ -23,13 +24,10 @@ import java.net.InetSocketAddress
 import scala.util.control.NoStackTrace
 
 class ConnectionHandler[F[_]: Concurrent, K, M](
-    connectionQueue: ConcurrentQueue[
-      F,
-      (HandledConnection[F, K, M], Boolean)
-    ],
+    connectionQueue: ConcurrentQueue[F, ConnectionWithConflictFlag[F, K, M]],
     connectionsRegister: ConnectionsRegister[F, K, M],
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
-    cancelToken: TryableDeferred[F, Unit],
+    cancelToken: Deferred[F, Unit],
     connectionFinishCallback: FinishedConnection[K] => F[Unit]
 )(implicit tracers: NetworkTracers[F, K, M]) {
 
@@ -162,10 +160,7 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   }
 
   private def handleConflict(
-      newConnectionWithPossibleConflict: (
-          HandledConnection[F, K, M],
-          Boolean
-      )
+      newConnectionWithPossibleConflict: ConnectionWithConflictFlag[F, K, M]
   ): F[Option[HandledConnection[F, K, M]]] = {
     val (newConnection, conflictHappened) =
       newConnectionWithPossibleConflict
@@ -182,14 +177,14 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             case HandledConnection.OutgoingConnection =>
               // for some reason we were calling while we already have connection, most probably we have received incoming
               // connection during call. Close this new connection, and keep the old one
-              newConnection.close.as(None: Option[HandledConnection[F, K, M]])
+              tracers.discarded(newConnection) >> newConnection.close.as(none)
           }
         case None =>
           // in the meantime between detection of conflict, and processing it old connection has dropped. Register new one
-          Concurrent[F].pure(Some(newConnection))
+          tracers.registered(newConnection) >> newConnection.some.pure[F]
       }
     } else {
-      Concurrent[F].pure(Some(newConnection))
+      tracers.registered(newConnection) >> newConnection.some.pure[F]
     }
   }
 
@@ -209,13 +204,13 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       maybeNew <- result match {
         case ConnectionHandler.ReplaceFinished =>
           // Replace succeeded, old connection should already be closed and discarded, pass the new one forward
-          Concurrent[F].pure(
-            Some(newConnection): Option[HandledConnection[F, K, M]]
-          )
+          tracers.registered(newConnection) >>
+            newConnection.some.pure[F]
         case ConnectionHandler.ConnectionAlreadyDisconnected =>
-          // during or just before replace, old connection disconnected for some other reason, t
-          // he reconnect call back will be fired either way so close the new connection
-          newConnection.close.as(None: Option[HandledConnection[F, K, M]])
+          // during or just before replace, old connection disconnected for some other reason,
+          // the reconnect call back will be fired either way so close the new connection
+          tracers.discarded(newConnection) >>
+            newConnection.close.as(None: Option[HandledConnection[F, K, M]])
       }
 
     } yield maybeNew
@@ -235,26 +230,22 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
   private def handleReplace(
       replaceRequest: ReplaceRequested[F, K, M]
   ): F[Unit] = {
-    connectionsRegister
-      .getConnection(replaceRequest.newConnection.key)
-      .flatMap {
-        case Some(oldConnection) =>
-          // close connection just in case someone who requested replace forgot it
-          oldConnection.close
-        case None =>
-          // this case should not happen, as we handle each connection in separate fiber, and only this fiber can remove
-          // connection with given key.
-          Concurrent[F].pure(())
-      } >> connectionsRegister.registerConnection(
-      replaceRequest.newConnection
-    ) >> replaceRequest.signalReplaceSuccess
+    connectionsRegister.replace(replaceRequest.newConnection).flatMap {
+      case Some(oldConnection) =>
+        // close connection just in case someone who requested replace forgot it
+        oldConnection.close
+      case None =>
+        // this case should not happen, as we handle each connection in separate fiber, and only this fiber can remove
+        // connection with given key.
+        ().pure[F]
+    } >> replaceRequest.signalReplaceSuccess
   }
 
   private def handleConnectionFinish(
       connection: HandledConnection[F, K, M]
   ): F[Unit] = {
     // at this point closeReason will always be filled
-    connection.closeReason.get.flatMap {
+    connection.getCloseReason.flatMap {
       case HandledConnection.RemoteClosed =>
         closeAndDeregisterConnection(
           connection
@@ -310,6 +301,9 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
 }
 
 object ConnectionHandler {
+  type ConnectionWithConflictFlag[F[_], K, M] =
+    (HandledConnection[F, K, M], Boolean)
+
   case class ConnectionAlreadyClosedException[K](key: K)
       extends RuntimeException(
         s"Connection with node ${key}, has already closed"
@@ -345,11 +339,11 @@ object ConnectionHandler {
     *                       underlyingConnection remoteAddress
     * @param underlyingConnection, encrypted connection to send and receive messages
     */
-  sealed abstract case class HandledConnection[F[_]: Concurrent, K, M] private (
-      connectionDirection: HandledConnectionDirection,
-      globalCancelToken: TryableDeferred[F, Unit],
-      key: K,
-      serverAddress: InetSocketAddress,
+  class HandledConnection[F[_]: Concurrent, K, M] private (
+      val connectionDirection: HandledConnectionDirection,
+      globalCancelToken: Deferred[F, Unit],
+      val key: K,
+      val serverAddress: InetSocketAddress,
       underlyingConnection: EncryptedConnection[F, K, M],
       closeReason: Deferred[F, HandledConnectionCloseReason]
   ) {
@@ -371,11 +365,11 @@ object ConnectionHandler {
       ReplaceRequested.requestReplace(newConnection).flatMap { request =>
         closeReason.complete(request).attempt.flatMap {
           case Left(_) =>
-            Concurrent[F].pure(ConnectionAlreadyDisconnected: ReplaceResult)
+            (ConnectionAlreadyDisconnected: ReplaceResult).pure[F]
           case Right(_) =>
             underlyingConnection.close >>
-              request.waitForReplaceToFinish >>
-              Concurrent[F].pure(ReplaceFinished: ReplaceResult)
+              request.waitForReplaceToFinish >> (ReplaceFinished: ReplaceResult)
+                .pure[F]
         }
       }
     }
@@ -383,11 +377,13 @@ object ConnectionHandler {
     private def completeWithReason(r: HandledConnectionCloseReason): F[Unit] =
       closeReason.complete(r).attempt.void
 
+    def getCloseReason: F[HandledConnectionCloseReason] = closeReason.get
+
     private def handleIncomingEvent(
         incomingEvent: Option[Either[ConnectionError, M]]
     ): F[Option[M]] = {
       incomingEvent match {
-        case Some(Right(m)) => Concurrent[F].pure(Some(m))
+        case Some(Right(m)) => m.some.pure[F]
         case Some(Left(e))  => completeWithReason(RemoteError(e)).as(None)
         case None           => completeWithReason(RemoteClosed).as(None)
       }
@@ -439,7 +435,7 @@ object ConnectionHandler {
     }
 
     private[ConnectionHandler] def outgoing[F[_]: Concurrent, K, M](
-        globalCancelToken: TryableDeferred[F, Unit],
+        globalCancelToken: Deferred[F, Unit],
         encryptedConnection: EncryptedConnection[F, K, M]
     ): F[HandledConnection[F, K, M]] = {
       buildLifeCycleListener[F].map { closeReason =>
@@ -455,7 +451,7 @@ object ConnectionHandler {
     }
 
     private[ConnectionHandler] def incoming[F[_]: Concurrent, K, M](
-        globalCancelToken: TryableDeferred[F, Unit],
+        globalCancelToken: Deferred[F, Unit],
         serverAddress: InetSocketAddress,
         encryptedConnection: EncryptedConnection[F, K, M]
     ): F[HandledConnection[F, K, M]] = {
@@ -479,14 +475,11 @@ object ConnectionHandler {
       tracers: NetworkTracers[F, K, M]
   ): F[ConnectionHandler[F, K, M]] = {
     for {
-      cancelToken         <- Deferred.tryable[F, Unit]
+      cancelToken         <- Deferred[F, Unit]
       acquiredConnections <- ConnectionsRegister.empty[F, K, M]
       messageQueue        <- ConcurrentQueue.unbounded[F, MessageReceived[K, M]]()
       connectionQueue <- ConcurrentQueue
-        .unbounded[
-          F,
-          (HandledConnection[F, K, M], Boolean)
-        ]()
+        .unbounded[F, ConnectionWithConflictFlag[F, K, M]]()
     } yield new ConnectionHandler[F, K, M](
       connectionQueue,
       acquiredConnections,
