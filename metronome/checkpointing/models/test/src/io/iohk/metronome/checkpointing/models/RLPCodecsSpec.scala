@@ -139,14 +139,12 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
           RLPList(   // NonEmptyList
             RLPList( // BlockHeader
               RLPValue(decoded.headers.head.parentHash.toArray),
-              RLPValue(decoded.headers.head.preStateHash.toArray),
               RLPValue(decoded.headers.head.postStateHash.toArray),
               RLPValue(decoded.headers.head.bodyHash.toArray),
               RLPValue(decoded.headers.head.contentMerkleRoot.toArray)
             ),
             RLPList( // BlockHeader
               RLPValue(decoded.headers.last.parentHash.toArray),
-              RLPValue(decoded.headers.last.preStateHash.toArray),
               RLPValue(decoded.headers.last.postStateHash.toArray),
               RLPValue(decoded.headers.last.bodyHash.toArray),
               RLPValue(decoded.headers.last.contentMerkleRoot.toArray)

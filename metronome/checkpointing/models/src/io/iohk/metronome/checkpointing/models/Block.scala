@@ -40,7 +40,6 @@ object Block {
     val body = Body(transactions)
     val header = Header(
       parentHash = parent.hash,
-      preStateHash = parent.header.postStateHash,
       postStateHash = postStateHash,
       bodyHash = body.hash,
       // TODO (PM-3102): Compute Root Hash over the transactions.
@@ -54,7 +53,6 @@ object Block {
     val body = Body(Vector.empty)
     val header = Header(
       parentHash = Block.Header.Hash(ByteVector.empty),
-      preStateHash = Ledger.empty.hash,
       postStateHash = Ledger.empty.hash,
       bodyHash = body.hash,
       contentMerkleRoot = MerkleTree.Hash.empty
