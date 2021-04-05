@@ -2,6 +2,7 @@ package io.iohk.metronome.checkpointing.service.models
 
 import io.iohk.ethereum.rlp
 import io.iohk.ethereum.rlp.RLPCodec
+import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 import org.scalacheck._
 import org.scalacheck.Prop.forAll
 import scala.reflect.ClassTag
@@ -20,4 +21,6 @@ object RLPCodecsProps extends Properties("RLPCodecs") {
     }
 
   propRoundTrip[Ledger]
+  propRoundTrip[Transaction]
+  propRoundTrip[Block]
 }
