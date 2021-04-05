@@ -1,4 +1,4 @@
-package io.iohk.metronome.checkpointing.interpreter.models
+package io.iohk.metronome.checkpointing.models
 
 import scodec.bits.BitVector
 

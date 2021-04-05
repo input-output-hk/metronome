@@ -1,7 +1,6 @@
-package io.iohk.metronome.checkpointing.service.models
+package io.iohk.metronome.checkpointing.models
 
 import io.iohk.metronome.core.Validated
-import io.iohk.metronome.checkpointing.interpreter.models.Transaction
 import org.scalacheck._
 import org.scalacheck.Prop.forAll
 

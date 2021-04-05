@@ -215,7 +215,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   object hotstuff extends SubModule {
 
     /** Pure consensus models. */
-    object consensus extends SubModule {
+    object consensus extends SubModule with Publishing {
+      override def description: String =
+        "Pure HotStuff consensus models."
+
       override def moduleDeps: Seq[PublishModule] =
         Seq(core, crypto)
 
@@ -240,10 +243,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           hotstuff.forensics
         )
 
-      override def ivyDeps = super.ivyDeps() ++ Agg(
-        ivy"io.iohk::mantis-rlp:${VersionOf.mantis}"
-      )
-
       object test extends TestModule
     }
   }
@@ -251,9 +250,27 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   /** Components realising the checkpointing functionality using HotStuff. */
   object checkpointing extends SubModule {
 
+    /** Library to be included on the PoW side to validate checkpoint certificats.
+      *
+      * Includes the certificate model and the checkpoint ledger and chain models.
+      */
+    object models extends SubModule with Publishing {
+      override def description: String =
+        "Checkpointing domain models, including the checkpoint certificate and its validation logic."
+
+      override def ivyDeps = super.ivyDeps() ++ Agg(
+        ivy"io.iohk::mantis-rlp:${VersionOf.mantis}"
+      )
+
+      override def moduleDeps: Seq[PublishModule] =
+        Seq(core, crypto, hotstuff.consensus)
+
+      object test extends TestModule
+    }
+
     /** Library to be included on the PoW side to talk to the checkpointing service.
       *
-      * Includes the certificate models, the local communication protocol messages and networking.
+      * Includes the local communication protocol messages and networking.
       */
     object interpreter extends SubModule with Publishing {
       override def description: String =
@@ -264,19 +281,25 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
 
       override def moduleDeps: Seq[PublishModule] =
-        Seq(tracing, crypto)
+        Seq(tracing, crypto, checkpointing.models)
     }
 
-    /** Implements the checkpointing functionality, the ledger rules,
-      * and state synchronisation, which is not an inherent part of
+    /** Implements the checkpointing functionality, validation rules,
+      * state synchronisation, anything that is not an inherent part of
       * HotStuff, but applies to the checkpointing use case.
       *
-      * If it was published, it could be directly included in the checkpoint assisted blockchain application,
-      * so the service and the interpreter can share data in memory.
+      * If it was published, it could be directly included in the checkpoint
+      * assisted blockchain application,  so the service and the interpreter
+      * can share data in memory.
       */
     object service extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
-        Seq(tracing, hotstuff.service, checkpointing.interpreter)
+        Seq(
+          tracing,
+          hotstuff.service,
+          checkpointing.models,
+          checkpointing.interpreter
+        )
 
       object test extends TestModule
     }
