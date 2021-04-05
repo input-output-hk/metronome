@@ -58,13 +58,11 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         parentHash    <- arbitrary[Block.Header.Hash]
-        preStateHash  <- arbitrary[Ledger.Hash]
         postStateHash <- arbitrary[Ledger.Hash]
         transactions  <- arbitrary[Vector[Transaction]]
         body = Block.Body(transactions)
         header = Block.Header(
           parentHash,
-          preStateHash,
           postStateHash,
           body.hash
         )

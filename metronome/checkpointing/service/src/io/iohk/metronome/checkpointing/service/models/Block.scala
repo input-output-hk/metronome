@@ -40,8 +40,6 @@ object Block {
 
   case class Header(
       parentHash: Header.Hash,
-      // Hash of the Ledger before executing the block.
-      preStateHash: Ledger.Hash,
       // Hash of the Ledger after executing the block.
       postStateHash: Ledger.Hash,
       // Hash of the transactions in the body.
