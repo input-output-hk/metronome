@@ -16,18 +16,19 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   buildTestConnectionManager
 }
 import io.iohk.metronome.logging.{HybridLogObject, HybridLog, LogTracer}
-import io.iohk.scalanet.peergroup.PeerGroup
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
-import monix.eval.{Task, TaskLift, TaskLike}
-import monix.execution.Scheduler
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
-import org.scalatest.flatspec.AsyncFlatSpecLike
-import org.scalatest.matchers.should.Matchers
-import scodec.Codec
+import io.iohk.scalanet.peergroup.PeerGroup
 import java.net.InetSocketAddress
 import java.security.SecureRandom
-import scala.concurrent.duration._
+import monix.eval.{Task, TaskLift, TaskLike}
+import monix.execution.Scheduler
 import monix.execution.UncaughtExceptionReporter
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.scalatest.flatspec.AsyncFlatSpecLike
+import org.scalatest.Inspectors
+import org.scalatest.matchers.should.Matchers
+import scala.concurrent.duration._
+import scodec.Codec
 
 class RemoteConnectionManagerWithScalanetProviderSpec
     extends AsyncFlatSpecLike
@@ -67,8 +68,8 @@ class RemoteConnectionManagerWithScalanetProviderSpec
       size          <- cluster.clusterSize
       eachNodeCount <- cluster.getEachNodeConnectionsCount
     } yield {
-      assert(eachNodeCount.forall(count => count == 2))
-      assert(size == 3)
+      Inspectors.forAll(eachNodeCount)(count => count shouldEqual 2)
+      size shouldEqual 3
     }
   }
 
@@ -79,8 +80,8 @@ class RemoteConnectionManagerWithScalanetProviderSpec
       size          <- cluster.clusterSize
       eachNodeCount <- cluster.getEachNodeConnectionsCount
     } yield {
-      assert(eachNodeCount.forall(count => count == 3))
-      assert(size == 4)
+      Inspectors.forAll(eachNodeCount)(count => count shouldEqual 3)
+      size shouldEqual 4
     }
   }
 
@@ -95,15 +96,13 @@ class RemoteConnectionManagerWithScalanetProviderSpec
         cluster.getMessageFromNode(receiver)
       )
     } yield {
-      assert(eachNodeCount.forall(count => count == 2))
-      assert(receivers.size == 2)
-      assert(received.size == 2)
+      Inspectors.forAll(eachNodeCount)(count => count shouldEqual 2)
+      receivers.size shouldEqual 2
+      received.size shouldEqual 2
       //every node should have received the same message
-      assert(
-        received.forall(receivedMessage =>
-          receivedMessage == MessageReceived(sender, MessageA(1))
-        )
-      )
+      Inspectors.forAll(received) { receivedMessage =>
+        receivedMessage shouldBe MessageReceived(sender, MessageA(1))
+      }
     }
   }
 
@@ -122,8 +121,10 @@ class RemoteConnectionManagerWithScalanetProviderSpec
       _                      <- cluster.startNode(address, keyPair, clusterConfig)
       _                      <- cluster.waitUntilEveryNodeHaveNConnections(2)
     } yield {
-      assert(size == 3)
-      assert(connectionAfterFailure.forall(connections => connections == 1))
+      size shouldEqual 3
+      Inspectors.forAll(connectionAfterFailure) { connections =>
+        connections shouldEqual 1
+      }
     }
   }
 }
