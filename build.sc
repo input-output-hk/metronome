@@ -241,7 +241,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         )
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
-        ivy"io.iohk::scalanet:${VersionOf.scalanet}"
+        ivy"io.iohk::mantis-rlp:${VersionOf.mantis}"
       )
 
       object test extends TestModule
