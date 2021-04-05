@@ -16,7 +16,13 @@ import io.iohk.metronome.crypto.GroupSignature
 object ArbitraryInstances {
   implicit val arbBitVector: Arbitrary[BitVector] =
     Arbitrary {
-      arbitrary[Array[Byte]].map(BitVector(_))
+      for {
+        // Choose a size that BitVector still renders as hex in toString,
+        // so the exact value is easy to see in test output or golden files.
+        // Over that it renders hashCode which can differ between Scala versions.
+        n  <- Gen.choose(0, 64)
+        bs <- Gen.listOfN(n, arbitrary[Byte])
+      } yield BitVector(bs.toArray)
     }
 
   implicit val arbHash: Arbitrary[Hash] =

@@ -3,16 +3,19 @@ package io.iohk.metronome.checkpointing.models
 import cats.data.NonEmptyList
 import io.iohk.ethereum.crypto.ECDSASignature
 import io.iohk.ethereum.rlp._
+import io.iohk.ethereum.rlp
 import io.iohk.metronome.crypto.GroupSignature
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.hotstuff.consensus.basic.{Phase, QuorumCertificate}
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import java.nio.file.{Files, Path, StandardOpenOption}
 import org.scalacheck.Arbitrary
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalactic.Equality
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scala.reflect.ClassTag
+import scodec.bits.BitVector
 
 /** Concrete examples of RLP encoding, so we can make sure the structure is what we expect.
   *
@@ -49,8 +52,11 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
     def name =
       s"RLPCodec[${implicitly[ClassTag[T]].runtimeClass.getSimpleName}]"
 
-    def encode = RLPEncoder.encode(decoded)
-    def decode = RLPDecoder.decode[T](encoded)
+    def encode: RLPEncodeable = RLPEncoder.encode(decoded)
+    def decode: T             = RLPDecoder.decode[T](encoded)
+
+    def decode(bytes: BitVector): T =
+      rlp.decode[T](bytes.toByteArray)
   }
 
   def exampleBehavior[T](example: Example[T]) = {
@@ -63,8 +69,54 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
     }
   }
 
+  /** When the example is first executed, create a golden file that we can
+    * check in with the code for future reference, and to detect any regression.
+    *
+    * If there are intentional changes, just delete it and let it be recreated.
+    * This could be used as a starter for implemnting the same format in a
+    * different language.
+    *
+    * The String format is not expected to match other implementations, but it's
+    * easy enough to read, and should be as good as a hard coded example either
+    * in code or a README file.
+    */
+  def goldenBehavior[T](example: Example[T]) = {
+
+    def resourcePath(extension: String): Path = {
+      val goldenPath = Path.of(getClass.getResource("/golden").toURI)
+      goldenPath.resolve(s"${example.name}.${extension}")
+    }
+
+    def maybeCreateResource(path: Path, content: => String) = {
+      if (!Files.exists(path)) {
+        Files.writeString(path, content, StandardOpenOption.CREATE_NEW)
+      }
+    }
+
+    val goldenRlpPath = resourcePath("rlp")
+    val goldenTxtPath = resourcePath("txt")
+
+    maybeCreateResource(
+      goldenRlpPath,
+      BitVector(rlp.encode(example.encoded)).toHex
+    )
+
+    maybeCreateResource(
+      goldenTxtPath,
+      example.decoded.toString
+    )
+
+    it should "decode the golden RLP content to a value that matches the golden String" in {
+      val goldenRlp = BitVector.fromHex(Files.readString(goldenRlpPath)).get
+      val goldenTxt = Files.readString(goldenTxtPath)
+
+      example.decode(goldenRlp).toString shouldBe goldenTxt
+    }
+  }
+
   def test[T](example: Example[T]) = {
     example.name should behave like exampleBehavior(example)
+    example.name should behave like goldenBehavior(example)
   }
 
   test {
