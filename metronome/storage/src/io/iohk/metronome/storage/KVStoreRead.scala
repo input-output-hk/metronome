@@ -10,10 +10,10 @@ import scodec.Codec
   */
 object KVStoreRead {
 
-  def unit[N]: KVStore[N, Unit] =
+  def unit[N]: KVStoreRead[N, Unit] =
     pure(())
 
-  def pure[N, A](a: A): KVStore[N, A] =
+  def pure[N, A](a: A): KVStoreRead[N, A] =
     Free.pure(a)
 
   def instance[N]: Ops[N] = new Ops[N] {}
@@ -25,9 +25,9 @@ object KVStoreRead {
 
     type KVNamespacedOp[A] = ({ type L[A] = KVStoreReadOp[N, A] })#L[A]
 
-    def unit: KVStore[N, Unit] = KVStore.unit[N]
+    def unit: KVStoreRead[N, Unit] = KVStoreRead.unit[N]
 
-    def pure[A](a: A) = KVStore.pure[N, A](a)
+    def pure[A](a: A) = KVStoreRead.pure[N, A](a)
 
     def read[K: Codec, V: Codec](
         namespace: N,

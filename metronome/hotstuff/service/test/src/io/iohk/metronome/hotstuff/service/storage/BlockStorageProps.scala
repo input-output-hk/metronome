@@ -57,14 +57,12 @@ object BlockStorageProps extends Properties("BlockStorage") {
     def containsBlock(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.contains(blockHash))
-        .runA(store)
-        .value
+        .run(store)
 
     def getBlock(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.get(blockHash))
-        .runA(store)
-        .value
+        .run(store)
 
     def deleteBlock(blockHash: Hash) =
       TestKVStore
@@ -75,14 +73,12 @@ object BlockStorageProps extends Properties("BlockStorage") {
     def getPathFromRoot(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.getPathFromRoot(blockHash))
-        .runA(store)
-        .value
+        .run(store)
 
     def getDescendants(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.getDescendants(blockHash))
-        .runA(store)
-        .value
+        .run(store)
 
     def pruneNonDescendants(blockHash: Hash) =
       TestKVStore

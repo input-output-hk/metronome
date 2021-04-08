@@ -1,7 +1,7 @@
 package io.iohk.metronome.hotstuff.service.storage
 
 import cats.implicits._
-import io.iohk.metronome.storage.{KVStore, KVCollection}
+import io.iohk.metronome.storage.{KVStore, KVStoreRead, KVCollection}
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, Block}
 import scala.collection.immutable.Queue
 
@@ -17,7 +17,8 @@ class BlockStorage[N, A <: Agreement: Block](
     childToParentColl: KVCollection[N, A#Hash, A#Hash],
     parentToChildrenColl: KVCollection[N, A#Hash, Set[A#Hash]]
 ) {
-  private implicit val kvn = KVStore.instance[N]
+  private implicit val kvn  = KVStore.instance[N]
+  private implicit val kvrn = KVStoreRead.instance[N]
 
   /** Insert a block into the store, and if the parent still exists,
     * then add this block to its children.
@@ -33,21 +34,21 @@ class BlockStorage[N, A <: Agreement: Block](
   }
 
   /** Retrieve a block by hash, if it exists. */
-  def get(blockHash: A#Hash): KVStore[N, Option[A#Block]] =
-    blockColl.get(blockHash)
+  def get(blockHash: A#Hash): KVStoreRead[N, Option[A#Block]] =
+    blockColl.read(blockHash)
 
   /** Check whether a block is present in the tree. */
-  def contains(blockHash: A#Hash): KVStore[N, Boolean] =
-    childToParentColl.get(blockHash).map(_.isDefined)
+  def contains(blockHash: A#Hash): KVStoreRead[N, Boolean] =
+    childToParentColl.read(blockHash).map(_.isDefined)
 
   /** Check how many children the block has in the tree. */
-  private def childCount(blockHash: A#Hash): KVStore[N, Int] =
-    parentToChildrenColl.get(blockHash).map(_.fold(0)(_.size))
+  private def childCount(blockHash: A#Hash): KVStoreRead[N, Int] =
+    parentToChildrenColl.read(blockHash).map(_.fold(0)(_.size))
 
   /** Check whether the parent of the block is present in the tree. */
-  private def hasParent(blockHash: A#Hash): KVStore[N, Boolean] =
-    childToParentColl.get(blockHash).flatMap {
-      case None             => KVStore[N].pure(false)
+  private def hasParent(blockHash: A#Hash): KVStoreRead[N, Boolean] =
+    childToParentColl.read(blockHash).flatMap {
+      case None             => KVStoreRead[N].pure(false)
       case Some(parentHash) => contains(parentHash)
     }
 
@@ -60,7 +61,7 @@ class BlockStorage[N, A <: Agreement: Block](
     * This is true if the block has no children,
     * or it has no parent and at most one child.
     */
-  private def canDelete(blockHash: A#Hash): KVStore[N, Boolean] =
+  private def canDelete(blockHash: A#Hash): KVStoreRead[N, Boolean] =
     (hasParent(blockHash), childCount(blockHash)).mapN {
       case (_, 0)     => true
       case (false, 1) => true
@@ -78,7 +79,7 @@ class BlockStorage[N, A <: Agreement: Block](
     * and then do so without checks.
     */
   def delete(blockHash: A#Hash): KVStore[N, Boolean] =
-    canDelete(blockHash).flatMap { ok =>
+    canDelete(blockHash).lift.flatMap { ok =>
       deleteUnsafe(blockHash).whenA(ok).as(ok)
     }
 
@@ -103,15 +104,15 @@ class BlockStorage[N, A <: Agreement: Block](
     * otherwise `head` will be the root of the block tree,
     * and `last` will be the block itself.
     */
-  def getPathFromRoot(blockHash: A#Hash): KVStore[N, List[A#Hash]] = {
+  def getPathFromRoot(blockHash: A#Hash): KVStoreRead[N, List[A#Hash]] = {
     def loop(
         blockHash: A#Hash,
         acc: List[A#Hash]
-    ): KVStore[N, List[A#Hash]] = {
-      childToParentColl.get(blockHash).flatMap {
+    ): KVStoreRead[N, List[A#Hash]] = {
+      childToParentColl.read(blockHash).flatMap {
         case None =>
           // This block doesn't exist in the tree, so our ancestry is whatever we collected so far.
-          KVStore[N].pure(acc)
+          KVStoreRead[N].pure(acc)
 
         case Some(parentHash) =>
           // So at least `blockHash` exists in the tree.
@@ -134,21 +135,21 @@ class BlockStorage[N, A <: Agreement: Block](
   def getDescendants(
       blockHash: A#Hash,
       skip: Set[A#Hash] = Set.empty
-  ): KVStore[N, List[A#Hash]] = {
+  ): KVStoreRead[N, List[A#Hash]] = {
     // BFS traversal.
     def loop(
         queue: Queue[A#Hash],
         acc: List[A#Hash]
-    ): KVStore[N, List[A#Hash]] = {
+    ): KVStoreRead[N, List[A#Hash]] = {
       queue.dequeueOption match {
         case None =>
-          KVStore[N].pure(acc)
+          KVStoreRead[N].pure(acc)
 
         case Some((blockHash, queue)) if skip(blockHash) =>
           loop(queue, acc)
 
         case Some((blockHash, queue)) =>
-          parentToChildrenColl.get(blockHash).flatMap {
+          parentToChildrenColl.read(blockHash).flatMap {
             case None =>
               loop(queue, acc)
             case Some(children) =>
@@ -165,7 +166,7 @@ class BlockStorage[N, A <: Agreement: Block](
     * Return the list of deleted block hashes.
     */
   def pruneNonDescendants(blockHash: A#Hash): KVStore[N, List[A#Hash]] =
-    getPathFromRoot(blockHash).flatMap {
+    getPathFromRoot(blockHash).lift.flatMap {
       case Nil =>
         KVStore[N].pure(Nil)
 
@@ -181,7 +182,7 @@ class BlockStorage[N, A <: Agreement: Block](
         val isMainChain = path.toSet
 
         for {
-          deleteables <- getDescendants(rootHash, skip = Set(blockHash))
+          deleteables <- getDescendants(rootHash, skip = Set(blockHash)).lift
           _           <- deleteables.filterNot(isMainChain).traverse(deleteUnsafe(_))
           _           <- path.init.traverse(deleteUnsafe(_))
         } yield deleteables
