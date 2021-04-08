@@ -5,7 +5,7 @@ import io.iohk.metronome.storage.{KVCollection, KVStoreState}
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, Block => BlockOps}
 import java.util.UUID
 import org.scalacheck._
-import org.scalacheck.Prop.forAll
+import org.scalacheck.Prop.{all, forAll, propBoolean}
 import scodec.codecs.implicits._
 import scodec.Codec
 
@@ -50,6 +50,47 @@ object BlockStorageProps extends Properties("BlockStorage") {
 
   object TestKVStore extends KVStoreState[Namespace]
 
+  implicit class TestStoreOps(store: TestKVStore.Store) {
+    def putBlock(block: TestBlock) =
+      TestKVStore.compile(TestBlockStorage.put(block)).runS(store).value
+
+    def containsBlock(blockHash: Hash) =
+      TestKVStore
+        .compile(TestBlockStorage.contains(blockHash))
+        .runA(store)
+        .value
+
+    def getBlock(blockHash: Hash) =
+      TestKVStore
+        .compile(TestBlockStorage.get(blockHash))
+        .runA(store)
+        .value
+
+    def deleteBlock(blockHash: Hash) =
+      TestKVStore
+        .compile(TestBlockStorage.delete(blockHash))
+        .run(store)
+        .value
+
+    def getPathFromRoot(blockHash: Hash) =
+      TestKVStore
+        .compile(TestBlockStorage.getPathFromRoot(blockHash))
+        .runA(store)
+        .value
+
+    def getDescendants(blockHash: Hash) =
+      TestKVStore
+        .compile(TestBlockStorage.getDescendants(blockHash))
+        .runA(store)
+        .value
+
+    def pruneNonDescendants(blockHash: Hash) =
+      TestKVStore
+        .compile(TestBlockStorage.pruneNonDescendants(blockHash))
+        .run(store)
+        .value
+  }
+
   def genBlockId: Gen[Hash] =
     Gen.delay(UUID.randomUUID().toString)
 
@@ -80,28 +121,124 @@ object BlockStorageProps extends Properties("BlockStorage") {
       )
     } yield children.flatten
 
-  /** Generate a block tree from a genesis block. */
   def genBlockTree: Gen[List[TestBlock]] =
     genBlockTree(parentId = "")
+
+  def genNonEmptyBlockTree: Gen[List[TestBlock]] = for {
+    genesis <- genBlock(parentId = "")
+    tree    <- genBlockTree(genesis.id)
+  } yield genesis +: tree
 
   case class TestData(
       tree: List[TestBlock],
       store: TestKVStore.Store
   )
-
-  /** Initialise a storage with a chain. */
-  def genTestData: Gen[TestData] =
-    genBlockTree.map { blocks =>
-      val insert = blocks.map(TestBlockStorage.put).sequence
+  object TestData {
+    def apply(tree: List[TestBlock]): TestData = {
+      val insert = tree.map(TestBlockStorage.put).sequence
       val store  = TestKVStore.compile(insert).runS(Map.empty).value
-      TestData(blocks, store)
+      TestData(tree, store)
     }
+  }
 
-  property("put") = forAll(genTestData, genBlock) { case (data, block) =>
-    val p = TestBlockStorage.put(block)
-    val s = TestKVStore.compile(p).runS(data.store).value
+  def genTestData = for {
+    tree        <- genNonEmptyBlockTree
+    existing    <- Gen.oneOf(tree)
+    nonExisting <- genBlock
+    data = TestData(tree)
+  } yield (data, existing, nonExisting)
 
-    s(Namespace.Blocks)(block.id) == block
-    s(Namespace.BlockToParent)(block.id) == block.parentId
+  property("put") = forAll(genBlockTree.map(TestData(_)), genBlock) {
+    case (data, block) =>
+      val s = data.store.putBlock(block)
+      s(Namespace.Blocks)(block.id) == block
+      s(Namespace.BlockToParent)(block.id) == block.parentId
+  }
+
+  property("contains existing") = forAll(genTestData) {
+    case (data, existing, _) =>
+      data.store.containsBlock(existing.id)
+  }
+
+  property("contains non-existing") = forAll(genTestData) {
+    case (data, _, nonExisting) =>
+      !data.store.containsBlock(nonExisting.id)
+  }
+
+  property("get existing") = forAll(genTestData) { case (data, existing, _) =>
+    data.store.getBlock(existing.id).contains(existing)
+  }
+
+  property("get non-existing") = forAll(genTestData) {
+    case (data, _, nonExisting) =>
+      data.store.getBlock(nonExisting.id).isEmpty
+  }
+
+  property("delete existing") = forAll(genTestData) {
+    case (data, existing, _) =>
+      val childCount = data.tree.count(_.parentId == existing.id)
+      val noParent   = !data.tree.exists(_.id == existing.parentId)
+      val (s, ok)    = data.store.deleteBlock(existing.id)
+      all(
+        "deleted" |: s.containsBlock(existing.id) == !ok,
+        "ok" |: ok && (childCount == 0 || childCount == 1 && noParent) || !ok
+      )
+  }
+
+  property("delete non-existing") = forAll(genTestData) {
+    case (data, _, nonExisting) =>
+      data.store.deleteBlock(nonExisting.id)._2 == true
+  }
+
+  property("getPathFromRoot existing") = forAll(genTestData) {
+    case (data, existing, nonExisting) =>
+      val path = data.store.getPathFromRoot(existing.id)
+      all(
+        "nonEmpty" |: path.nonEmpty,
+        "head" |: path.headOption.contains(data.tree.head.id),
+        "last" |: path.lastOption.contains(existing.id)
+      )
+  }
+
+  property("getPathFromRoot non-existing") = forAll(genTestData) {
+    case (data, _, nonExisting) =>
+      data.store.getPathFromRoot(nonExisting.id).isEmpty
+  }
+
+  property("getDescendants existing") = forAll(genTestData) {
+    case (data, existing, _) =>
+      val ds = data.store.getDescendants(existing.id)
+      all(
+        "nonEmpty" |: ds.nonEmpty,
+        "last" |: ds.lastOption.contains(existing.id),
+        "path-from-root" |: ds.forall { d =>
+          data.store.getPathFromRoot(d).contains(existing.id)
+        },
+        "head-is-leaf" |: ds.nonEmpty &&
+          !data.tree.exists(_.parentId == ds.head)
+      )
+  }
+
+  property("getDescendants non-existing") = forAll(genTestData) {
+    case (data, _, nonExisting) =>
+      data.store.getDescendants(nonExisting.id).isEmpty
+  }
+
+  property("pruneNonDescendants existing") = forAll(genTestData) {
+    case (data, existing, _) =>
+      val (s, ps)        = data.store.pruneNonDescendants(existing.id)
+      val pruned         = ps.toSet
+      val descendants    = data.store.getDescendants(existing.id).toSet
+      val nonDescendants = data.tree.map(_.id).filterNot(descendants)
+      nonDescendants.forall { x =>
+        pruned(x) &&
+        !s.containsBlock(x) &&
+        !data.store.getPathFromRoot(x).contains(existing.id)
+      }
+  }
+
+  property("pruneNonDescendants non-existing") = forAll(genTestData) {
+    case (data, _, nonExisting) =>
+      data.store.pruneNonDescendants(nonExisting.id)._2.isEmpty
   }
 }

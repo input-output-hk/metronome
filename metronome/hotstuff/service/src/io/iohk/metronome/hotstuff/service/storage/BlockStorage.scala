@@ -28,6 +28,7 @@ class BlockStorage[N, A <: Agreement: Block](
 
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
+      parentToChildrenColl.put(blockHash, Set.empty) >>
       parentToChildrenColl.update(parentHash, _ + blockHash)
   }
 
@@ -85,14 +86,15 @@ class BlockStorage[N, A <: Agreement: Block](
     * without any checking for the tree structure invariants.
     */
   private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] =
-    blockColl.delete(blockHash) >>
-      childToParentColl.get(blockHash).flatMap {
-        case None =>
-          KVStore[N].unit
-        case Some(parentHash) =>
-          childToParentColl.delete(blockHash) >>
-            parentToChildrenColl.update(parentHash, _ - blockHash)
-      }
+    childToParentColl.get(blockHash).flatMap {
+      case None =>
+        KVStore[N].unit
+      case Some(parentHash) =>
+        parentToChildrenColl.update(parentHash, _ - blockHash)
+    } >>
+      blockColl.delete(blockHash) >>
+      childToParentColl.delete(blockHash) >>
+      parentToChildrenColl.delete(blockHash)
 
   /** Get the ancestor chain of a block from the root,
     * including the block itself.
@@ -119,23 +121,12 @@ class BlockStorage[N, A <: Agreement: Block](
     loop(blockHash, Nil)
   }
 
-  /** Get the ancestor chain of a block up to the root,
-    * excluding the block itself.
-    *
-    * If the block is not in the tree, the result will be empty,
-    * otherwise `head` will be the parent of the block,
-    * and `last` will be the root of block tree.
-    */
-  def getAncestors(blockHash: A#Hash): KVStore[N, List[A#Hash]] =
-    getPathFromRoot(blockHash) map {
-      case Nil  => Nil
-      case path => path.reverse.tail
-    }
-
-  /** Collect all descendants of a block.
+  /** Collect all descendants of a block,
+    * including the block itself.
     *
     * The result will start with the blocks furthest away,
-    * so it should be safe to delete them in the same order.
+    * so it should be safe to delete them in the same order;
+    * `last` will be the block itself.
     *
     * The `skip` parameter can be used to avoid traversing
     * branches that we want to keep during deletion.
@@ -159,7 +150,7 @@ class BlockStorage[N, A <: Agreement: Block](
         case Some((blockHash, queue)) =>
           parentToChildrenColl.get(blockHash).flatMap {
             case None =>
-              loop(queue, blockHash :: acc)
+              loop(queue, acc)
             case Some(children) =>
               loop(queue ++ children, blockHash :: acc)
           }
