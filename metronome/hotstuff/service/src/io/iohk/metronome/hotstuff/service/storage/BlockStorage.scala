@@ -1,4 +1,4 @@
-package io.iohk.metronome.checkpointing.service.storage
+package io.iohk.metronome.hotstuff.service.storage
 
 import cats.implicits._
 import io.iohk.metronome.storage.{KVStore, KVCollection}
@@ -17,7 +17,7 @@ class BlockStorage[N, A <: Agreement: Block](
     childToParentColl: KVCollection[N, A#Hash, A#Hash],
     parentToChildrenColl: KVCollection[N, A#Hash, Set[A#Hash]]
 ) {
-  implicit val kvn = KVStore.instance[N]
+  private implicit val kvn = KVStore.instance[N]
 
   /** Insert a block into the store, and if the parent still exists,
     * then add this block to its children.
