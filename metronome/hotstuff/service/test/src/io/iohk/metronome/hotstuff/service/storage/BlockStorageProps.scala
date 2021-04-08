@@ -141,57 +141,66 @@ object BlockStorageProps extends Properties("BlockStorage") {
     }
   }
 
-  def genTestData = for {
-    tree        <- genNonEmptyBlockTree
-    existing    <- Gen.oneOf(tree)
+  def genExisting = for {
+    tree     <- genNonEmptyBlockTree
+    existing <- Gen.oneOf(tree)
+    data = TestData(tree)
+  } yield (data, existing)
+
+  def genNonExisting = for {
+    tree        <- genBlockTree
     nonExisting <- genBlock
     data = TestData(tree)
-  } yield (data, existing, nonExisting)
+  } yield (data, nonExisting)
 
-  property("put") = forAll(genBlockTree.map(TestData(_)), genBlock) {
-    case (data, block) =>
-      val s = data.store.putBlock(block)
-      s(Namespace.Blocks)(block.id) == block
-      s(Namespace.BlockToParent)(block.id) == block.parentId
+  def genSubTree = for {
+    tree <- genNonEmptyBlockTree
+    leaf = tree.last
+    subTree <- genBlockTree(parentId = leaf.id)
+    data = TestData(tree ++ subTree)
+  } yield (data, leaf, subTree)
+
+  property("put") = forAll(genNonExisting) { case (data, block) =>
+    val s = data.store.putBlock(block)
+    s(Namespace.Blocks)(block.id) == block
+    s(Namespace.BlockToParent)(block.id) == block.parentId
   }
 
-  property("contains existing") = forAll(genTestData) {
-    case (data, existing, _) =>
-      data.store.containsBlock(existing.id)
+  property("contains existing") = forAll(genExisting) { case (data, existing) =>
+    data.store.containsBlock(existing.id)
   }
 
-  property("contains non-existing") = forAll(genTestData) {
-    case (data, _, nonExisting) =>
+  property("contains non-existing") = forAll(genNonExisting) {
+    case (data, nonExisting) =>
       !data.store.containsBlock(nonExisting.id)
   }
 
-  property("get existing") = forAll(genTestData) { case (data, existing, _) =>
+  property("get existing") = forAll(genExisting) { case (data, existing) =>
     data.store.getBlock(existing.id).contains(existing)
   }
 
-  property("get non-existing") = forAll(genTestData) {
-    case (data, _, nonExisting) =>
+  property("get non-existing") = forAll(genNonExisting) {
+    case (data, nonExisting) =>
       data.store.getBlock(nonExisting.id).isEmpty
   }
 
-  property("delete existing") = forAll(genTestData) {
-    case (data, existing, _) =>
-      val childCount = data.tree.count(_.parentId == existing.id)
-      val noParent   = !data.tree.exists(_.id == existing.parentId)
-      val (s, ok)    = data.store.deleteBlock(existing.id)
-      all(
-        "deleted" |: s.containsBlock(existing.id) == !ok,
-        "ok" |: ok && (childCount == 0 || childCount == 1 && noParent) || !ok
-      )
+  property("delete existing") = forAll(genExisting) { case (data, existing) =>
+    val childCount = data.tree.count(_.parentId == existing.id)
+    val noParent   = !data.tree.exists(_.id == existing.parentId)
+    val (s, ok)    = data.store.deleteBlock(existing.id)
+    all(
+      "deleted" |: s.containsBlock(existing.id) == !ok,
+      "ok" |: ok && (childCount == 0 || childCount == 1 && noParent) || !ok
+    )
   }
 
-  property("delete non-existing") = forAll(genTestData) {
-    case (data, _, nonExisting) =>
+  property("delete non-existing") = forAll(genNonExisting) {
+    case (data, nonExisting) =>
       data.store.deleteBlock(nonExisting.id)._2 == true
   }
 
-  property("getPathFromRoot existing") = forAll(genTestData) {
-    case (data, existing, nonExisting) =>
+  property("getPathFromRoot existing") = forAll(genExisting) {
+    case (data, existing) =>
       val path = data.store.getPathFromRoot(existing.id)
       all(
         "nonEmpty" |: path.nonEmpty,
@@ -200,45 +209,46 @@ object BlockStorageProps extends Properties("BlockStorage") {
       )
   }
 
-  property("getPathFromRoot non-existing") = forAll(genTestData) {
-    case (data, _, nonExisting) =>
+  property("getPathFromRoot non-existing") = forAll(genNonExisting) {
+    case (data, nonExisting) =>
       data.store.getPathFromRoot(nonExisting.id).isEmpty
   }
 
-  property("getDescendants existing") = forAll(genTestData) {
-    case (data, existing, _) =>
-      val ds = data.store.getDescendants(existing.id)
+  property("getDescendants existing") = forAll(genSubTree) {
+    case (data, block, subTree) =>
+      val ds  = data.store.getDescendants(block.id)
+      val dss = ds.toSet
       all(
         "nonEmpty" |: ds.nonEmpty,
-        "last" |: ds.lastOption.contains(existing.id),
-        "path-from-root" |: ds.forall { d =>
-          data.store.getPathFromRoot(d).contains(existing.id)
-        },
-        "head-is-leaf" |: ds.nonEmpty &&
-          !data.tree.exists(_.parentId == ds.head)
+        "last" |: ds.lastOption.contains(block.id),
+        "size" |: ds.size == subTree.size + 1,
+        "subtree" |: subTree.forall(block => dss.contains(block.id))
       )
   }
 
-  property("getDescendants non-existing") = forAll(genTestData) {
-    case (data, _, nonExisting) =>
+  property("getDescendants non-existing") = forAll(genNonExisting) {
+    case (data, nonExisting) =>
       data.store.getDescendants(nonExisting.id).isEmpty
   }
 
-  property("pruneNonDescendants existing") = forAll(genTestData) {
-    case (data, existing, _) =>
-      val (s, ps)        = data.store.pruneNonDescendants(existing.id)
-      val pruned         = ps.toSet
-      val descendants    = data.store.getDescendants(existing.id).toSet
-      val nonDescendants = data.tree.map(_.id).filterNot(descendants)
-      nonDescendants.forall { x =>
-        pruned(x) &&
-        !s.containsBlock(x) &&
-        !data.store.getPathFromRoot(x).contains(existing.id)
-      }
+  property("pruneNonDescendants existing") = forAll(genSubTree) {
+    case (data, block, subTree) =>
+      val (s, ps)     = data.store.pruneNonDescendants(block.id)
+      val pss         = ps.toSet
+      val descendants = subTree.map(_.id).toSet
+      val nonDescendants =
+        data.tree.map(_.id).filterNot(descendants).filterNot(_ == block.id)
+      all(
+        "size" |: ps.size == nonDescendants.size,
+        "pruned" |: nonDescendants.forall(pss),
+        "deleted" |: nonDescendants.forall(!s.containsBlock(_)),
+        "kept-block" |: s.containsBlock(block.id),
+        "kept-descendants" |: descendants.forall(s.containsBlock(_))
+      )
   }
 
-  property("pruneNonDescendants non-existing") = forAll(genTestData) {
-    case (data, _, nonExisting) =>
+  property("pruneNonDescendants non-existing") = forAll(genNonExisting) {
+    case (data, nonExisting) =>
       data.store.pruneNonDescendants(nonExisting.id)._2.isEmpty
   }
 }
