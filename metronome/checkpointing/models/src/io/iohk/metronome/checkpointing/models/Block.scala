@@ -22,6 +22,7 @@ sealed abstract case class Block private (
 }
 
 object Block {
+  type Hash = Block.Header.Hash
 
   /** Create a from a header and body we received from the network.
     *
