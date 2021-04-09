@@ -2,6 +2,7 @@ package io.iohk.metronome.hotstuff.service.messages
 
 import io.iohk.metronome.core.messages.{RPCMessage, RPCMessageCompanion}
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
+import io.iohk.metronome.hotstuff.service.Status
 
 /** Messages facilitating synchronisation between nodes. */
 sealed trait SyncMessage[A <: Agreement] extends RPCMessage
@@ -14,7 +15,7 @@ object SyncMessage extends RPCMessageCompanion {
 
   case class GetStatusResponse[A <: Agreement](
       requestId: RequestId,
-      status: Nothing
+      status: Status[A]
   ) extends SyncMessage[A]
       with Response
 
