@@ -4,7 +4,9 @@ import io.iohk.metronome.core.messages.{RPCMessage, RPCMessageCompanion}
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.Status
 
-/** Messages facilitating synchronisation between nodes. */
+/** Messages needed to fully realise the HotStuff protocol,
+  * without catering for any application specific concerns.
+  */
 sealed trait SyncMessage[A <: Agreement] extends RPCMessage
 
 object SyncMessage extends RPCMessageCompanion {
