@@ -67,7 +67,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           "KonradStaniec",
           "Konrad Staniec",
           "https://github.com/KonradStaniec"
-        )
+        ),
+        Developer("rtkaczyk", "Radek Tkaczyk", "https://github.com/rtkaczyk")
       )
     )
   }
@@ -139,7 +140,12 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
 
       def single(args: String*) = T.command {
-        super.runMain("org.scalatest.run", args: _*)
+        // ScalaCheck test
+        if (args.headOption.exists(_.endsWith("Props")))
+          super.runMain(args.head, args.tail: _*)
+        // ScalaTest test
+        else
+          super.runMain("org.scalatest.run", args: _*)
       }
     }
   }

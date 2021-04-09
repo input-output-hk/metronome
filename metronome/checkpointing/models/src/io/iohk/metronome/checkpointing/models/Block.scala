@@ -39,12 +39,12 @@ object Block {
       transactions: IndexedSeq[Transaction]
   ): Block = {
     val body = Body(transactions)
+    val txMerkleTree =
+      MerkleTree.build(transactions.map(tx => MerkleTree.Hash(tx.hash)))
     val header = Header(
       parentHash = parent.hash,
       postStateHash = postStateHash,
-      bodyHash = body.hash,
-      // TODO (PM-3102): Compute Root Hash over the transactions.
-      contentMerkleRoot = MerkleTree.Hash.empty
+      contentMerkleRoot = txMerkleTree.hash
     )
     makeUnsafe(header, body)
   }
@@ -55,8 +55,7 @@ object Block {
     val header = Header(
       parentHash = Block.Header.Hash(ByteVector.empty),
       postStateHash = Ledger.empty.hash,
-      bodyHash = body.hash,
-      contentMerkleRoot = MerkleTree.Hash.empty
+      contentMerkleRoot = MerkleTree.empty.hash
     )
     makeUnsafe(header, body)
   }
@@ -65,10 +64,7 @@ object Block {
       parentHash: Header.Hash,
       // Hash of the Ledger after executing the block.
       postStateHash: Ledger.Hash,
-      // Hash of the transactions in the body.
-      bodyHash: Body.Hash,
       // Merkle root of the transactions in the body.
-      // TODO (PM-3102): Should this just replace the `bodyHash`?
       contentMerkleRoot: MerkleTree.Hash
   ) extends RLPHash[Header, Header.Hash]
 

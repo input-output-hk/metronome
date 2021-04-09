@@ -170,7 +170,6 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
         checkpoint = sample[Transaction.CheckpointCandidate],
         proof = MerkleTree.Proof(
           leafIndex = 2,
-          leafCount = 4,
           siblingPath = Vector(sample[MerkleTree.Hash], sample[MerkleTree.Hash])
         ),
         commitQC = QuorumCertificate[CheckpointingAgreement](
@@ -192,13 +191,11 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
             RLPList( // BlockHeader
               RLPValue(decoded.headers.head.parentHash.toArray),
               RLPValue(decoded.headers.head.postStateHash.toArray),
-              RLPValue(decoded.headers.head.bodyHash.toArray),
               RLPValue(decoded.headers.head.contentMerkleRoot.toArray)
             ),
             RLPList( // BlockHeader
               RLPValue(decoded.headers.last.parentHash.toArray),
               RLPValue(decoded.headers.last.postStateHash.toArray),
-              RLPValue(decoded.headers.last.bodyHash.toArray),
               RLPValue(decoded.headers.last.contentMerkleRoot.toArray)
             )
           ),
@@ -207,7 +204,6 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
           ),
           RLPList( // Proof
             RLPValue(Array(decoded.proof.leafIndex.toByte)),
-            RLPValue(Array(decoded.proof.leafCount.toByte)),
             RLPList( // siblingPath
               RLPValue(decoded.proof.siblingPath.head.toArray),
               RLPValue(decoded.proof.siblingPath.last.toArray)

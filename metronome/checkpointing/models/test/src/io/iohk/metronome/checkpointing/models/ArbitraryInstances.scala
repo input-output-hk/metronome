@@ -61,7 +61,7 @@ object ArbitraryInstances {
       )
     }
 
-  implicit val arbLeger: Arbitrary[Ledger] =
+  implicit val arbLedger: Arbitrary[Ledger] =
     Arbitrary {
       for {
         mcp <- arbitrary[Option[Transaction.CheckpointCandidate]]
@@ -80,7 +80,6 @@ object ArbitraryInstances {
         header = Block.Header(
           parentHash,
           postStateHash,
-          body.hash,
           contentMerkleRoot
         )
       } yield Block.makeUnsafe(header, body)
@@ -111,10 +110,9 @@ object ArbitraryInstances {
 
         checkpoint <- arbitrary[Transaction.CheckpointCandidate]
 
-        leafCount <- Gen.choose(1, 10)
-        leafIndex <- Gen.choose(0, leafCount - 1)
+        leafIndex <- Gen.choose(0, 10)
         siblings  <- arbitrary[Vector[MerkleTree.Hash]]
-        proof = MerkleTree.Proof(leafIndex, leafCount, siblings)
+        proof = MerkleTree.Proof(leafIndex, siblings)
 
         viewNumber <- Gen.posNum[Long].map(x => ViewNumber(x + n))
         signature  <- arbitrary[CheckpointingAgreement.GSig]

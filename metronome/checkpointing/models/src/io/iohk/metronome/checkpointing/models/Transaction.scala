@@ -13,9 +13,10 @@ import scodec.bits.BitVector
   * we support, which is to register proposer blocks in the ledger, required by Advocate,
   * and to register checkpoint candidates.
   */
-sealed trait Transaction
+sealed trait Transaction extends RLPHash[Transaction, Transaction.Hash]
 
-object Transaction {
+object Transaction
+    extends RLPHashCompanion[Transaction]()(RLPCodecs.rlpTransaction) {
 
   /** In PoW chains that support Advocate checkpointing, the Checkpoint Certificate
     * can enforce the inclusion of proposed blocks on the chain via references; think
