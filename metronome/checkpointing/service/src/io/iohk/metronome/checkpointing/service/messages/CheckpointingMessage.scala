@@ -1,12 +1,15 @@
 package io.iohk.metronome.checkpointing.service.messages
 
-import io.iohk.metronome.core.messages.{RPCMessage, RPCMessageCompanion}
 import io.iohk.metronome.checkpointing.models.Ledger
+import io.iohk.metronome.hotstuff.service.messages.{
+  RPCMessage,
+  RPCMessageCompanion
+}
 
 /** Checkpointing specific messages that the HotStuff service doesn't handle,
   * which is the synchronisation of committed ledger state.
   *
-  * These will be wrapped in a `RemoteMessage.ApplicationMessage`.
+  * These will be wrapped in an `ApplicationMessage`.
   */
 sealed trait CheckpointingMessage extends RPCMessage
 

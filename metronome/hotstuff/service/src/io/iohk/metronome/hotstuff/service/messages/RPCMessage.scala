@@ -1,4 +1,4 @@
-package io.iohk.metronome.core.messages
+package io.iohk.metronome.hotstuff.service.messages
 
 import java.util.UUID
 
