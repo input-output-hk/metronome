@@ -235,6 +235,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     object service extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
         Seq(
+          core,
           storage,
           tracing,
           crypto,
@@ -295,6 +296,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     object service extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
         Seq(
+          core,
           tracing,
           hotstuff.service,
           checkpointing.models,
