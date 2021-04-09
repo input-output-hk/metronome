@@ -11,7 +11,7 @@ import io.iohk.metronome.hotstuff.service.messages.{
   *
   * These will be wrapped in an `ApplicationMessage`.
   */
-sealed trait CheckpointingMessage extends RPCMessage
+sealed trait CheckpointingMessage { self: RPCMessage => }
 
 object CheckpointingMessage extends RPCMessageCompanion {
 

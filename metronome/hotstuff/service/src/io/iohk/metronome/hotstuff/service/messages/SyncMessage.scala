@@ -6,7 +6,7 @@ import io.iohk.metronome.hotstuff.service.Status
 /** Messages needed to fully realise the HotStuff protocol,
   * without catering for any application specific concerns.
   */
-sealed trait SyncMessage[A <: Agreement] extends RPCMessage
+sealed trait SyncMessage[A <: Agreement] { self: RPCMessage => }
 
 object SyncMessage extends RPCMessageCompanion {
   case class GetStatusRequest(
