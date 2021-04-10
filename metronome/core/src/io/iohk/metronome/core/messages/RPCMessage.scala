@@ -1,4 +1,4 @@
-package io.iohk.metronome.hotstuff.service.messages
+package io.iohk.metronome.core.messages
 
 import java.util.UUID
 
@@ -13,6 +13,10 @@ trait RPCMessage {
 
 abstract class RPCMessageCompanion {
   type RequestId = UUID
+  object RequestId {
+    def apply(): RequestId =
+      UUID.randomUUID()
+  }
 
   trait Request  extends RPCMessage
   trait Response extends RPCMessage

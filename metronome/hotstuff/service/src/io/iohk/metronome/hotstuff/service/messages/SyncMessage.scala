@@ -1,5 +1,6 @@
 package io.iohk.metronome.hotstuff.service.messages
 
+import io.iohk.metronome.core.messages.{RPCMessage, RPCMessageCompanion}
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.Status
 
