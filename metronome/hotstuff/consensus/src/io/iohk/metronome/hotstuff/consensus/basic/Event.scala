@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.consensus.basic
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 
 /** Input events for the protocol model. */
-sealed trait Event[A <: Agreement]
+sealed trait Event[+A <: Agreement]
 
 object Event {
 
