@@ -3,18 +3,22 @@ package io.iohk.metronome.hotstuff.service
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Fiber, Resource, ContextShift}
 import cats.effect.concurrent.{Ref, Deferred}
+import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Effect,
   Event,
   ProtocolState,
-  Phase
+  Phase,
+  Message
 }
-import monix.catnap.ConcurrentQueue
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import monix.catnap.ConcurrentQueue
+import io.iohk.metronome.networking.ConnectionHandler
 
 /** HotStuff Service is an effectful executor wrapping the pure HotStuff ProtocolState. */
 class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
+    network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
     eventQueue: ConcurrentQueue[F, Event[A]],
@@ -25,8 +29,40 @@ class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
   def getState: F[ProtocolState[A]] =
     stateRef.get
 
+  private def processMessages: F[Unit] = {
+    network.incomingMessages
+      .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
+        // - Validate the message.
+        // - Synchronise any missing block dependencies:
+        //   - download blocks until we find a parent we have
+        //   - validate blocks going from parent to children
+        //     - if the block is invalid, stop downloading the branch
+        //     - if the block is valid, enqueue it into the validated events queue
+        val event = Event.MessageReceived(from, message)
+
+        stateRef.get.flatMap { state =>
+          state.validateMessage(event) match {
+            case Left(error) =>
+              // TODO: Tracing
+              ().pure[F]
+
+            case Right(valid) =>
+              // TODO: Tracing
+              // TODO: Sync dependencies.
+              // NOTE: The Prepare message should have a Q.C. for the parent
+              // of the block, so that shows that the block is legit.
+              // Otherwise if we see a Vote with an unknown block we can ignore it,
+              // and if it's a Quorum Certificate then we can download because again
+              // we have proof for its legitimacy.
+              enqueueEvent(valid)
+          }
+        }
+      }
+      .completedL
+  }
+
   /** Add an event to the queue for later processing. */
-  private def enqueueEvent(event: Event[A]): F[Unit] =
+  private def enqueueEvent(event: Validated[Event[A]]): F[Unit] =
     eventQueue.offer(event)
 
   /** Take a single event from the queue, apply it on the state,
@@ -38,12 +74,6 @@ class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
   private def processEvents: F[Unit] = {
     eventQueue.poll.flatMap { event =>
       stateRef.get.flatMap { state =>
-        // - Validate the event.
-        // - Synchronise any missing block dependencies:
-        //   - download blocks until we find a parent we have
-        //   - validate blocks going from parent to children
-        //     - if the block is invalid, stop downloading the branch
-        //     - if the block is valid, enqueue it into the validated events queue
         // - Try to apply the event on the current state
         //   - if it's `TooEarly`, add it to the delayed stash
         //   - if it's another error, ignore the event
@@ -102,7 +132,8 @@ class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
 
     effect match {
       case ScheduleNextView(viewNumber, timeout) =>
-        Timer[F].sleep(timeout) >> enqueueEvent(NextView(viewNumber))
+        val event = Validated[Event[A]](NextView(viewNumber))
+        Timer[F].sleep(timeout) >> enqueueEvent(event)
 
       case CreateBlock(viewNumber, highQC) =>
         // Ask the application to create a block for us.
@@ -121,8 +152,7 @@ class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
           blockExecutionQueue.offer(effect)
 
       case SendMessage(recipient, message) =>
-        // TODO: Add dependency on RemoteConnectionManager
-        ???
+        network.sendMessage(recipient, message)
     }
   }
 
@@ -158,16 +188,19 @@ object HotStuffService {
     * instances upon restart.
     */
   def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
+      network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
   ): Resource[F, HotStuffService[F, A]] =
     for {
-      service <- Resource.make(build[F, A](initState))(_.cancelEffects)
+      service <- Resource.make(build[F, A](network, initState))(_.cancelEffects)
+      _       <- Concurrent[F].background(service.processMessages)
       _       <- Concurrent[F].background(service.processEvents)
       _       <- Concurrent[F].background(service.executeBlocks)
     } yield service
 
   // TODO: Add dependency on Tracing
   private def build[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
+      network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
   ): F[HotStuffService[F, A]] =
     for {
@@ -177,6 +210,7 @@ object HotStuffService {
       blockExecutionQueue <- ConcurrentQueue[F]
         .unbounded[Effect.ExecuteBlocks[A]](None)
       service = new HotStuffService[F, A](
+        network,
         stateRef,
         fibersRef,
         eventQueue,
