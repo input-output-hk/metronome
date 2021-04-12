@@ -878,9 +878,13 @@ object HotStuffProtocolCommands extends Commands {
                   }
                   .getOrElse(fail("expected to vote"))
               } else {
-                "executes the block" |: effects.collectFirst {
-                  case _: Effect.ExecuteBlocks[_] =>
-                }.isDefined
+                all(
+                  "executes the block" |: effects.collectFirst {
+                    case _: Effect.ExecuteBlocks[_] =>
+                  }.isDefined,
+                  "remembers the executed block" |:
+                    next.lastExecutedBlockHash == message.quorumCertificate.blockHash
+                )
               }
             )
 

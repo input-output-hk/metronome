@@ -239,12 +239,15 @@ case class ProtocolState[A <: Agreement: Block: Signing](
             handleQuorum(e, Phase.Commit) { m =>
               handleNextView(NextView(viewNumber)) match {
                 case (next, effects) =>
+                  val withLast = next.copy(lastExecutedBlockHash =
+                    m.quorumCertificate.blockHash
+                  )
                   val withExec = ExecuteBlocks(
                     lastExecutedBlockHash,
                     m.quorumCertificate
                   ) +: effects
 
-                  next -> withExec
+                  withLast -> withExec
               }
             }
         }
