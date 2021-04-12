@@ -39,12 +39,18 @@ object InterpreterMessage extends RPCMessageCompanion {
 
   /** The Interpreter signals to the Service that it can
     * potentially produce a new checkpoint candidate in
-    * the next view when the replica becomes leader. In
-    * that round, the Service should send a `GetCheckpointCandidateRequest`.
+    * the next view when the replica becomes leader.
+    * In that round, the Service should send a
+    * `GetCheckpointCandidateRequest`.
     *
     * This is an optimisation, so we don't send the `Ledger` in
     * futile attempts when there's no chance for a candidate to
     * be produced.
+    *
+    * It is also a way for the Service to remember where
+    * in the mempoool a checkpoint can be added, before
+    * adding more proposer events that aren't perhaps
+    * visible to the checkpoint.
     */
   case class NewCheckpointCandidateRequest(
       requestId: RequestId
@@ -108,34 +114,29 @@ object InterpreterMessage extends RPCMessageCompanion {
   /** The Interpreter responds to the block validation request when
     * it has all the data available to perform the validation.
     *
-    * If the block was valid, `Some` updated ledger is returned,
-    * otherwise the response contains `None`.
+    * The result indicates whether the block contents were valid.
     *
-    * The Service will check whether the hash of the updated ledger
-    * matches the `postStateHash` in the block header.
+    * Reasons for being invalid could be that a checkpoint
+    * was proposed which is inconsistent with the current ledger,
+    * or that a proposer block was pointing at an invalid block.
+    *
+    * If valid, the Service updates its copy of the ledger
+    * and checks that the `postStateHash` in the block also
+    * corresponds to its state.
     */
   case class ValidateBlockResponse(
       requestId: RequestId,
-      maybeUpdatedLedger: Option[Ledger]
+      isValid: Boolean
   ) extends InterpreterMessage
       with Response
-      with FromInterpreter {
-
-    /** Indicate whether the block contents were valid.
-      *
-      * Reasons for being invalid could be that a checkpoint
-      * was proposed which is inconsistent with the current ledger,
-      * or that a proposer block was pointing at an invalid block.
-      */
-    def isValid = maybeUpdatedLedger.isDefined
-  }
+      with FromInterpreter
 
   /** The Service notifies the Interpreter about a new Checkpoint Certificate
     * having been constructed, after a block had been committed that resulted
     * in the commit of a checkpoint candidate.
     *
     * The certificate is created by the Service because it has access to all the
-    * block headers an quorum certificates, and thus can construct the Merkle proof.
+    * block headers and quorum certificates, and thus can construct the Merkle proof.
     */
   case class NewCheckpointCertificateRequest(
       requestId: RequestId,
