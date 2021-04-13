@@ -18,6 +18,7 @@ object HotStuffService {
 
   /** Start up the HotStuff service stack. */
   def apply[F[_]: Concurrent: ContextShift: Timer, A <: Agreement: Block](
+      publicKey: A#PKey,
       network: Network[F, A, HotStuffMessage[A]],
       initState: ProtocolState[A]
   ): Resource[F, Unit] =
@@ -35,14 +36,18 @@ object HotStuffService {
             case Right(message) => HotStuffMessage.SyncMessage(message)
           }
         )
+
       syncAndValidatePipe <- Resource.liftF {
         Pipe[F, SyncAndValidateRequest[A], SyncAndValidateResponse[A]]
       }
+
       consensusService <- ConsensusService(
+        publicKey,
         consensusNetwork,
         syncAndValidatePipe.left,
         initState
       )
+
       syncService <- SyncService(
         syncNetwork,
         syncAndValidatePipe.right,

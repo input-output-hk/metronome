@@ -23,6 +23,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
   * It handles the `consensus.basic.Message` events coming from the network.
   */
 class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
+    publicKey: A#PKey,
     network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
@@ -195,10 +196,30 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
   private def handleTransition(
       transition: ProtocolState.Transition[A]
   ): F[Unit] = {
-    val (nextState, effects) = transition
-    // TODO: Partition into local effects that can be applied to the state immediately.
+    val (state, effects) = transition
+
+    // Apply local messages to the state before anything else.
+    val (nextState, nextEffects) =
+      effects.foldLeft((state, Seq.empty[Effect[A]])) {
+        case ((state, later), effect @ Effect.SendMessage(recipient, message))
+            if recipient == publicKey =>
+          val event = Validated(Event.MessageReceived(recipient, message))
+
+          state.handleMessage(event) match {
+            case Left(error) =>
+              // This shouldn't happen, but let's just skip this event here and redeliver it later.
+              (state, effect +: later)
+
+            case Right((state, effects)) =>
+              (state, effects ++ later)
+          }
+
+        case ((state, later), effect) =>
+          (state, effect +: later)
+      }
+
     stateRef.set(nextState) >>
-      scheduleEffects(effects)
+      scheduleEffects(nextEffects)
   }
 
   /** Try to apply a transition:
@@ -321,6 +342,7 @@ object ConsensusService {
     * instances upon restart.
     */
   def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
+      publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
       initState: ProtocolState[A]
@@ -328,7 +350,7 @@ object ConsensusService {
     // TODO (PM-3187): Add Tracing
     for {
       service <- Resource.make(
-        build[F, A](network, syncAndValidatePipe, initState)
+        build[F, A](publicKey, network, syncAndValidatePipe, initState)
       )(
         _.cancelEffects
       )
@@ -343,6 +365,7 @@ object ConsensusService {
   private def build[F[
       _
   ]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
+      publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
       initState: ProtocolState[A]
@@ -355,6 +378,7 @@ object ConsensusService {
         .unbounded[Effect.ExecuteBlocks[A]](None)
 
       service = new ConsensusService[F, A](
+        publicKey,
         network,
         stateRef,
         fibersRef,
