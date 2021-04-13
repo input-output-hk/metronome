@@ -149,13 +149,14 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
-  /** Data models shared between all modules. */
+  /** Abstractions shared between all modules. */
   object core extends SubModule with Publishing {
     override def description: String =
-      "Common data models."
+      "Common abstractions."
 
-    override def ivyDeps = Agg(
-      ivy"com.chuusai::shapeless:${VersionOf.shapeless}"
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"com.chuusai::shapeless:${VersionOf.shapeless}",
+      ivy"io.monix::monix:${VersionOf.monix}"
     )
   }
 
@@ -320,8 +321,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"com.typesafe:config:${VersionOf.config}",
         ivy"ch.qos.logback:logback-classic:${VersionOf.logback}",
-        ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}",
-        ivy"io.monix::monix:${VersionOf.monix}"
+        ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}"
       )
 
       object test extends TestModule
