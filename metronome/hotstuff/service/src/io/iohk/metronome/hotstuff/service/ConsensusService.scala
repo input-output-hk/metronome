@@ -4,22 +4,22 @@ import cats.implicits._
 import cats.effect.{Concurrent, Timer, Fiber, Resource, ContextShift}
 import cats.effect.concurrent.{Ref, Deferred}
 import io.iohk.metronome.core.{Validated, Pipe}
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Effect,
   Event,
   ProtocolState,
+  ProtocolError,
   Phase,
   Message,
-  Block
+  Block,
+  QuorumCertificate
 }
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
-import monix.catnap.ConcurrentQueue
 import io.iohk.metronome.networking.ConnectionHandler
-import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
-import scala.collection.immutable.Queue
+import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
-import cats.syntax.apply
+import scala.collection.immutable.Queue
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
@@ -29,10 +29,12 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
+    stashRef: Ref[F, ConsensusService.MessageStash[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
     syncAndValidatePipe: ConsensusService.SyncAndValidatePipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
-    blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]]
+    blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
+    maxEarlyViewNumberDiff: Int
 ) {
   import ConsensusService.{SyncAndValidateRequest, SyncAndValidateResponse}
 
@@ -68,7 +70,8 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
           // TODO: Also collect these for the round so we can realise if we're out of sync.
           none.pure[F]
 
-        case Right(valid) if valid.message.viewNumber > state.viewNumber.next =>
+        case Right(valid)
+            if valid.message.viewNumber > state.viewNumber + maxEarlyViewNumberDiff =>
           // TODO: Trace that a message from view far ahead in the future was received.
           // TODO: Also collect these for the round so we can realise if we're out of sync.
           none.pure[F]
@@ -205,9 +208,39 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     val (nextState, nextEffects) =
       applySyncEffects(state, effects)
 
-    stateRef.set(nextState) >>
+    // Unstash messages before we change state.
+    unstash(nextState) >>
+      stateRef.set(nextState) >>
       scheduleEffects(nextEffects)
   }
+
+  /** Requeue messages which arrived too early, but are now due becuase
+    * the state caught up with them.
+    */
+  private def unstash(nextState: ProtocolState[A]): F[Unit] =
+    stateRef.get.flatMap { state =>
+      val requeue = for {
+        due <- stashRef.modify { stash =>
+          val dueKeys = stash.keySet.filter { case (viewNumber, phase) =>
+            viewNumber < nextState.viewNumber ||
+              viewNumber == nextState.viewNumber && phase.isBefore(
+                nextState.phase
+              )
+          }
+
+          val dueMessages = dueKeys.toList.map(stash).flatten.map {
+            case (key, message) => Event.MessageReceived(key, message)
+          }
+
+          (stash -- dueKeys, dueMessages)
+        }
+        _ <- due.traverse(e => enqueueEvent(validated(e)))
+      } yield ()
+
+      requeue.whenA(
+        nextState.viewNumber != state.viewNumber || nextState.phase != state.phase
+      )
+    }
 
   /** Carry out local effects before anything else,
     * to eliminate race conditions when a vote sent
@@ -220,6 +253,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
       state: ProtocolState[A],
       effects: Seq[Effect[A]]
   ): ProtocolState.Transition[A] = {
+    @tailrec
     def loop(
         state: ProtocolState[A],
         effectQueue: Queue[Effect[A]],
@@ -249,7 +283,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
           }
       }
 
-    loop(state, Queue.from(effects), Nil)
+    loop(state, Queue(effects: _*), Nil)
   }
 
   /** Try to apply a transition:
@@ -260,9 +294,19 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
   private def handleTransitionAttempt(
       transitionAttempt: ProtocolState.TransitionAttempt[A]
   ): F[Unit] = transitionAttempt match {
-    case Left(error: ProtocolError.TooEarly[A]) =>
-      // TODO: Stash it.
-      ???
+    case Left(
+          ProtocolError.TooEarly(
+            Event.MessageReceived(sender, message),
+            viewNumber,
+            phase
+          )
+        ) =>
+      // TODO: Trace too early message.
+      stashRef.update { stash =>
+        val slotKey = (viewNumber, phase)
+        val slot    = stash.getOrElse(slotKey, Map.empty)
+        stash.updated(slotKey, slot.updated(sender, message))
+      }
 
     case Left(error) =>
       protocolError(error)
@@ -364,6 +408,16 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
 
 object ConsensusService {
 
+  /** Communication pipe with the synchronization and validation component. */
+  type SyncAndValidatePipe[F[_], A <: Agreement] =
+    Pipe[F, SyncAndValidateRequest[A], SyncAndValidateResponse[A]]
+
+  /** Stash to keep too early messages to be re-queued later.
+    * Every slot just has 1 place per federation member to avoid DoS attacks.
+    */
+  type MessageStash[A <: Agreement] =
+    Map[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
+
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
@@ -375,12 +429,19 @@ object ConsensusService {
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
-      initState: ProtocolState[A]
+      initState: ProtocolState[A],
+      maxEarlyViewNumberDiff: Int = 1
   ): Resource[F, ConsensusService[F, A]] =
     // TODO (PM-3187): Add Tracing
     for {
       service <- Resource.make(
-        build[F, A](publicKey, network, syncAndValidatePipe, initState)
+        build[F, A](
+          publicKey,
+          network,
+          syncAndValidatePipe,
+          initState,
+          maxEarlyViewNumberDiff
+        )
       )(
         _.cancelEffects
       )
@@ -398,10 +459,14 @@ object ConsensusService {
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
-      initState: ProtocolState[A]
+      initState: ProtocolState[A],
+      maxEarlyViewNumberDiff: Int
   ): F[ConsensusService[F, A]] =
     for {
-      stateRef   <- Ref[F].of(initState)
+      stateRef <- Ref[F].of(initState)
+      stashRef <- Ref[F].of(
+        Map.empty[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
+      )
       fibersRef  <- Ref[F].of(Set.empty[Fiber[F, Unit]])
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
       blockExecutionQueue <- ConcurrentQueue[F]
@@ -411,10 +476,12 @@ object ConsensusService {
         publicKey,
         network,
         stateRef,
+        stashRef,
         fibersRef,
         syncAndValidatePipe,
         eventQueue,
-        blockExecutionQueue
+        blockExecutionQueue,
+        maxEarlyViewNumberDiff
       )
     } yield service
 
@@ -427,7 +494,4 @@ object ConsensusService {
       request: SyncAndValidateRequest[A],
       isValid: Boolean
   )
-
-  type SyncAndValidatePipe[F[_], A <: Agreement] =
-    Pipe[F, SyncAndValidateRequest[A], SyncAndValidateResponse[A]]
 }
