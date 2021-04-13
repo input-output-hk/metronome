@@ -17,6 +17,9 @@ import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 import monix.catnap.ConcurrentQueue
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
+import scala.collection.immutable.Queue
+import scala.annotation.tailrec
+import cats.syntax.apply
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
@@ -200,26 +203,53 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
 
     // Apply local messages to the state before anything else.
     val (nextState, nextEffects) =
-      effects.foldLeft((state, Seq.empty[Effect[A]])) {
-        case ((state, later), effect @ Effect.SendMessage(recipient, message))
-            if recipient == publicKey =>
-          val event = Validated(Event.MessageReceived(recipient, message))
-
-          state.handleMessage(event) match {
-            case Left(error) =>
-              // This shouldn't happen, but let's just skip this event here and redeliver it later.
-              (state, effect +: later)
-
-            case Right((state, effects)) =>
-              (state, effects ++ later)
-          }
-
-        case ((state, later), effect) =>
-          (state, effect +: later)
-      }
+      applySyncEffects(state, effects)
 
     stateRef.set(nextState) >>
       scheduleEffects(nextEffects)
+  }
+
+  /** Carry out local effects before anything else,
+    * to eliminate race conditions when a vote sent
+    * to self would have caused a state transition.
+    *
+    * Return the updated state and the effects to be
+    * carried out asynchornously.
+    */
+  private def applySyncEffects(
+      state: ProtocolState[A],
+      effects: Seq[Effect[A]]
+  ): ProtocolState.Transition[A] = {
+    def loop(
+        state: ProtocolState[A],
+        effectQueue: Queue[Effect[A]],
+        asyncEffects: List[Effect[A]]
+    ): ProtocolState.Transition[A] =
+      effectQueue.dequeueOption match {
+        case None =>
+          (state, asyncEffects.reverse)
+
+        case (Some((effect, effectQueue))) =>
+          effect match {
+            case Effect.SendMessage(recipient, message)
+                if recipient == publicKey =>
+              val event =
+                Validated(Event.MessageReceived(recipient, message))
+
+              state.handleMessage(event) match {
+                case Left(error) =>
+                  // This shouldn't happen, but let's just skip this event here and redeliver it later.
+                  loop(state, effectQueue, effect :: asyncEffects)
+
+                case Right((state, effects)) =>
+                  loop(state, effectQueue ++ effects, asyncEffects)
+              }
+            case otherEffect =>
+              loop(state, effectQueue, effect :: asyncEffects)
+          }
+      }
+
+    loop(state, Queue.from(effects), Nil)
   }
 
   /** Try to apply a transition:
