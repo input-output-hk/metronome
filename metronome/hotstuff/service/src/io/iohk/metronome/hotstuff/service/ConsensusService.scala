@@ -17,7 +17,7 @@ import monix.catnap.ConcurrentQueue
 import io.iohk.metronome.networking.ConnectionHandler
 
 /** HotStuff Service is an effectful executor wrapping the pure HotStuff ProtocolState. */
-class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
+class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
     network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
@@ -178,9 +178,9 @@ class HotStuffService[F[_]: Timer: Concurrent, A <: Agreement](
   }
 }
 
-object HotStuffService {
+object ConsensusService {
 
-  /** Create a `HotStuffService` instance and start processing events
+  /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
     *
@@ -190,7 +190,7 @@ object HotStuffService {
   def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
       network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
-  ): Resource[F, HotStuffService[F, A]] =
+  ): Resource[F, ConsensusService[F, A]] =
     for {
       service <- Resource.make(build[F, A](network, initState))(_.cancelEffects)
       _       <- Concurrent[F].background(service.processMessages)
@@ -202,14 +202,14 @@ object HotStuffService {
   private def build[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
       network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
-  ): F[HotStuffService[F, A]] =
+  ): F[ConsensusService[F, A]] =
     for {
       stateRef   <- Ref[F].of(initState)
       fibersRef  <- Ref[F].of(Set.empty[Fiber[F, Unit]])
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
       blockExecutionQueue <- ConcurrentQueue[F]
         .unbounded[Effect.ExecuteBlocks[A]](None)
-      service = new HotStuffService[F, A](
+      service = new ConsensusService[F, A](
         network,
         stateRef,
         fibersRef,
