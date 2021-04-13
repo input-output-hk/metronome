@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Fiber, Resource, ContextShift}
 import cats.effect.concurrent.{Ref, Deferred}
-import io.iohk.metronome.core.Validated
+import io.iohk.metronome.core.{Validated, Pipe}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Effect,
@@ -26,16 +26,18 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
+    syncAndValidatePipe: ConsensusService.SyncAndValidatePipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]]
 ) {
+  import ConsensusService.{SyncAndValidateRequest, SyncAndValidateResponse}
 
   /** Get the current protocol state, perhaps to respond to status requests. */
   def getState: F[ProtocolState[A]] =
     stateRef.get
 
   /** Process incoming network messages. */
-  private def processMessages: F[Unit] = {
+  private def processMessages: F[Unit] =
     network.incomingMessages
       .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
         validateMessage(Event.MessageReceived(from, message)).flatMap {
@@ -46,9 +48,8 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
         }
       }
       .completedL
-  }
 
-  /** Validate the message to decide if we should process it at all. */
+  /** First round of validation of message to decide if we should process it at all. */
   private def validateMessage(
       event: Event.MessageReceived[A]
   ): F[Option[Validated[Event.MessageReceived[A]]]] =
@@ -90,21 +91,27 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     message.message match {
       case prepare @ Prepare(_, block, highQC)
           if Block[A].parentBlockHash(block) != highQC.blockHash =>
+        // The High Q.C. may be valid, but the block is not built on it.
         protocolError(ProtocolError.UnsafeExtension(message.sender, prepare))
 
       case prepare: Prepare[_] =>
-        syncAndValidatePrepare(message.sender, prepare).ifM(
-          enqueueEvent(message),
-          protocolError(ProtocolError.UnsafeExtension(message.sender, prepare))
-        )
+        // Carry out syncing and validation asynchronously.
+        syncAndValidatePrepare(message.sender, prepare)
 
       case _: Vote[_] =>
+        // Let the ProtocolState reject it if it's not about the prepared block.
         enqueueEvent(message)
 
       case _: Quorum[_] =>
+        // Let the ProtocolState reject it if it's not about the prepared block.
         enqueueEvent(message)
 
       case _: NewView[_] =>
+        // Let's assume that we will have the highest prepare Q.C. available,
+        // while some can be replays of old data we may not have any more.
+        // If it turns out we don't have the block after all, we'll figure it
+        // out in the `CreateBlock` effect, at which point we can time out
+        // and sync with the `Prepare` message from the next leader.
         enqueueEvent(message)
     }
   }
@@ -123,16 +130,30 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     *
     * Any missing dependencies should be downloaded and the application asked
     * to validate each block in succession as the downloads are finished.
-    *
-    * In the end, return `true` if the block was valid, so we can vote on it.
     */
   private def syncAndValidatePrepare(
       sender: A#PKey,
       prepare: Message.Prepare[A]
-  ): F[Boolean] =
-    // TODO (PM-3134): Block sync.
-    // TODO (PM-3132, PM-3133): Block validation.
-    ???
+  ): F[Unit] =
+    syncAndValidatePipe.send(
+      SyncAndValidateRequest(sender, prepare)
+    )
+
+  /** Process the validation result queue. */
+  private def processSyncAndValidateResponses: F[Unit] =
+    syncAndValidatePipe.receive
+      .mapEval[Unit] { case SyncAndValidateResponse(request, isValid) =>
+        if (isValid) {
+          enqueueEvent(
+            validated(Event.MessageReceived(request.sender, request.prepare))
+          )
+        } else {
+          protocolError(
+            ProtocolError.UnsafeExtension(request.sender, request.prepare)
+          )
+        }
+      }
+      .completedL
 
   /** Add a validated event to the queue for processing against the protocol state. */
   private def enqueueEvent(event: Validated[Event[A]]): F[Unit] =
@@ -147,25 +168,56 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
   private def processEvents: F[Unit] = {
     eventQueue.poll.flatMap { event =>
       stateRef.get.flatMap { state =>
-        // - Try to apply the event on the current state
-        //   - if it's `TooEarly`, add it to the delayed stash
-        //   - if it's another error, ignore the event
-        //   - if it's valid:
-        //     - apply local effects on the state
-        //     - schedule other effects to execute in the background
-        //     - if there was a phase or view transition, unstash delayed events
+        val handle: F[Unit] = event match {
+          case e @ Event.NextView(_) =>
+            // TODO (PM-3063): Check whether we have timed out because we are out of sync
+            handleTransition(state.handleNextView(e))
 
-        // TODO: Event handling.
-        val (nextState, effects): (ProtocolState[A], Seq[Effect[A]]) =
-          ???
+          case e @ Event.MessageReceived(_, _) =>
+            handleTransitionAttempt(
+              state.handleMessage(Validated[Event.MessageReceived[A]](e))
+            )
 
-        // TODO: Partition into local effects that can be applied to the state immediately.
+          case e @ Event.BlockCreated(_, _, _) =>
+            handleTransition(state.handleBlockCreated(e))
+        }
 
-        stateRef.set(nextState) >>
-          scheduleEffects(effects) >>
-          processEvents
+        handle >> processEvents
       }
     }
+  }
+
+  /** Handle successful state transition:
+    * - apply local effects on the state
+    * - schedule other effects to execute in the background
+    * - if there was a phase or view transition, unstash delayed events
+    */
+  private def handleTransition(
+      transition: ProtocolState.Transition[A]
+  ): F[Unit] = {
+    val (nextState, effects) = transition
+    // TODO: Partition into local effects that can be applied to the state immediately.
+    stateRef.set(nextState) >>
+      scheduleEffects(effects)
+  }
+
+  /** Try to apply a transition:
+    * - if it's `TooEarly`, add it to the delayed stash
+    * - if it's another error, ignore the event
+    * - otherwise carry out the transition
+    */
+  private def handleTransitionAttempt(
+      transitionAttempt: ProtocolState.TransitionAttempt[A]
+  ): F[Unit] = transitionAttempt match {
+    case Left(error: ProtocolError.TooEarly[A]) =>
+      // TODO: Stash it.
+      ???
+
+    case Left(error) =>
+      protocolError(error)
+
+    case Right(transition) =>
+      handleTransition(transition)
   }
 
   /** Effects can be processed independently of each other in the background. */
@@ -270,14 +322,18 @@ object ConsensusService {
     */
   def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       network: Network[F, A, Message[A]],
+      syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
       initState: ProtocolState[A]
   ): Resource[F, ConsensusService[F, A]] =
     // TODO (PM-3187): Add Tracing
     for {
-      service <- Resource.make(build[F, A](network, initState))(
+      service <- Resource.make(
+        build[F, A](network, syncAndValidatePipe, initState)
+      )(
         _.cancelEffects
       )
       _ <- Concurrent[F].background(service.processMessages)
+      _ <- Concurrent[F].background(service.processSyncAndValidateResponses)
       _ <- Concurrent[F].background(service.processEvents)
       _ <- Concurrent[F].background(service.executeBlocks)
       initEffects = ProtocolState.init(initState)
@@ -288,6 +344,7 @@ object ConsensusService {
       _
   ]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       network: Network[F, A, Message[A]],
+      syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
       initState: ProtocolState[A]
   ): F[ConsensusService[F, A]] =
     for {
@@ -296,17 +353,27 @@ object ConsensusService {
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
       blockExecutionQueue <- ConcurrentQueue[F]
         .unbounded[Effect.ExecuteBlocks[A]](None)
+
       service = new ConsensusService[F, A](
         network,
         stateRef,
         fibersRef,
+        syncAndValidatePipe,
         eventQueue,
         blockExecutionQueue
       )
     } yield service
 
-  /** Adapter interface to storage requirements. */
-  trait Storage[F[_], A <: Agreement] {
-    def hasBlock(blockHash: A#Hash): F[Boolean]
-  }
+  case class SyncAndValidateRequest[A <: Agreement](
+      sender: A#PKey,
+      prepare: Message.Prepare[A]
+  )
+
+  case class SyncAndValidateResponse[A <: Agreement](
+      request: SyncAndValidateRequest[A],
+      isValid: Boolean
+  )
+
+  type SyncAndValidatePipe[F[_], A <: Agreement] =
+    Pipe[F, SyncAndValidateRequest[A], SyncAndValidateResponse[A]]
 }
