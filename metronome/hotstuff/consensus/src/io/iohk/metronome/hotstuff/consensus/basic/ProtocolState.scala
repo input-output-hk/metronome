@@ -45,8 +45,8 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     prepareQC: QuorumCertificate[A],
     // Locked QC, for which a replica voted Commit, because it received a Pre-Commit Q.C. from leader.
     lockedQC: QuorumCertificate[A],
-    // Hash of the block that was last decided upon.
-    lastExecutedBlockHash: A#Hash,
+    // Commit QC, which a replica received in the Decide phase, and then executed the block in it.
+    commitQC: QuorumCertificate[A],
     // Hash of the block the federation is currently voting on.
     preparedBlockHash: A#Hash,
     // Timeout for the view, so that it can be adjusted next time if necessary.
@@ -70,6 +70,9 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     * This value can be lower if we have higher trust in the federation.
     */
   def quorumSize = federation.quorumSize
+
+  /** Hash of the block that was last decided upon. */
+  def lastExecutedBlockHash: A#Hash = commitQC.blockHash
 
   /** No state transition. */
   private def stay: Transition[A] =
@@ -239,13 +242,12 @@ case class ProtocolState[A <: Agreement: Block: Signing](
             handleQuorum(e, Phase.Commit) { m =>
               handleNextView(NextView(viewNumber)) match {
                 case (next, effects) =>
-                  val withLast = next.copy(lastExecutedBlockHash =
-                    m.quorumCertificate.blockHash
-                  )
                   val withExec = ExecuteBlocks(
                     lastExecutedBlockHash,
                     m.quorumCertificate
                   ) +: effects
+
+                  val withLast = next.copy(commitQC = m.quorumCertificate)
 
                   withLast -> withExec
               }

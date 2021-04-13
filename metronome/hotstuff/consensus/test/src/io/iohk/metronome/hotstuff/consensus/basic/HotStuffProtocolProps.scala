@@ -192,7 +192,7 @@ object HotStuffProtocolCommands extends Commands {
           .getOrElse(sys.error("Invalid federation!")),
         prepareQC = genesisQC,
         lockedQC = genesisQC,
-        lastExecutedBlockHash = genesisQC.blockHash,
+        commitQC = genesisQC,
         preparedBlockHash = genesisQC.blockHash,
         timeout = 10.seconds,
         votes = Set.empty,
