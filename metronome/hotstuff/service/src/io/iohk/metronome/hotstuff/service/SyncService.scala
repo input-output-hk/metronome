@@ -2,6 +2,7 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent}
+import io.iohk.metronome.core.FiberPool
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.networking.ConnectionHandler

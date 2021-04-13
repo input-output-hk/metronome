@@ -1,16 +1,16 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.core
 
 import cats.implicits._
 import cats.effect.{Sync, Concurrent, ContextShift, Fiber, Resource}
 import cats.effect.concurrent.{Ref, Semaphore, Deferred}
 import monix.catnap.ConcurrentQueue
 
-/** Execute tasks on a separate fiber per source public key,
+/** Execute tasks on a separate fiber per source key,
   * facilitating separate rate limiting and fair concurrency.
   */
-class FiberPool[F[_]: Concurrent: ContextShift, PKey](
+class FiberPool[F[_]: Concurrent: ContextShift, K](
     isShutdownRef: Ref[F, Boolean],
-    actorMapRef: Ref[F, Map[PKey, FiberPool.Actor[F]]],
+    actorMapRef: Ref[F, Map[K, FiberPool.Actor[F]]],
     semaphore: Semaphore[F]
 ) {
 
@@ -21,7 +21,7 @@ class FiberPool[F[_]: Concurrent: ContextShift, PKey](
     * The result can be waited upon or discarded, the processing
     * will happen in the background regardless.
     */
-  def submit[A](key: PKey)(task: F[A]): F[F[A]] = {
+  def submit[A](key: K)(task: F[A]): F[F[A]] = {
     isShutdownRef.get.flatMap {
       case true =>
         Sync[F].raiseError(
@@ -121,16 +121,14 @@ object FiberPool {
   }
 
   /** Create an empty fiber pool. Cancel all fibers when it's released. */
-  def apply[F[_]: Concurrent: ContextShift, PKey]
-      : Resource[F, FiberPool[F, PKey]] =
-    Resource.make(build[F, PKey])(_.shutdown)
+  def apply[F[_]: Concurrent: ContextShift, K]: Resource[F, FiberPool[F, K]] =
+    Resource.make(build[F, K])(_.shutdown)
 
-  private def build[F[_]: Concurrent: ContextShift, PKey]
-      : F[FiberPool[F, PKey]] =
+  private def build[F[_]: Concurrent: ContextShift, K]: F[FiberPool[F, K]] =
     for {
       isShutdownRef <- Ref[F].of(false)
-      actorMapRef   <- Ref[F].of(Map.empty[PKey, Actor[F]])
+      actorMapRef   <- Ref[F].of(Map.empty[K, Actor[F]])
       semaphore     <- Semaphore[F](1)
-      pool = new FiberPool[F, PKey](isShutdownRef, actorMapRef, semaphore)
+      pool = new FiberPool[F, K](isShutdownRef, actorMapRef, semaphore)
     } yield pool
 }
