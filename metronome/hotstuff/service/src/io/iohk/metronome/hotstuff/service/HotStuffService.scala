@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.service
 
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
+import io.iohk.metronome.core.Pipe
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
@@ -13,6 +14,7 @@ import io.iohk.metronome.hotstuff.service.messages.{
 }
 
 object HotStuffService {
+  import ConsensusService.{SyncAndValidateRequest, SyncAndValidateResponse}
 
   /** Start up the HotStuff service stack. */
   def apply[F[_]: Concurrent: ContextShift: Timer, A <: Agreement: Block](
@@ -33,7 +35,18 @@ object HotStuffService {
             case Right(message) => HotStuffMessage.SyncMessage(message)
           }
         )
-      consensusService <- ConsensusService(consensusNetwork, initState)
-      syncService      <- SyncService(syncNetwork, consensusService)
+      syncAndValidatePipe <- Resource.liftF {
+        Pipe[F, SyncAndValidateRequest[A], SyncAndValidateResponse[A]]
+      }
+      consensusService <- ConsensusService(
+        consensusNetwork,
+        syncAndValidatePipe.left,
+        initState
+      )
+      syncService <- SyncService(
+        syncNetwork,
+        syncAndValidatePipe.right,
+        consensusService
+      )
     } yield ()
 }
