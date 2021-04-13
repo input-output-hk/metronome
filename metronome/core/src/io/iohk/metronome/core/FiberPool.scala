@@ -4,6 +4,9 @@ import cats.implicits._
 import cats.effect.{Sync, Concurrent, ContextShift, Fiber, Resource}
 import cats.effect.concurrent.{Ref, Semaphore, Deferred}
 import monix.catnap.ConcurrentQueue
+import monix.execution.BufferCapacity
+import monix.execution.ChannelType
+import scala.util.control.NoStackTrace
 
 /** Execute tasks on a separate fiber per source key,
   * facilitating separate rate limiting and fair concurrency.
@@ -11,7 +14,8 @@ import monix.catnap.ConcurrentQueue
 class FiberPool[F[_]: Concurrent: ContextShift, K](
     isShutdownRef: Ref[F, Boolean],
     actorMapRef: Ref[F, Map[K, FiberPool.Actor[F]]],
-    semaphore: Semaphore[F]
+    semaphore: Semaphore[F],
+    capacity: BufferCapacity
 ) {
 
   /** Submit a task to be processed in the background.
@@ -38,7 +42,7 @@ class FiberPool[F[_]: Concurrent: ContextShift, K](
                   actor.submit(task)
                 case None =>
                   for {
-                    actor <- FiberPool.Actor[F]
+                    actor <- FiberPool.Actor[F](capacity)
                     _ <- actorMapRef.update(
                       _.updated(key, actor)
                     )
@@ -63,6 +67,11 @@ class FiberPool[F[_]: Concurrent: ContextShift, K](
 }
 
 object FiberPool {
+
+  /** The queue of a key is at capacity and didn't accept the task. */
+  class QueueFullException
+      extends RuntimeException("The fiber task queue is full.")
+      with NoStackTrace
 
   private class Task[F[_]: Sync, A](
       deferred: Deferred[F, Either[Throwable, A]],
@@ -90,12 +99,19 @@ object FiberPool {
       fiber: Fiber[F, Unit]
   ) {
 
-    /** Submit a task to the queue, to be processed by the fiber. */
+    private val reject = Sync[F].raiseError[Unit](new QueueFullException)
+
+    /** Submit a task to the queue, to be processed by the fiber.
+      *
+      * If the queue is full, a `QueueFullException` is raised so the submitting
+      * process knows that this key is producing too much data.
+      */
     def submit[A](task: F[A]): F[F[A]] =
       for {
         deferred <- Deferred[F, Either[Throwable, A]]
         wrapper = new Task(deferred, task)
-        _ <- queue.offer(wrapper)
+        enqueued <- queue.tryOffer(wrapper)
+        _        <- reject.whenA(!enqueued)
       } yield wrapper.join
 
     /** Cancel the processing and signal to all enqueued tasks that they will not be executed. */
@@ -113,22 +129,34 @@ object FiberPool {
       queue.poll.flatMap(_.execute) >> process(queue)
 
     /** Create an actor and start executing tasks in the background. */
-    def apply[F[_]: Concurrent: ContextShift]: F[Actor[F]] =
+    def apply[F[_]: Concurrent: ContextShift](
+        capacity: BufferCapacity
+    ): F[Actor[F]] =
       for {
-        queue <- ConcurrentQueue.unbounded[F, Task[F, _]](None)
+        queue <- ConcurrentQueue
+          .withConfig[F, Task[F, _]](capacity, ChannelType.MPSC)
         fiber <- Concurrent[F].start(process(queue))
       } yield new Actor[F](queue, fiber)
   }
 
   /** Create an empty fiber pool. Cancel all fibers when it's released. */
-  def apply[F[_]: Concurrent: ContextShift, K]: Resource[F, FiberPool[F, K]] =
-    Resource.make(build[F, K])(_.shutdown)
+  def apply[F[_]: Concurrent: ContextShift, K](
+      capacity: BufferCapacity = BufferCapacity.Unbounded(None)
+  ): Resource[F, FiberPool[F, K]] =
+    Resource.make(build[F, K](capacity))(_.shutdown)
 
-  private def build[F[_]: Concurrent: ContextShift, K]: F[FiberPool[F, K]] =
+  private def build[F[_]: Concurrent: ContextShift, K](
+      capacity: BufferCapacity
+  ): F[FiberPool[F, K]] =
     for {
       isShutdownRef <- Ref[F].of(false)
       actorMapRef   <- Ref[F].of(Map.empty[K, Actor[F]])
       semaphore     <- Semaphore[F](1)
-      pool = new FiberPool[F, K](isShutdownRef, actorMapRef, semaphore)
+      pool = new FiberPool[F, K](
+        isShutdownRef,
+        actorMapRef,
+        semaphore,
+        capacity
+      )
     } yield pool
 }

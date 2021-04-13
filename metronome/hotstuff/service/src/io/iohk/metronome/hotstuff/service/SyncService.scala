@@ -55,7 +55,13 @@ class SyncService[F[_]: Sync, A <: Agreement](
           }
 
         // Handle on a fiber dedicated to the source.
-        fiberPool.submit(from)(handler).void
+        fiberPool
+          .submit(from)(handler)
+          .attemptNarrow[FiberPool.QueueFullException]
+          .flatMap {
+            case Right(_) => ().pure[F]
+            case Left(ex) => ().pure[F] // TODO: Trace submission error.
+          }
       }
       .completedL
   }
@@ -72,8 +78,9 @@ object SyncService {
       consensusService: ConsensusService[F, A]
   ): Resource[F, SyncService[F, A]] =
     // TODO (PM-3187): Add Tracing
+    // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
-      fiberPool <- FiberPool[F, A#PKey]
+      fiberPool <- FiberPool[F, A#PKey]()
       service = new SyncService[F, A](network, consensusService, fiberPool)
       _ <- Concurrent[F].background(service.processMessages)
     } yield service
