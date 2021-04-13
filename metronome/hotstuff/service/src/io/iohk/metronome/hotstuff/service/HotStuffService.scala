@@ -13,6 +13,8 @@ import io.iohk.metronome.hotstuff.service.messages.{
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 
 object HotStuffService {
+
+  /** Start up the HotStuff service stack. */
   def apply[F[_]: Concurrent: ContextShift: Timer, A <: Agreement](
       network: Network[F, A, HotStuffMessage[A]],
       initState: ProtocolState[A]
@@ -32,5 +34,6 @@ object HotStuffService {
           }
         )
       consensusService <- ConsensusService(consensusNetwork, initState)
+      syncService      <- SyncService(syncNetwork, consensusService)
     } yield ()
 }
