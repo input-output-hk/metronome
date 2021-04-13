@@ -32,6 +32,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
   def getState: F[ProtocolState[A]] =
     stateRef.get
 
+  /** Process incoming network messages. */
   private def processMessages: F[Unit] = {
     network.incomingMessages
       .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
@@ -46,12 +47,10 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
         stateRef.get.flatMap { state =>
           state.validateMessage(event) match {
             case Left(error) =>
-              // TODO: Tracing
               ().pure[F]
 
             case Right(valid) =>
-              // TODO: Tracing
-              // TODO: Sync dependencies.
+              // TODO (PM-3134): Sync dependencies.
               // NOTE: The Prepare message should have a Q.C. for the parent
               // of the block, so that shows that the block is legit.
               // Otherwise if we see a Vote with an unknown block we can ignore it,
@@ -142,7 +141,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
 
       case CreateBlock(viewNumber, highQC) =>
         // Ask the application to create a block for us.
-        // TODO: PM-3109
+        // TODO (PM-3109): Create block.
         ???
 
       case effect @ ExecuteBlocks(_, commitQC) =>
@@ -164,7 +163,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
   /** Update the view state with the last Commit Quorum Certificate. */
   private def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = {
     assert(qc.phase == Phase.Commit)
-    // TODO: PM-3112
+    // TODO (PM-3112): Persist View State.
     ???
   }
 
@@ -177,7 +176,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
         // to execute them one by one. Update the persistent view state
         // after reach execution to remember which blocks we have truly
         // done.
-        // TODO: PM-3133
+        // TODO (PM-3133): Execute block
         ???
     } >> executeBlocks
   }
@@ -196,6 +195,7 @@ object ConsensusService {
       network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
   ): Resource[F, ConsensusService[F, A]] =
+    // TODO (PM-3187): Add Tracing
     for {
       service <- Resource.make(build[F, A](network, initState))(_.cancelEffects)
       _       <- Concurrent[F].background(service.processMessages)
@@ -205,7 +205,6 @@ object ConsensusService {
       _ <- Resource.liftF(service.scheduleEffects(initEffects))
     } yield service
 
-  // TODO: Add dependency on Tracing
   private def build[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
       network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
