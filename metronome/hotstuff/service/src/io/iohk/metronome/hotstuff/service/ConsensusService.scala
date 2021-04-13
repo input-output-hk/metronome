@@ -16,7 +16,10 @@ import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 import monix.catnap.ConcurrentQueue
 import io.iohk.metronome.networking.ConnectionHandler
 
-/** HotStuff Service is an effectful executor wrapping the pure HotStuff ProtocolState. */
+/** An effectful executor wrapping the pure HotStuff ProtocolState.
+  *
+  * It handles the `consensus.basic.Message` events coming from the network.
+  */
 class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
     network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
@@ -87,16 +90,18 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
           ???
 
         stateRef.set(nextState) >>
-          effects.toList.traverse(scheduleEffect).void >>
+          scheduleEffects(effects) >>
           processEvents
       }
     }
   }
 
-  /** Effects can be processed independently of each other in the background.
-    *
-    * Add the background fiber to the scheduled items so they can be canceled
-    * if the service is released.
+  /** Effects can be processed independently of each other in the background. */
+  private def scheduleEffects(effects: Seq[Effect[A]]): F[Unit] =
+    effects.toList.traverse(scheduleEffect).void
+
+  /** Start processing an effect in the background. Add the background fiber
+    * to the scheduled items so they can be canceled if the service is released.
     */
   private def scheduleEffect(effect: Effect[A]): F[Unit] = {
     for {
@@ -196,6 +201,8 @@ object ConsensusService {
       _       <- Concurrent[F].background(service.processMessages)
       _       <- Concurrent[F].background(service.processEvents)
       _       <- Concurrent[F].background(service.executeBlocks)
+      initEffects = ProtocolState.init(initState)
+      _ <- Resource.liftF(service.scheduleEffects(initEffects))
     } yield service
 
   // TODO: Add dependency on Tracing
