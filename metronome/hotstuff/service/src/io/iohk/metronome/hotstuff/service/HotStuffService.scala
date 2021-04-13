@@ -4,18 +4,18 @@ import cats.effect.{Concurrent, ContextShift, Resource, Timer}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
-  Message
+  Message,
+  Block
 }
 import io.iohk.metronome.hotstuff.service.messages.{
   HotStuffMessage,
   SyncMessage
 }
-import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 
 object HotStuffService {
 
   /** Start up the HotStuff service stack. */
-  def apply[F[_]: Concurrent: ContextShift: Timer, A <: Agreement](
+  def apply[F[_]: Concurrent: ContextShift: Timer, A <: Agreement: Block](
       network: Network[F, A, HotStuffMessage[A]],
       initState: ProtocolState[A]
   ): Resource[F, Unit] =
