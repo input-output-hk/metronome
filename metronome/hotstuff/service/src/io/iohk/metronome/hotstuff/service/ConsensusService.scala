@@ -10,17 +10,19 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Event,
   ProtocolState,
   Phase,
-  Message
+  Message,
+  Block
 }
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 import monix.catnap.ConcurrentQueue
 import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
   * It handles the `consensus.basic.Message` events coming from the network.
   */
-class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
+class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     network: Network[F, A, Message[A]],
     stateRef: Ref[F, ProtocolState[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
@@ -36,34 +38,103 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
   private def processMessages: F[Unit] = {
     network.incomingMessages
       .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
-        // - Validate the message.
-        // - Synchronise any missing block dependencies:
-        //   - download blocks until we find a parent we have
-        //   - validate blocks going from parent to children
-        //     - if the block is invalid, stop downloading the branch
-        //     - if the block is valid, enqueue it into the validated events queue
-        val event = Event.MessageReceived(from, message)
-
-        stateRef.get.flatMap { state =>
-          state.validateMessage(event) match {
-            case Left(error) =>
-              ().pure[F]
-
-            case Right(valid) =>
-              // TODO (PM-3134): Sync dependencies.
-              // NOTE: The Prepare message should have a Q.C. for the parent
-              // of the block, so that shows that the block is legit.
-              // Otherwise if we see a Vote with an unknown block we can ignore it,
-              // and if it's a Quorum Certificate then we can download because again
-              // we have proof for its legitimacy.
-              enqueueEvent(valid)
-          }
+        validateMessage(Event.MessageReceived(from, message)).flatMap {
+          case None =>
+            ().pure[F]
+          case Some(valid) =>
+            syncDependencies(valid)
         }
       }
       .completedL
   }
 
-  /** Add an event to the queue for later processing. */
+  /** Validate the message to decide if we should process it at all. */
+  private def validateMessage(
+      event: Event.MessageReceived[A]
+  ): F[Option[Validated[Event.MessageReceived[A]]]] =
+    stateRef.get.flatMap { state =>
+      state.validateMessage(event) match {
+        case Left(error) =>
+          // TODO: Trace invalid message received.
+          protocolError(error).as(none)
+
+        case Right(valid) if valid.message.viewNumber < state.viewNumber =>
+          // TODO: Trace that obsolete message was received.
+          // TODO: Also collect these for the round so we can realise if we're out of sync.
+          none.pure[F]
+
+        case Right(valid) if valid.message.viewNumber > state.viewNumber.next =>
+          // TODO: Trace that a message from view far ahead in the future was received.
+          // TODO: Also collect these for the round so we can realise if we're out of sync.
+          none.pure[F]
+
+        case Right(valid) =>
+          // We know that the message is to/from the leader and it's properly signed,
+          // althought it may not match our current state, which we'll see later.
+          valid.some.pure[F]
+      }
+    }
+
+  /** Synchronize any missing block dependencies, then enqueue the event for final processing. */
+  private def syncDependencies(
+      message: Validated[Event.MessageReceived[A]]
+  ): F[Unit] = {
+    import Message._
+    // Only syncing Prepare messages. They have the `highQC` as block parent,
+    // so we know that is something that is safe to sync, it's not a DoS attack.
+    // Other messages may be bogus:
+    // - a Vote can point at a non-existing block to force some download;
+    //   we'd reject it anyway if it doesn't match the state we prepared
+    // - a Quorum could be a replay of some earlier one, maybe a block we have pruned
+    // - a NewView is similar, it's best to first wait and select the highest we know
+    message.message match {
+      case prepare @ Prepare(_, block, highQC)
+          if Block[A].parentBlockHash(block) != highQC.blockHash =>
+        protocolError(ProtocolError.UnsafeExtension(message.sender, prepare))
+
+      case prepare: Prepare[_] =>
+        syncAndValidatePrepare(message.sender, prepare).ifM(
+          enqueueEvent(message),
+          protocolError(ProtocolError.UnsafeExtension(message.sender, prepare))
+        )
+
+      case _: Vote[_] =>
+        enqueueEvent(message)
+
+      case _: Quorum[_] =>
+        enqueueEvent(message)
+
+      case _: NewView[_] =>
+        enqueueEvent(message)
+    }
+  }
+
+  /** Report an invalid message. */
+  private def protocolError(
+      error: ProtocolError[A]
+  ): F[Unit] =
+    // TODO: Trace
+    ().pure[F]
+
+  /** Add a Prepare message to the synchronisation and validation queue.
+    *
+    * The High Q.C. in the message proves that the parent block is valid
+    * according to the federation members.
+    *
+    * Any missing dependencies should be downloaded and the application asked
+    * to validate each block in succession as the downloads are finished.
+    *
+    * In the end, return `true` if the block was valid, so we can vote on it.
+    */
+  private def syncAndValidatePrepare(
+      sender: A#PKey,
+      prepare: Message.Prepare[A]
+  ): F[Boolean] =
+    // TODO (PM-3134): Block sync.
+    // TODO (PM-3132, PM-3133): Block validation.
+    ???
+
+  /** Add a validated event to the queue for processing against the protocol state. */
   private def enqueueEvent(event: Validated[Event[A]]): F[Unit] =
     eventQueue.offer(event)
 
@@ -87,6 +158,8 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
         // TODO: Event handling.
         val (nextState, effects): (ProtocolState[A], Seq[Effect[A]]) =
           ???
+
+        // TODO: Partition into local effects that can be applied to the state immediately.
 
         stateRef.set(nextState) >>
           scheduleEffects(effects) >>
@@ -136,7 +209,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
 
     effect match {
       case ScheduleNextView(viewNumber, timeout) =>
-        val event = Validated[Event[A]](NextView(viewNumber))
+        val event = validated(NextView(viewNumber))
         Timer[F].sleep(timeout) >> enqueueEvent(event)
 
       case CreateBlock(viewNumber, highQC) =>
@@ -176,10 +249,14 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement](
         // to execute them one by one. Update the persistent view state
         // after reach execution to remember which blocks we have truly
         // done.
+
         // TODO (PM-3133): Execute block
         ???
     } >> executeBlocks
   }
+
+  private def validated(event: Event[A]) =
+    Validated[Event[A]](event)
 }
 
 object ConsensusService {
@@ -191,21 +268,25 @@ object ConsensusService {
     * `initState` is expected to be restored from persistent storage
     * instances upon restart.
     */
-  def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
+  def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
   ): Resource[F, ConsensusService[F, A]] =
     // TODO (PM-3187): Add Tracing
     for {
-      service <- Resource.make(build[F, A](network, initState))(_.cancelEffects)
-      _       <- Concurrent[F].background(service.processMessages)
-      _       <- Concurrent[F].background(service.processEvents)
-      _       <- Concurrent[F].background(service.executeBlocks)
+      service <- Resource.make(build[F, A](network, initState))(
+        _.cancelEffects
+      )
+      _ <- Concurrent[F].background(service.processMessages)
+      _ <- Concurrent[F].background(service.processEvents)
+      _ <- Concurrent[F].background(service.executeBlocks)
       initEffects = ProtocolState.init(initState)
       _ <- Resource.liftF(service.scheduleEffects(initEffects))
     } yield service
 
-  private def build[F[_]: Timer: Concurrent: ContextShift, A <: Agreement](
+  private def build[F[
+      _
+  ]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       network: Network[F, A, Message[A]],
       initState: ProtocolState[A]
   ): F[ConsensusService[F, A]] =
@@ -223,4 +304,9 @@ object ConsensusService {
         blockExecutionQueue
       )
     } yield service
+
+  /** Adapter interface to storage requirements. */
+  trait Storage[F[_], A <: Agreement] {
+    def hasBlock(blockHash: A#Hash): F[Boolean]
+  }
 }
