@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service
 import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent}
 import io.iohk.metronome.core.FiberPool
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
+import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
@@ -26,7 +26,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     storeRunner: KVStoreRunner[F, N],
     blockStorage: BlockStorage[N, A],
     syncPipe: SyncPipe[F, A]#Right,
-    consensusService: ConsensusService[F, N, A],
+    getState: F[ProtocolState[A]],
     fiberPool: FiberPool[F, A#PKey]
 ) {
 
@@ -51,7 +51,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
         val handler: F[Unit] =
           message match {
             case GetStatusRequest(requestId) =>
-              consensusService.getState.flatMap { state =>
+              getState.flatMap { state =>
                 val status =
                   Status(state.viewNumber, state.prepareQC, state.commitQC)
 
@@ -135,7 +135,7 @@ object SyncService {
       storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
       syncPipe: SyncPipe[F, A]#Right,
-      consensusService: ConsensusService[F, N, A]
+      getState: F[ProtocolState[A]]
   ): Resource[F, SyncService[F, N, A]] =
     // TODO (PM-3187): Add Tracing
     // TODO (PM-3186): Add capacity as part of rate limiting.
@@ -146,7 +146,7 @@ object SyncService {
         storeRunner,
         blockStorage,
         syncPipe,
-        consensusService,
+        getState,
         fiberPool
       )
       _ <- Concurrent[F].background(service.processNetworkMessages)

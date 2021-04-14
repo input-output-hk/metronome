@@ -56,7 +56,7 @@ object HotStuffService {
         storeRunner,
         blockStorage,
         syncPipe.right,
-        consensusService
+        consensusService.getState
       )
     } yield ()
 }
