@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Fiber, Resource, ContextShift}
 import cats.effect.concurrent.{Ref, Deferred}
-import io.iohk.metronome.core.{Validated, Pipe}
+import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -16,6 +16,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Block,
   QuorumCertificate
 }
+import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.networking.ConnectionHandler
 import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
@@ -31,12 +32,11 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
-    syncAndValidatePipe: ConsensusService.SyncAndValidatePipe[F, A]#Left,
+    syncPipe: SyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
     maxEarlyViewNumberDiff: Int
 ) {
-  import ConsensusService.{SyncAndValidateRequest, SyncAndValidateResponse}
 
   /** Get the current protocol state, perhaps to respond to status requests. */
   def getState: F[ProtocolState[A]] =
@@ -142,14 +142,14 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
       sender: A#PKey,
       prepare: Message.Prepare[A]
   ): F[Unit] =
-    syncAndValidatePipe.send(
-      SyncAndValidateRequest(sender, prepare)
+    syncPipe.send(
+      SyncPipe.Request(sender, prepare)
     )
 
   /** Process the validation result queue. */
   private def processSyncAndValidateResponses: F[Unit] =
-    syncAndValidatePipe.receive
-      .mapEval[Unit] { case SyncAndValidateResponse(request, isValid) =>
+    syncPipe.receive
+      .mapEval[Unit] { case SyncPipe.Response(request, isValid) =>
         if (isValid) {
           enqueueEvent(
             validated(Event.MessageReceived(request.sender, request.prepare))
@@ -363,6 +363,9 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
         // TODO (PM-3109): Create block.
         ???
 
+      case SaveBlock(preparedBlock) =>
+        ???
+
       case effect @ ExecuteBlocks(_, commitQC) =>
         // Each node may be at a different point in the chain, so how
         // long the executions take can vary. We could execute it in
@@ -407,10 +410,6 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
 
 object ConsensusService {
 
-  /** Communication pipe with the synchronization and validation component. */
-  type SyncAndValidatePipe[F[_], A <: Agreement] =
-    Pipe[F, SyncAndValidateRequest[A], SyncAndValidateResponse[A]]
-
   /** Stash to keep too early messages to be re-queued later.
     * Every slot just has 1 place per federation member to avoid DoS attacks.
     */
@@ -427,7 +426,7 @@ object ConsensusService {
   def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
-      syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
+      syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
   ): Resource[F, ConsensusService[F, A]] =
@@ -437,7 +436,7 @@ object ConsensusService {
         build[F, A](
           publicKey,
           network,
-          syncAndValidatePipe,
+          syncPipe,
           initState,
           maxEarlyViewNumberDiff
         )
@@ -457,7 +456,7 @@ object ConsensusService {
   ]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
-      syncAndValidatePipe: SyncAndValidatePipe[F, A]#Left,
+      syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int
   ): F[ConsensusService[F, A]] =
@@ -477,20 +476,10 @@ object ConsensusService {
         stateRef,
         stashRef,
         fibersRef,
-        syncAndValidatePipe,
+        syncPipe,
         eventQueue,
         blockExecutionQueue,
         maxEarlyViewNumberDiff
       )
     } yield service
-
-  case class SyncAndValidateRequest[A <: Agreement](
-      sender: A#PKey,
-      prepare: Message.Prepare[A]
-  )
-
-  case class SyncAndValidateResponse[A <: Agreement](
-      request: SyncAndValidateRequest[A],
-      isValid: Boolean
-  )
 }
