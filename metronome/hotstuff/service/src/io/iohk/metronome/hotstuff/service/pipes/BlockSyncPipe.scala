@@ -5,7 +5,7 @@ import io.iohk.metronome.core.Pipe
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.consensus.basic.Message
 
-object SyncPipe {
+object BlockSyncPipe {
 
   /** Request the synchronization component to download
     * any missing dependencies up to the High Q.C.,
@@ -33,6 +33,7 @@ object SyncPipe {
       isValid: Boolean
   )
 
-  def apply[F[_]: Concurrent: ContextShift, A <: Agreement]: F[SyncPipe[F, A]] =
-    Pipe[F, SyncPipe.Request[A], SyncPipe.Response[A]]
+  def apply[F[_]: Concurrent: ContextShift, A <: Agreement]
+      : F[BlockSyncPipe[F, A]] =
+    Pipe[F, BlockSyncPipe.Request[A], BlockSyncPipe.Response[A]]
 }
