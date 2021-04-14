@@ -40,10 +40,12 @@ object HotStuffProtocolCommands extends Commands {
   }
   type TestAgreement = TestAgreement.type
 
+  val genesis = TestBlock(blockHash = 0, parentBlockHash = -1, command = "")
+
   val genesisQC = QuorumCertificate[TestAgreement](
     phase = Phase.Prepare,
     viewNumber = ViewNumber(0),
-    blockHash = 0,
+    blockHash = genesis.blockHash,
     signature = GroupSignature(Nil)
   )
 
@@ -193,7 +195,7 @@ object HotStuffProtocolCommands extends Commands {
         prepareQC = genesisQC,
         lockedQC = genesisQC,
         commitQC = genesisQC,
-        preparedBlockHash = genesisQC.blockHash,
+        preparedBlock = genesis,
         timeout = 10.seconds,
         votes = Set.empty,
         newViews = Map.empty
@@ -866,7 +868,7 @@ object HotStuffProtocolCommands extends Commands {
             val nextS = nextState(state)
             all(
               "moves to the next state" |: next.phase == nextS.phase,
-              if (state.phase != Phase.Decide) {
+              "votes for the next phase" |: (state.phase == Phase.Decide ||
                 effects
                   .collectFirst {
                     case Effect
@@ -874,18 +876,20 @@ object HotStuffProtocolCommands extends Commands {
                             recipient,
                             Message.Vote(_, phase, _, _)
                           ) =>
-                      "votes for the next phase" |: phase == state.phase
+                      phase == state.phase
                   }
-                  .getOrElse(fail("expected to vote"))
-              } else {
+                  .getOrElse(false)),
+              "makes a decision" |: (state.phase != Phase.Decide ||
                 all(
                   "executes the block" |: effects.collectFirst {
                     case _: Effect.ExecuteBlocks[_] =>
                   }.isDefined,
                   "remembers the executed block" |:
                     next.lastExecutedBlockHash == message.quorumCertificate.blockHash
-                )
-              }
+                )),
+              "saves the prepared block" |: (state.phase != Phase.PreCommit ||
+                effects.collectFirst { case _: Effect.SaveBlock[_] =>
+                }.isDefined)
             )
 
           case other =>

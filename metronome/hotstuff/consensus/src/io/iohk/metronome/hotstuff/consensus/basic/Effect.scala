@@ -46,6 +46,22 @@ object Effect {
       highQC: QuorumCertificate[A]
   ) extends Effect[A]
 
+  /** Once the Prepare Q.C. has been established for a block,
+    * we know that it's not spam, it's safe to be persisted.
+    *
+    * This prevents a rouge leader from sending us many `Prepare`
+    * messages in the same view with the intention of eating up
+    * space using the included block.
+    *
+    * It's also a way for us to delay saving a block we created
+    * as a leader to the time when it's been voted on. Since it's
+    * part of the `Prepare` message, replicas shouldn't be asking
+    * for it anyway, so it's not a problem if it's not yet persisted.
+    */
+  case class SaveBlock[A <: Agreement](
+      preparedBlock: A#Block
+  ) extends Effect[A]
+
   /** Execute blocks after a decision, from the last executed hash
     * up to the block included in the Quorum Certificate.
     */

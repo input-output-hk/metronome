@@ -223,9 +223,8 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
         due <- stashRef.modify { stash =>
           val dueKeys = stash.keySet.filter { case (viewNumber, phase) =>
             viewNumber < nextState.viewNumber ||
-              viewNumber == nextState.viewNumber && phase.isBefore(
-                nextState.phase
-              )
+              viewNumber == nextState.viewNumber &&
+              phase.isBefore(nextState.phase)
           }
 
           val dueMessages = dueKeys.toList.map(stash).flatten.map {
