@@ -5,6 +5,7 @@ import cats.effect.{Sync, Resource, Concurrent}
 import io.iohk.metronome.core.FiberPool
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
+import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.networking.ConnectionHandler
 import cats.effect.ContextShift
 
@@ -20,7 +21,7 @@ import cats.effect.ContextShift
   */
 class SyncService[F[_]: Sync, A <: Agreement](
     network: Network[F, A, SyncMessage[A]],
-    syncAndValidatePipe: ConsensusService.SyncAndValidatePipe[F, A]#Right,
+    syncAndValidatePipe: SyncPipe[F, A]#Right,
     consensusService: ConsensusService[F, A],
     fiberPool: FiberPool[F, A#PKey]
 ) {
@@ -92,9 +93,8 @@ class SyncService[F[_]: Sync, A <: Agreement](
   }
 
   def processSyncAndValidateRequests: F[Unit] = {
-    import ConsensusService.{SyncAndValidateRequest, SyncAndValidateResponse}
     syncAndValidatePipe.receive
-      .mapEval[Unit] { case request @ SyncAndValidateRequest(sender, prepare) =>
+      .mapEval[Unit] { case request @ SyncPipe.Request(sender, prepare) =>
         // TODO (PM-3134): Block sync.
         // TODO (PM-3132, PM-3133): Block validation.
 
@@ -109,7 +109,7 @@ class SyncService[F[_]: Sync, A <: Agreement](
         val isValid: F[Boolean] = ???
 
         isValid.flatMap { isValid =>
-          syncAndValidatePipe.send(SyncAndValidateResponse(request, isValid))
+          syncAndValidatePipe.send(SyncPipe.Response(request, isValid))
         }
       }
       .completedL
@@ -124,7 +124,7 @@ object SyncService {
     */
   def apply[F[_]: Concurrent: ContextShift, A <: Agreement](
       network: Network[F, A, SyncMessage[A]],
-      syncAndValidatePipe: ConsensusService.SyncAndValidatePipe[F, A]#Right,
+      syncPipe: SyncPipe[F, A]#Right,
       consensusService: ConsensusService[F, A]
   ): Resource[F, SyncService[F, A]] =
     // TODO (PM-3187): Add Tracing
@@ -133,7 +133,7 @@ object SyncService {
       fiberPool <- FiberPool[F, A#PKey]()
       service = new SyncService[F, A](
         network,
-        syncAndValidatePipe,
+        syncPipe,
         consensusService,
         fiberPool
       )
