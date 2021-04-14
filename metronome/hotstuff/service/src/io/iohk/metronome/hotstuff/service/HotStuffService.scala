@@ -12,6 +12,7 @@ import io.iohk.metronome.hotstuff.service.messages.{
   SyncMessage
 }
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
+import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 
 object HotStuffService {
 
@@ -38,9 +39,12 @@ object HotStuffService {
 
       syncPipe <- Resource.liftF { SyncPipe[F, A] }
 
+      consensusStorage = makeConsensusStorage[F, A]
+
       consensusService <- ConsensusService(
         publicKey,
         consensusNetwork,
+        consensusStorage,
         syncPipe.left,
         initState
       )
@@ -51,4 +55,18 @@ object HotStuffService {
         consensusService
       )
     } yield ()
+
+  /** Construct the storage component for conensus from BlockStorage and
+    * a query compiler that turns `KVStore[N, R]` to `F[R]`.
+    */
+  private def makeConsensusStorage[F[_], A <: Agreement]
+      : ConsensusService.Storage[F, A] =
+    new ConsensusService.Storage[F, A] {
+      // TODO (PM-3104): Persist Block
+      override def saveBlock(block: A#Block): F[Unit] = ???
+
+      // TODO (PM-3112): Persist View State.
+      override def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = ???
+    }
+
 }
