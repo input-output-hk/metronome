@@ -43,7 +43,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
   def getStatus(from: A#PKey): F[Option[Status[A]]] = ???
 
   /** Process incoming network messages */
-  private def processMessages: F[Unit] = {
+  private def processNetworkMessages: F[Unit] = {
     import SyncMessage._
     // TODO (PM-3186): Rate limiting per source.
     network.incomingMessages
@@ -99,7 +99,8 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       .completedL
   }
 
-  def processSyncAndValidateRequests: F[Unit] = {
+  /** Read Requests from the SyncPipe and send Responses. */
+  def processSyncPipe: F[Unit] = {
     syncPipe.receive
       .mapEval[Unit] { case request @ SyncPipe.Request(sender, prepare) =>
         // TODO (PM-3134): Block sync.
@@ -148,7 +149,7 @@ object SyncService {
         consensusService,
         fiberPool
       )
-      _ <- Concurrent[F].background(service.processMessages)
-      _ <- Concurrent[F].background(service.processSyncAndValidateRequests)
+      _ <- Concurrent[F].background(service.processNetworkMessages)
+      _ <- Concurrent[F].background(service.processSyncPipe)
     } yield service
 }
