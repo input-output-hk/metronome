@@ -1,4 +1,4 @@
-package io.iohk.metronome.core
+package io.iohk.metronome.core.fibers
 
 import cats.implicits._
 import cats.effect.{Sync, Concurrent, ContextShift, Fiber, Resource}
@@ -10,10 +10,12 @@ import scala.util.control.NoStackTrace
 
 /** Execute tasks on a separate fiber per source key,
   * facilitating separate rate limiting and fair concurrency.
+  *
+  * Each fiber executes tasks one by one.
   */
-class FiberPool[F[_]: Concurrent: ContextShift, K](
+class FiberMap[F[_]: Concurrent: ContextShift, K](
     isShutdownRef: Ref[F, Boolean],
-    actorMapRef: Ref[F, Map[K, FiberPool.Actor[F]]],
+    actorMapRef: Ref[F, Map[K, FiberMap.Actor[F]]],
     semaphore: Semaphore[F],
     capacity: BufferCapacity
 ) {
@@ -42,7 +44,7 @@ class FiberPool[F[_]: Concurrent: ContextShift, K](
                   actor.submit(task)
                 case None =>
                   for {
-                    actor <- FiberPool.Actor[F](capacity)
+                    actor <- FiberMap.Actor[F](capacity)
                     _ <- actorMapRef.update(
                       _.updated(key, actor)
                     )
@@ -66,7 +68,7 @@ class FiberPool[F[_]: Concurrent: ContextShift, K](
   }
 }
 
-object FiberPool {
+object FiberMap {
 
   /** The queue of a key is at capacity and didn't accept the task. */
   class QueueFullException
@@ -142,17 +144,17 @@ object FiberPool {
   /** Create an empty fiber pool. Cancel all fibers when it's released. */
   def apply[F[_]: Concurrent: ContextShift, K](
       capacity: BufferCapacity = BufferCapacity.Unbounded(None)
-  ): Resource[F, FiberPool[F, K]] =
+  ): Resource[F, FiberMap[F, K]] =
     Resource.make(build[F, K](capacity))(_.shutdown)
 
   private def build[F[_]: Concurrent: ContextShift, K](
       capacity: BufferCapacity
-  ): F[FiberPool[F, K]] =
+  ): F[FiberMap[F, K]] =
     for {
       isShutdownRef <- Ref[F].of(false)
       actorMapRef   <- Ref[F].of(Map.empty[K, Actor[F]])
       semaphore     <- Semaphore[F](1)
-      pool = new FiberPool[F, K](
+      pool = new FiberMap[F, K](
         isShutdownRef,
         actorMapRef,
         semaphore,

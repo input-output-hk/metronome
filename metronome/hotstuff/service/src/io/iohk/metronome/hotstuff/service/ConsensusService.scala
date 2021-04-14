@@ -2,8 +2,9 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Fiber, Resource, ContextShift}
-import cats.effect.concurrent.{Ref, Deferred}
+import cats.effect.concurrent.Ref
 import io.iohk.metronome.core.Validated
+import io.iohk.metronome.core.fibers.FiberSet
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -35,10 +36,10 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     blockStorage: BlockStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
-    fibersRef: Ref[F, Set[Fiber[F, Unit]]],
     blockSyncPipe: BlockSyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
+    fiberSet: FiberSet[F],
     maxEarlyViewNumberDiff: Int
 ) {
 
@@ -151,7 +152,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     )
 
   /** Process the synchronization. result queue. */
-  private def processSyncPipe: F[Unit] =
+  private def processBlockSyncPipe: F[Unit] =
     blockSyncPipe.receive
       .mapEval[Unit] { case BlockSyncPipe.Response(request, isValid) =>
         if (isValid) {
@@ -327,37 +328,15 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     * to the scheduled items so they can be canceled if the service is released.
     */
   private def scheduleEffect(effect: Effect[A]): F[Unit] = {
-    for {
-      deferredFiber <- Deferred[F, Fiber[F, Unit]]
-
-      // Process the effect, then remove the fiber from the tracked tasks.
-      task = for {
-        _     <- processEffect(effect)
-        fiber <- deferredFiber.get
-        _     <- fibersRef.update(_ - fiber)
-      } yield ()
-
-      // Start the background task. Only now do we know the identity of the fiber.
-      fiber <- Concurrent[F].start(task)
-
-      // Add the fiber to the collectin first, so that if the effect is
-      // already finished, it gets to remove it and we're not leaking memory.
-      _ <- fibersRef.update(_ + fiber)
-      _ <- deferredFiber.complete(fiber)
-    } yield ()
+    fiberSet.submit(processEffect(effect)).void
   }
-
-  /** Stop all background processing. */
-  private def cancelEffects: F[Unit] =
-    fibersRef.get.flatMap { fibers =>
-      fibers.toList.traverse(_.cancel)
-    }.void
 
   /** Process a single effect. This will always be wrapped in a Fiber. */
   private def processEffect(effect: Effect[A]): F[Unit] = {
     import Event._
     import Effect._
 
+    // TODO: Trace errors.
     effect match {
       case ScheduleNextView(viewNumber, timeout) =>
         val event = validated(NextView(viewNumber))
@@ -441,7 +420,8 @@ object ConsensusService {
   ): Resource[F, ConsensusService[F, N, A]] =
     // TODO (PM-3187): Add Tracing
     for {
-      service <- Resource.make(
+      fiberSet <- FiberSet[F]
+      service <- Resource.liftF(
         build[F, N, A](
           publicKey,
           network,
@@ -449,13 +429,12 @@ object ConsensusService {
           blockStorage,
           blockSyncPipe,
           initState,
-          maxEarlyViewNumberDiff
+          maxEarlyViewNumberDiff,
+          fiberSet
         )
-      )(
-        _.cancelEffects
       )
       _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processSyncPipe)
+      _ <- Concurrent[F].background(service.processBlockSyncPipe)
       _ <- Concurrent[F].background(service.processEvents)
       _ <- Concurrent[F].background(service.executeBlocks)
       initEffects = ProtocolState.init(initState)
@@ -471,7 +450,8 @@ object ConsensusService {
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
-      maxEarlyViewNumberDiff: Int
+      maxEarlyViewNumberDiff: Int,
+      fiberSet: FiberSet[F]
   ): F[ConsensusService[F, N, A]] =
     for {
       stateRef <- Ref[F].of(initState)
@@ -490,10 +470,10 @@ object ConsensusService {
         blockStorage,
         stateRef,
         stashRef,
-        fibersRef,
         blockSyncPipe,
         eventQueue,
         blockExecutionQueue,
+        fiberSet,
         maxEarlyViewNumberDiff
       )
     } yield service
