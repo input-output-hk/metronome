@@ -47,7 +47,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     stateRef.get
 
   /** Process incoming network messages. */
-  private def processMessages: F[Unit] =
+  private def processNetworkMessages: F[Unit] =
     network.incomingMessages
       .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
         validateMessage(Event.MessageReceived(from, message)).flatMap {
@@ -150,8 +150,8 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       SyncPipe.Request(sender, prepare)
     )
 
-  /** Process the validation result queue. */
-  private def processSyncAndValidateResponses: F[Unit] =
+  /** Process the synchronization. result queue. */
+  private def processSyncPipe: F[Unit] =
     syncPipe.receive
       .mapEval[Unit] { case SyncPipe.Response(request, isValid) =>
         if (isValid) {
@@ -454,8 +454,8 @@ object ConsensusService {
       )(
         _.cancelEffects
       )
-      _ <- Concurrent[F].background(service.processMessages)
-      _ <- Concurrent[F].background(service.processSyncAndValidateResponses)
+      _ <- Concurrent[F].background(service.processNetworkMessages)
+      _ <- Concurrent[F].background(service.processSyncPipe)
       _ <- Concurrent[F].background(service.processEvents)
       _ <- Concurrent[F].background(service.executeBlocks)
       initEffects = ProtocolState.init(initState)
