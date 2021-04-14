@@ -5,7 +5,7 @@ import cats.effect.{Sync, Resource, Concurrent}
 import io.iohk.metronome.core.FiberPool
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
-import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
+import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
@@ -25,7 +25,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     network: Network[F, A, SyncMessage[A]],
     storeRunner: KVStoreRunner[F, N],
     blockStorage: BlockStorage[N, A],
-    syncPipe: SyncPipe[F, A]#Right,
+    blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
     fiberPool: FiberPool[F, A#PKey]
 ) {
@@ -99,10 +99,10 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       .completedL
   }
 
-  /** Read Requests from the SyncPipe and send Responses. */
-  def processSyncPipe: F[Unit] = {
-    syncPipe.receive
-      .mapEval[Unit] { case request @ SyncPipe.Request(sender, prepare) =>
+  /** Read Requests from the BlockSyncPipe and send Responses. */
+  def processBlockSyncPipe: F[Unit] = {
+    blockSyncPipe.receive
+      .mapEval[Unit] { case request @ BlockSyncPipe.Request(sender, prepare) =>
         // TODO (PM-3134): Block sync.
         // TODO (PM-3132, PM-3133): Block validation.
 
@@ -117,7 +117,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
         val isValid: F[Boolean] = ???
 
         isValid.flatMap { isValid =>
-          syncPipe.send(SyncPipe.Response(request, isValid))
+          blockSyncPipe.send(BlockSyncPipe.Response(request, isValid))
         }
       }
       .completedL
@@ -134,7 +134,7 @@ object SyncService {
       network: Network[F, A, SyncMessage[A]],
       storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
-      syncPipe: SyncPipe[F, A]#Right,
+      blockSyncPipe: BlockSyncPipe[F, A]#Right,
       getState: F[ProtocolState[A]]
   ): Resource[F, SyncService[F, N, A]] =
     // TODO (PM-3187): Add Tracing
@@ -145,11 +145,11 @@ object SyncService {
         network,
         storeRunner,
         blockStorage,
-        syncPipe,
+        blockSyncPipe,
         getState,
         fiberPool
       )
       _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processSyncPipe)
+      _ <- Concurrent[F].background(service.processBlockSyncPipe)
     } yield service
 }

@@ -16,7 +16,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Block,
   QuorumCertificate
 }
-import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
+import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
@@ -36,7 +36,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
-    syncPipe: SyncPipe[F, A]#Left,
+    blockSyncPipe: BlockSyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
     maxEarlyViewNumberDiff: Int
@@ -146,14 +146,14 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       sender: A#PKey,
       prepare: Message.Prepare[A]
   ): F[Unit] =
-    syncPipe.send(
-      SyncPipe.Request(sender, prepare)
+    blockSyncPipe.send(
+      BlockSyncPipe.Request(sender, prepare)
     )
 
   /** Process the synchronization. result queue. */
   private def processSyncPipe: F[Unit] =
-    syncPipe.receive
-      .mapEval[Unit] { case SyncPipe.Response(request, isValid) =>
+    blockSyncPipe.receive
+      .mapEval[Unit] { case BlockSyncPipe.Response(request, isValid) =>
         if (isValid) {
           enqueueEvent(
             validated(Event.MessageReceived(request.sender, request.prepare))
@@ -435,7 +435,7 @@ object ConsensusService {
       network: Network[F, A, Message[A]],
       storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
-      syncPipe: SyncPipe[F, A]#Left,
+      blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
   ): Resource[F, ConsensusService[F, N, A]] =
@@ -447,7 +447,7 @@ object ConsensusService {
           network,
           storeRunner,
           blockStorage,
-          syncPipe,
+          blockSyncPipe,
           initState,
           maxEarlyViewNumberDiff
         )
@@ -469,7 +469,7 @@ object ConsensusService {
       network: Network[F, A, Message[A]],
       storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
-      syncPipe: SyncPipe[F, A]#Left,
+      blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int
   ): F[ConsensusService[F, N, A]] =
@@ -491,7 +491,7 @@ object ConsensusService {
         stateRef,
         stashRef,
         fibersRef,
-        syncPipe,
+        blockSyncPipe,
         eventQueue,
         blockExecutionQueue,
         maxEarlyViewNumberDiff
