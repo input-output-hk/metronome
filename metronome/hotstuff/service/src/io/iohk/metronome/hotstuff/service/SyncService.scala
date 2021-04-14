@@ -6,7 +6,9 @@ import io.iohk.metronome.core.FiberPool
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
+import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.storage.KVStoreRunner
 import cats.effect.ContextShift
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
@@ -19,10 +21,12 @@ import cats.effect.ContextShift
   * The block and view synchronisation components will use this service
   * to send requests to the network.
   */
-class SyncService[F[_]: Sync, A <: Agreement](
+class SyncService[F[_]: Sync, N, A <: Agreement](
     network: Network[F, A, SyncMessage[A]],
-    syncAndValidatePipe: SyncPipe[F, A]#Right,
-    consensusService: ConsensusService[F, A],
+    storeRunner: KVStoreRunner[F, N],
+    blockStorage: BlockStorage[N, A],
+    syncPipe: SyncPipe[F, A]#Right,
+    consensusService: ConsensusService[F, N, A],
     fiberPool: FiberPool[F, A#PKey]
 ) {
 
@@ -58,18 +62,19 @@ class SyncService[F[_]: Sync, A <: Agreement](
               }
 
             case GetBlockRequest(requestId, blockHash) =>
-              // TODO (PM-3134): Retreive block from storage and respond.
-              val getBlock: F[Option[A#Block]] = ???
-
-              getBlock.flatMap {
-                case None =>
-                  ().pure[F]
-                case Some(block) =>
-                  network.sendMessage(
-                    from,
-                    GetBlockResponse(requestId, block)
-                  )
-              }
+              storeRunner
+                .runReadOnly {
+                  blockStorage.get(blockHash)
+                }
+                .flatMap {
+                  case None =>
+                    ().pure[F]
+                  case Some(block) =>
+                    network.sendMessage(
+                      from,
+                      GetBlockResponse(requestId, block)
+                    )
+                }
 
             case GetStatusResponse(requestId, status) =>
               // TODO (PM-3063): Hand over to view synchronisation.
@@ -79,6 +84,8 @@ class SyncService[F[_]: Sync, A <: Agreement](
               // TODO (PM-3134): Hand over to block synchronisation.
               ???
           }
+
+        // TODO: Catch and trace errors.
 
         // Handle on a fiber dedicated to the source.
         fiberPool
@@ -93,7 +100,7 @@ class SyncService[F[_]: Sync, A <: Agreement](
   }
 
   def processSyncAndValidateRequests: F[Unit] = {
-    syncAndValidatePipe.receive
+    syncPipe.receive
       .mapEval[Unit] { case request @ SyncPipe.Request(sender, prepare) =>
         // TODO (PM-3134): Block sync.
         // TODO (PM-3132, PM-3133): Block validation.
@@ -109,7 +116,7 @@ class SyncService[F[_]: Sync, A <: Agreement](
         val isValid: F[Boolean] = ???
 
         isValid.flatMap { isValid =>
-          syncAndValidatePipe.send(SyncPipe.Response(request, isValid))
+          syncPipe.send(SyncPipe.Response(request, isValid))
         }
       }
       .completedL
@@ -122,17 +129,21 @@ object SyncService {
     * in the background, shutting processing down when the resource is
     * released.
     */
-  def apply[F[_]: Concurrent: ContextShift, A <: Agreement](
+  def apply[F[_]: Concurrent: ContextShift, N, A <: Agreement](
       network: Network[F, A, SyncMessage[A]],
+      storeRunner: KVStoreRunner[F, N],
+      blockStorage: BlockStorage[N, A],
       syncPipe: SyncPipe[F, A]#Right,
-      consensusService: ConsensusService[F, A]
-  ): Resource[F, SyncService[F, A]] =
+      consensusService: ConsensusService[F, N, A]
+  ): Resource[F, SyncService[F, N, A]] =
     // TODO (PM-3187): Add Tracing
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
       fiberPool <- FiberPool[F, A#PKey]()
-      service = new SyncService[F, A](
+      service = new SyncService(
         network,
+        storeRunner,
+        blockStorage,
         syncPipe,
         consensusService,
         fiberPool

@@ -17,7 +17,9 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   QuorumCertificate
 }
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
+import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.storage.KVStoreRunner
 import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
@@ -26,10 +28,11 @@ import scala.collection.immutable.Queue
   *
   * It handles the `consensus.basic.Message` events coming from the network.
   */
-class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
+class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
-    storage: ConsensusService.Storage[F, A],
+    storeRunner: KVStoreRunner[F, N],
+    blockStorage: BlockStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
@@ -366,7 +369,9 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
         ???
 
       case SaveBlock(preparedBlock) =>
-        storage.saveBlock(preparedBlock)
+        storeRunner.runReadWrite {
+          blockStorage.put(preparedBlock)
+        }
 
       case effect @ ExecuteBlocks(_, commitQC) =>
         // Each node may be at a different point in the chain, so how
@@ -387,7 +392,8 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
   /** Update the view state with the last Commit Quorum Certificate. */
   private def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = {
     assert(qc.phase == Phase.Commit)
-    storage.saveCommitQC(qc)
+    // TODO (PM-3112): Persist View State.
+    ???
   }
 
   /** Execute blocks in order, updating pesistent storage along the way. */
@@ -417,12 +423,6 @@ object ConsensusService {
   type MessageStash[A <: Agreement] =
     Map[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
 
-  /** Persistence adapter. */
-  trait Storage[F[_], A <: Agreement] {
-    def saveBlock(block: A#Block): F[Unit]
-    def saveCommitQC(qc: QuorumCertificate[A]): F[Unit]
-  }
-
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
@@ -430,21 +430,23 @@ object ConsensusService {
     * `initState` is expected to be restored from persistent storage
     * instances upon restart.
     */
-  def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
+  def apply[F[_]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
-      storage: Storage[F, A],
+      storeRunner: KVStoreRunner[F, N],
+      blockStorage: BlockStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
-  ): Resource[F, ConsensusService[F, A]] =
+  ): Resource[F, ConsensusService[F, N, A]] =
     // TODO (PM-3187): Add Tracing
     for {
       service <- Resource.make(
-        build[F, A](
+        build[F, N, A](
           publicKey,
           network,
-          storage,
+          storeRunner,
+          blockStorage,
           syncPipe,
           initState,
           maxEarlyViewNumberDiff
@@ -462,14 +464,15 @@ object ConsensusService {
 
   private def build[F[
       _
-  ]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
+  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
-      storage: Storage[F, A],
+      storeRunner: KVStoreRunner[F, N],
+      blockStorage: BlockStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int
-  ): F[ConsensusService[F, A]] =
+  ): F[ConsensusService[F, N, A]] =
     for {
       stateRef <- Ref[F].of(initState)
       stashRef <- Ref[F].of(
@@ -480,10 +483,11 @@ object ConsensusService {
       blockExecutionQueue <- ConcurrentQueue[F]
         .unbounded[Effect.ExecuteBlocks[A]](None)
 
-      service = new ConsensusService[F, A](
+      service = new ConsensusService(
         publicKey,
         network,
-        storage,
+        storeRunner,
+        blockStorage,
         stateRef,
         stashRef,
         fibersRef,

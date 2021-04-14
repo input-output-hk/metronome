@@ -12,14 +12,17 @@ import io.iohk.metronome.hotstuff.service.messages.{
   SyncMessage
 }
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.storage.KVStoreRunner
 
 object HotStuffService {
 
   /** Start up the HotStuff service stack. */
-  def apply[F[_]: Concurrent: ContextShift: Timer, A <: Agreement: Block](
+  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, HotStuffMessage[A]],
+      storeRunner: KVStoreRunner[F, N],
+      blockStorage: BlockStorage[N, A],
       initState: ProtocolState[A]
   ): Resource[F, Unit] =
     for {
@@ -39,34 +42,21 @@ object HotStuffService {
 
       syncPipe <- Resource.liftF { SyncPipe[F, A] }
 
-      consensusStorage = makeConsensusStorage[F, A]
-
       consensusService <- ConsensusService(
         publicKey,
         consensusNetwork,
-        consensusStorage,
+        storeRunner,
+        blockStorage,
         syncPipe.left,
         initState
       )
 
       syncService <- SyncService(
         syncNetwork,
+        storeRunner,
+        blockStorage,
         syncPipe.right,
         consensusService
       )
     } yield ()
-
-  /** Construct the storage component for conensus from BlockStorage and
-    * a query compiler that turns `KVStore[N, R]` to `F[R]`.
-    */
-  private def makeConsensusStorage[F[_], A <: Agreement]
-      : ConsensusService.Storage[F, A] =
-    new ConsensusService.Storage[F, A] {
-      // TODO (PM-3104): Persist Block
-      override def saveBlock(block: A#Block): F[Unit] = ???
-
-      // TODO (PM-3112): Persist View State.
-      override def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = ???
-    }
-
 }
