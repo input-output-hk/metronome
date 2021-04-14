@@ -29,6 +29,7 @@ import scala.collection.immutable.Queue
 class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
+    storage: ConsensusService.Storage[F, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
     fibersRef: Ref[F, Set[Fiber[F, Unit]]],
@@ -277,7 +278,8 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
                 case Right((state, effects)) =>
                   loop(state, effectQueue ++ effects, asyncEffects)
               }
-            case otherEffect =>
+
+            case _ =>
               loop(state, effectQueue, effect :: asyncEffects)
           }
       }
@@ -364,7 +366,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
         ???
 
       case SaveBlock(preparedBlock) =>
-        ???
+        storage.saveBlock(preparedBlock)
 
       case effect @ ExecuteBlocks(_, commitQC) =>
         // Each node may be at a different point in the chain, so how
@@ -373,7 +375,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
         // sync with the other federation members, so the execution
         // should be offloaded to another queue.
         //
-        // Save the Commit Qorum Certificate to the view state.
+        // Save the Commit Quorum Certificate to the view state.
         saveCommitQC(commitQC) >>
           blockExecutionQueue.offer(effect)
 
@@ -385,8 +387,7 @@ class ConsensusService[F[_]: Timer: Concurrent, A <: Agreement: Block](
   /** Update the view state with the last Commit Quorum Certificate. */
   private def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = {
     assert(qc.phase == Phase.Commit)
-    // TODO (PM-3112): Persist View State.
-    ???
+    storage.saveCommitQC(qc)
   }
 
   /** Execute blocks in order, updating pesistent storage along the way. */
@@ -416,6 +417,12 @@ object ConsensusService {
   type MessageStash[A <: Agreement] =
     Map[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
 
+  /** Persistence adapter. */
+  trait Storage[F[_], A <: Agreement] {
+    def saveBlock(block: A#Block): F[Unit]
+    def saveCommitQC(qc: QuorumCertificate[A]): F[Unit]
+  }
+
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
@@ -426,6 +433,7 @@ object ConsensusService {
   def apply[F[_]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
+      storage: Storage[F, A],
       syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
@@ -436,6 +444,7 @@ object ConsensusService {
         build[F, A](
           publicKey,
           network,
+          storage,
           syncPipe,
           initState,
           maxEarlyViewNumberDiff
@@ -456,6 +465,7 @@ object ConsensusService {
   ]: Timer: Concurrent: ContextShift, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
+      storage: Storage[F, A],
       syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int
@@ -473,6 +483,7 @@ object ConsensusService {
       service = new ConsensusService[F, A](
         publicKey,
         network,
+        storage,
         stateRef,
         stashRef,
         fibersRef,
