@@ -2,7 +2,7 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent}
-import io.iohk.metronome.core.FiberPool
+import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
@@ -27,7 +27,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     blockStorage: BlockStorage[N, A],
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
-    fiberPool: FiberPool[F, A#PKey]
+    fiberMap: FiberMap[F, A#PKey]
 ) {
 
   /** Request a block from a peer.
@@ -88,9 +88,9 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
         // TODO: Catch and trace errors.
 
         // Handle on a fiber dedicated to the source.
-        fiberPool
+        fiberMap
           .submit(from)(handler)
-          .attemptNarrow[FiberPool.QueueFullException]
+          .attemptNarrow[FiberMap.QueueFullException]
           .flatMap {
             case Right(_) => ().pure[F]
             case Left(ex) => ().pure[F] // TODO: Trace submission error.
@@ -140,14 +140,14 @@ object SyncService {
     // TODO (PM-3187): Add Tracing
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
-      fiberPool <- FiberPool[F, A#PKey]()
+      fiberMap <- FiberMap[F, A#PKey]()
       service = new SyncService(
         network,
         storeRunner,
         blockStorage,
         blockSyncPipe,
         getState,
-        fiberPool
+        fiberMap
       )
       _ <- Concurrent[F].background(service.processNetworkMessages)
       _ <- Concurrent[F].background(service.processBlockSyncPipe)
