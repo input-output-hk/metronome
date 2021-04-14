@@ -74,6 +74,10 @@ class KVStoreState[N] {
   def compile[A](program: KVStore[N, A]): KVNamespacedState[A] =
     program.foldMap(stateCompiler)
 
+  /** Compile a KVStore program to a Reader monad, which can be executed like:
+    *
+    * `new KvStoreState[String].compile(program).run(Map.empty)`
+    */
   def compile[A](program: KVStoreRead[N, A]): KVNamespacedReader[A] =
     program.foldMap(readerCompiler)
 }
