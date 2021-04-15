@@ -2,7 +2,7 @@ package io.iohk.metronome.core.fibers
 
 import cats.implicits._
 import cats.effect.{Sync, Concurrent, ContextShift, Fiber, Resource}
-import cats.effect.concurrent.{Ref, Semaphore, Deferred}
+import cats.effect.concurrent.{Ref, Semaphore}
 import monix.catnap.ConcurrentQueue
 import monix.execution.BufferCapacity
 import monix.execution.ChannelType
@@ -75,30 +75,9 @@ object FiberMap {
       extends RuntimeException("The fiber task queue is full.")
       with NoStackTrace
 
-  private class Task[F[_]: Sync, A](
-      deferred: Deferred[F, Either[Throwable, A]],
-      task: F[A]
-  ) {
-
-    /** Execute the task and set the success/failure result on the deferred. */
-    def execute: F[Unit] =
-      task.attempt.flatMap(deferred.complete)
-
-    /** Get the result of the execution, raising an error if it failed. */
-    def join: F[A] =
-      deferred.get.rethrow
-
-    /** Signal to the submitter that the pool has been shut down. */
-    def shutdown: F[Unit] =
-      deferred
-        .complete(Left(new RuntimeException("The pool has been shut down.")))
-        .attempt
-        .void
-  }
-
   private class Actor[F[_]: Concurrent](
-      queue: ConcurrentQueue[F, Task[F, _]],
-      runningRef: Ref[F, Option[Task[F, _]]],
+      queue: ConcurrentQueue[F, DeferredTask[F, _]],
+      runningRef: Ref[F, Option[DeferredTask[F, _]]],
       fiber: Fiber[F, Unit]
   ) {
 
@@ -111,8 +90,7 @@ object FiberMap {
       */
     def submit[A](task: F[A]): F[F[A]] =
       for {
-        deferred <- Deferred[F, Either[Throwable, A]]
-        wrapper = new Task(deferred, task)
+        wrapper  <- DeferredTask[F, A](task)
         enqueued <- queue.tryOffer(wrapper)
         _        <- reject.whenA(!enqueued)
       } yield wrapper.join
@@ -131,8 +109,8 @@ object FiberMap {
 
     /** Execute all tasks in the queue. */
     def process[F[_]: Sync](
-        queue: ConcurrentQueue[F, Task[F, _]],
-        runningRef: Ref[F, Option[Task[F, _]]]
+        queue: ConcurrentQueue[F, DeferredTask[F, _]],
+        runningRef: Ref[F, Option[DeferredTask[F, _]]]
     ): F[Unit] =
       queue.poll.flatMap { task =>
         for {
@@ -148,8 +126,8 @@ object FiberMap {
     ): F[Actor[F]] =
       for {
         queue <- ConcurrentQueue
-          .withConfig[F, Task[F, _]](capacity, ChannelType.MPSC)
-        runningRef <- Ref[F].of(none[Task[F, _]])
+          .withConfig[F, DeferredTask[F, _]](capacity, ChannelType.MPSC)
+        runningRef <- Ref[F].of(none[DeferredTask[F, _]])
         fiber      <- Concurrent[F].start(process(queue, runningRef))
       } yield new Actor[F](queue, runningRef, fiber)
   }
