@@ -225,20 +225,10 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
   private def unstash(nextState: ProtocolState[A]): F[Unit] =
     stateRef.get.flatMap { state =>
       val requeue = for {
-        due <- stashRef.modify { stash =>
-          val dueKeys = stash.keySet.filter { case (viewNumber, phase) =>
-            viewNumber < nextState.viewNumber ||
-              viewNumber == nextState.viewNumber &&
-              phase.isBefore(nextState.phase)
-          }
-
-          val dueMessages = dueKeys.toList.map(stash).flatten.map {
-            case (key, message) => Event.MessageReceived(key, message)
-          }
-
-          (stash -- dueKeys, dueMessages)
+        dueEvents <- stashRef.modify {
+          _.unstash(nextState.viewNumber, nextState.phase)
         }
-        _ <- due.traverse(e => enqueueEvent(validated(e)))
+        _ <- dueEvents.traverse(e => enqueueEvent(validated(e)))
       } yield ()
 
       requeue.whenA(
@@ -299,19 +289,9 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
   private def handleTransitionAttempt(
       transitionAttempt: ProtocolState.TransitionAttempt[A]
   ): F[Unit] = transitionAttempt match {
-    case Left(
-          ProtocolError.TooEarly(
-            Event.MessageReceived(sender, message),
-            viewNumber,
-            phase
-          )
-        ) =>
+    case Left(error @ ProtocolError.TooEarly(_, _, _)) =>
       // TODO: Trace too early message.
-      stashRef.update { stash =>
-        val slotKey = (viewNumber, phase)
-        val slot    = stash.getOrElse(slotKey, Map.empty)
-        stash.updated(slotKey, slot.updated(sender, message))
-      }
+      stashRef.update { _.stash(error) }
 
     case Left(error) =>
       protocolError(error)
@@ -397,10 +377,43 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
 object ConsensusService {
 
   /** Stash to keep too early messages to be re-queued later.
+    *
     * Every slot just has 1 place per federation member to avoid DoS attacks.
     */
-  type MessageStash[A <: Agreement] =
-    Map[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
+  case class MessageStash[A <: Agreement](
+      slots: Map[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
+  ) {
+    def stash(error: ProtocolError.TooEarly[A]): MessageStash[A] = {
+      val slotKey = (error.expectedInViewNumber, error.expectedInPhase)
+      val slot    = slots.getOrElse(slotKey, Map.empty)
+      copy(slots =
+        slots.updated(
+          slotKey,
+          slot.updated(error.event.sender, error.event.message)
+        )
+      )
+    }
+
+    def unstash(
+        dueViewNumber: ViewNumber,
+        duePhase: Phase
+    ): (MessageStash[A], List[Event.MessageReceived[A]]) = {
+      val dueKeys = slots.keySet.filter { case (viewNumber, phase) =>
+        viewNumber < dueViewNumber ||
+          viewNumber == dueViewNumber &&
+          !phase.isAfter(duePhase)
+      }
+
+      val dueEvents = dueKeys.toList.map(slots).flatten.map {
+        case (sender, message) => Event.MessageReceived(sender, message)
+      }
+
+      copy(slots = slots -- dueKeys) -> dueEvents
+    }
+  }
+  object MessageStash {
+    def empty[A <: Agreement] = MessageStash[A](Map.empty)
+  }
 
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
@@ -454,10 +467,8 @@ object ConsensusService {
       fiberSet: FiberSet[F]
   ): F[ConsensusService[F, N, A]] =
     for {
-      stateRef <- Ref[F].of(initState)
-      stashRef <- Ref[F].of(
-        Map.empty[(ViewNumber, Phase), Map[A#PKey, Message[A]]]
-      )
+      stateRef   <- Ref[F].of(initState)
+      stashRef   <- Ref[F].of(MessageStash.empty[A])
       fibersRef  <- Ref[F].of(Set.empty[Fiber[F, Unit]])
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
       blockExecutionQueue <- ConcurrentQueue[F]
