@@ -98,6 +98,7 @@ object FiberMap {
 
   private class Actor[F[_]: Concurrent](
       queue: ConcurrentQueue[F, Task[F, _]],
+      runningRef: Ref[F, Option[Task[F, _]]],
       fiber: Fiber[F, Unit]
   ) {
 
@@ -119,16 +120,27 @@ object FiberMap {
     /** Cancel the processing and signal to all enqueued tasks that they will not be executed. */
     def shutdown: F[Unit] =
       for {
-        _     <- fiber.cancel
-        tasks <- queue.drain(0, Int.MaxValue)
-        _     <- tasks.toList.traverse(_.shutdown)
+        _            <- fiber.cancel
+        maybeRunning <- runningRef.get
+        _            <- maybeRunning.fold(().pure[F])(_.shutdown)
+        tasks        <- queue.drain(0, Int.MaxValue)
+        _            <- tasks.toList.traverse(_.shutdown)
       } yield ()
   }
   private object Actor {
 
     /** Execute all tasks in the queue. */
-    def process[F[_]: Sync](queue: ConcurrentQueue[F, Task[F, _]]): F[Unit] =
-      queue.poll.flatMap(_.execute) >> process(queue)
+    def process[F[_]: Sync](
+        queue: ConcurrentQueue[F, Task[F, _]],
+        runningRef: Ref[F, Option[Task[F, _]]]
+    ): F[Unit] =
+      queue.poll.flatMap { task =>
+        for {
+          _ <- runningRef.set(task.some)
+          _ <- task.execute
+          _ <- runningRef.set(none)
+        } yield ()
+      } >> process(queue, runningRef)
 
     /** Create an actor and start executing tasks in the background. */
     def apply[F[_]: Concurrent: ContextShift](
@@ -137,8 +149,9 @@ object FiberMap {
       for {
         queue <- ConcurrentQueue
           .withConfig[F, Task[F, _]](capacity, ChannelType.MPSC)
-        fiber <- Concurrent[F].start(process(queue))
-      } yield new Actor[F](queue, fiber)
+        runningRef <- Ref[F].of(none[Task[F, _]])
+        fiber      <- Concurrent[F].start(process(queue, runningRef))
+      } yield new Actor[F](queue, runningRef, fiber)
   }
 
   /** Create an empty fiber pool. Cancel all fibers when it's released. */
