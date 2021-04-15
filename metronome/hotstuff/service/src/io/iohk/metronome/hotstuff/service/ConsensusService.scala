@@ -65,10 +65,22 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       event: Event.MessageReceived[A]
   ): F[Option[Validated[Event.MessageReceived[A]]]] =
     stateRef.get.flatMap { state =>
-      state.validateMessage(event) match {
+      state
+        .validateMessage(event)
+        .map(m => m: Event.MessageReceived[A]) match {
         case Left(error) =>
-          // TODO: Trace invalid message received.
           protocolError(error).as(none)
+
+        case Right(
+              Event.MessageReceived(
+                sender,
+                message @ Message.Prepare(_, _, highQC)
+              )
+            ) if state.commitQC.viewNumber > highQC.viewNumber =>
+          // The sender is building on a block that is older than the committed one.
+          // This could be an attack, forcing us to re-download blocks we already pruned.
+          protocolError(ProtocolError.UnsafeExtension[A](sender, message))
+            .as(none)
 
         case Right(valid) if valid.message.viewNumber < state.viewNumber =>
           // TODO: Trace that obsolete message was received.
@@ -84,7 +96,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
         case Right(valid) =>
           // We know that the message is to/from the leader and it's properly signed,
           // althought it may not match our current state, which we'll see later.
-          valid.some.pure[F]
+          validated(valid).some.pure[F]
       }
     }
 
@@ -370,8 +382,13 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     } >> executeBlocks
   }
 
-  private def validated(event: Event[A]) =
+  private def validated(event: Event[A]): Validated[Event[A]] =
     Validated[Event[A]](event)
+
+  private def validated(
+      event: Event.MessageReceived[A]
+  ): Validated[Event.MessageReceived[A]] =
+    Validated[Event.MessageReceived[A]](event)
 }
 
 object ConsensusService {
