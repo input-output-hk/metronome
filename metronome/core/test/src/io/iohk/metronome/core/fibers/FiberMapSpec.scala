@@ -12,16 +12,16 @@ import scala.util.Random
 import scala.concurrent.duration._
 import monix.execution.BufferCapacity
 
-class FiberMapsSpec extends AsyncFlatSpec with Matchers with Inside {
-
-  behavior of "FiberMap"
+class FiberMapSpec extends AsyncFlatSpec with Matchers with Inside {
 
   def test(t: Task[Assertion]) =
-    t.runToFuture
+    t.timeout(10.seconds).runToFuture
 
   def testMap(f: FiberMap[Task, String] => Task[Assertion]) = test {
     FiberMap[Task, String]().use(f)
   }
+
+  behavior of "FiberMap"
 
   it should "process tasks in the order they are submitted" in testMap {
     fiberMap =>
