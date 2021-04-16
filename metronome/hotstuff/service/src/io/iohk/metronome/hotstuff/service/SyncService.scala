@@ -7,6 +7,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
 import cats.effect.ContextShift
@@ -23,12 +24,11 @@ import cats.effect.ContextShift
   */
 class SyncService[F[_]: Sync, N, A <: Agreement](
     network: Network[F, A, SyncMessage[A]],
-    storeRunner: KVStoreRunner[F, N],
     blockStorage: BlockStorage[N, A],
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
     fiberMap: FiberMap[F, A#PKey]
-) {
+)(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
 
   /** Request a block from a peer.
     *
@@ -132,18 +132,18 @@ object SyncService {
     */
   def apply[F[_]: Concurrent: ContextShift, N, A <: Agreement](
       network: Network[F, A, SyncMessage[A]],
-      storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Right,
       getState: F[ProtocolState[A]]
+  )(implicit
+      tracers: SyncTracers[F, A],
+      storeRunner: KVStoreRunner[F, N]
   ): Resource[F, SyncService[F, N, A]] =
-    // TODO (PM-3187): Add Tracing
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
       fiberMap <- FiberMap[F, A#PKey]()
       service = new SyncService(
         network,
-        storeRunner,
         blockStorage,
         blockSyncPipe,
         getState,
