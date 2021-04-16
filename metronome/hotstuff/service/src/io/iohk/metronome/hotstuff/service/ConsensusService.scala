@@ -19,12 +19,13 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
 }
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.tracing.ConsensusTracers
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
 import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
-import io.iohk.metronome.hotstuff.service.tracing.ConsensusTracers
+import scala.util.control.NonFatal
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
@@ -83,15 +84,13 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
             .as(none)
 
         case Right(valid) if valid.message.viewNumber < state.viewNumber =>
-          // TODO: Trace that obsolete message was received.
-          // TODO: Also collect these for the round so we can realise if we're out of sync.
-          none.pure[F]
+          // TODO (PM-3063): Also collect these for the round so we can realise if we're out of sync.
+          tracers.fromPast(valid).as(none)
 
         case Right(valid)
             if valid.message.viewNumber > state.viewNumber + maxEarlyViewNumberDiff =>
-          // TODO: Trace that a message from view far ahead in the future was received.
-          // TODO: Also collect these for the round so we can realise if we're out of sync.
-          none.pure[F]
+          // TODO (PM-3063): Also collect these for the round so we can realise if we're out of sync.
+          tracers.fromFuture(valid).as(none)
 
         case Right(valid) =>
           // We know that the message is to/from the leader and it's properly signed,
@@ -140,12 +139,11 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     }
   }
 
-  /** Report an invalid message. */
+  /** Trace an invalid message. Could include other penalties as well to the sender. */
   private def protocolError(
       error: ProtocolError[A]
   ): F[Unit] =
-    // TODO: Trace
-    ().pure[F]
+    tracers.rejected(error)
 
   /** Add a Prepare message to the synchronisation and validation queue.
     *
@@ -193,9 +191,14 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     eventQueue.poll.flatMap { event =>
       stateRef.get.flatMap { state =>
         val handle: F[Unit] = event match {
-          case e @ Event.NextView(_) =>
+          case e @ Event.NextView(viewNumber)
+              if viewNumber < state.viewNumber =>
+            ().pure[F]
+
+          case e @ Event.NextView(viewNumber) =>
             // TODO (PM-3063): Check whether we have timed out because we are out of sync
-            handleTransition(state.handleNextView(e))
+            tracers.timeout(viewNumber) >>
+              handleTransition(state.handleNextView(e))
 
           case e @ Event.MessageReceived(_, _) =>
             handleTransitionAttempt(
@@ -245,7 +248,10 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
 
       requeue.whenA(
         nextState.viewNumber != state.viewNumber || nextState.phase != state.phase
-      )
+      ) >>
+        tracers
+          .newView(nextState.viewNumber)
+          .whenA(nextState.viewNumber != state.viewNumber)
     }
 
   /** Carry out local effects before anything else,
@@ -302,8 +308,8 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       transitionAttempt: ProtocolState.TransitionAttempt[A]
   ): F[Unit] = transitionAttempt match {
     case Left(error @ ProtocolError.TooEarly(_, _, _)) =>
-      // TODO: Trace too early message.
-      stashRef.update { _.stash(error) }
+      tracers.stashed(error) >>
+        stashRef.update { _.stash(error) }
 
     case Left(error) =>
       protocolError(error)
@@ -328,8 +334,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     import Event._
     import Effect._
 
-    // TODO: Trace errors.
-    effect match {
+    val process = effect match {
       case ScheduleNextView(viewNumber, timeout) =>
         val event = validated(NextView(viewNumber))
         Timer[F].sleep(timeout) >> enqueueEvent(event)
@@ -358,11 +363,16 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       case SendMessage(recipient, message) =>
         network.sendMessage(recipient, message)
     }
+
+    process.handleErrorWith { case NonFatal(ex) =>
+      tracers.error(ex)
+    }
   }
 
   /** Update the view state with the last Commit Quorum Certificate. */
   private def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = {
     assert(qc.phase == Phase.Commit)
+    tracers.quorum(qc)
     // TODO (PM-3112): Persist View State.
     ???
   }
