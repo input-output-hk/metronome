@@ -24,6 +24,7 @@ import io.iohk.metronome.storage.KVStoreRunner
 import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
+import io.iohk.metronome.hotstuff.service.tracing.ConsensusTracers
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
@@ -32,7 +33,6 @@ import scala.collection.immutable.Queue
 class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
-    storeRunner: KVStoreRunner[F, N],
     blockStorage: BlockStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
@@ -41,7 +41,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
     fiberSet: FiberSet[F],
     maxEarlyViewNumberDiff: Int
-) {
+)(implicit tracers: ConsensusTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
 
   /** Get the current protocol state, perhaps to respond to status requests. */
   def getState: F[ProtocolState[A]] =
@@ -442,20 +442,20 @@ object ConsensusService {
   def apply[F[_]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
-      storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
+  )(implicit
+      tracers: ConsensusTracers[F, A],
+      storeRunner: KVStoreRunner[F, N]
   ): Resource[F, ConsensusService[F, N, A]] =
-    // TODO (PM-3187): Add Tracing
     for {
       fiberSet <- FiberSet[F]
       service <- Resource.liftF(
         build[F, N, A](
           publicKey,
           network,
-          storeRunner,
           blockStorage,
           blockSyncPipe,
           initState,
@@ -476,12 +476,14 @@ object ConsensusService {
   ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
-      storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int,
       fiberSet: FiberSet[F]
+  )(implicit
+      tracers: ConsensusTracers[F, A],
+      storeRunner: KVStoreRunner[F, N]
   ): F[ConsensusService[F, N, A]] =
     for {
       stateRef   <- Ref[F].of(initState)
@@ -494,7 +496,6 @@ object ConsensusService {
       service = new ConsensusService(
         publicKey,
         network,
-        storeRunner,
         blockStorage,
         stateRef,
         stashRef,

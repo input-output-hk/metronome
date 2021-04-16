@@ -13,6 +13,10 @@ import io.iohk.metronome.hotstuff.service.messages.{
 }
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.tracing.{
+  ConsensusTracers,
+  SyncTracers
+}
 import io.iohk.metronome.storage.KVStoreRunner
 
 object HotStuffService {
@@ -21,9 +25,12 @@ object HotStuffService {
   def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
       publicKey: A#PKey,
       network: Network[F, A, HotStuffMessage[A]],
-      storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
       initState: ProtocolState[A]
+  )(implicit
+      consensusTracers: ConsensusTracers[F, A],
+      syncTracers: SyncTracers[F, A],
+      storeRunner: KVStoreRunner[F, N]
   ): Resource[F, Unit] =
     for {
       (consensusNetwork, syncNetwork) <- Network
@@ -45,7 +52,6 @@ object HotStuffService {
       consensusService <- ConsensusService(
         publicKey,
         consensusNetwork,
-        storeRunner,
         blockStorage,
         blockSyncPipe.left,
         initState
@@ -53,7 +59,6 @@ object HotStuffService {
 
       syncService <- SyncService(
         syncNetwork,
-        storeRunner,
         blockStorage,
         blockSyncPipe.right,
         consensusService.getState
