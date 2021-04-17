@@ -91,16 +91,27 @@ class BlockStorage[N, A <: Agreement: Block](
   /** Delete a block and remove it from any parent-to-child mapping,
     * without any checking for the tree structure invariants.
     */
-  private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] =
+  private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] = {
+    def deleteIfEmpty(maybeChildren: Option[Set[A#Hash]]) =
+      maybeChildren match {
+        case None                               => None
+        case Some(children) if children.isEmpty => None
+        case children                           => children
+      }
+
     childToParentColl.get(blockHash).flatMap {
       case None =>
         KVStore[N].unit
       case Some(parentHash) =>
-        parentToChildrenColl.update(parentHash)(_ - blockHash)
+        parentToChildrenColl.alter(parentHash) { maybeChildren =>
+          deleteIfEmpty(maybeChildren.map(_ - blockHash))
+        }
     } >>
       blockColl.delete(blockHash) >>
       childToParentColl.delete(blockHash) >>
-      parentToChildrenColl.delete(blockHash)
+      // Keep the association from existing children, until they last one is deleted.
+      parentToChildrenColl.alter(blockHash)(deleteIfEmpty)
+  }
 
   /** Get the ancestor chain of a block from the root,
     * including the block itself.

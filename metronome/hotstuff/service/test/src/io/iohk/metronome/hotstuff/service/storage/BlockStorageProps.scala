@@ -211,6 +211,13 @@ object BlockStorageProps extends Properties("BlockStorage") {
       data.store.deleteBlock(nonExisting.id)._2 == true
   }
 
+  property("reinsert one") = forAll(genExisting) { case (data, existing) =>
+    val (deleted, _) = data.store.deleteBlock(existing.id)
+    val inserted     = deleted.putBlock(existing)
+    // The existing child relationships should not be lost.
+    inserted == data.store
+  }
+
   property("getPathFromRoot existing") = forAll(genExisting) {
     case (data, existing) =>
       val path = data.store.getPathFromRoot(existing.id)
