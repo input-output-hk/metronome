@@ -30,7 +30,7 @@ class BlockStorage[N, A <: Agreement: Block](
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
       parentToChildrenColl.put(blockHash, Set.empty) >>
-      parentToChildrenColl.update(parentHash, _ + blockHash)
+      parentToChildrenColl.update(parentHash)(_ + blockHash)
   }
 
   /** Retrieve a block by hash, if it exists. */
@@ -91,7 +91,7 @@ class BlockStorage[N, A <: Agreement: Block](
       case None =>
         KVStore[N].unit
       case Some(parentHash) =>
-        parentToChildrenColl.update(parentHash, _ - blockHash)
+        parentToChildrenColl.update(parentHash)(_ - blockHash)
     } >>
       blockColl.delete(blockHash) >>
       childToParentColl.delete(blockHash) >>

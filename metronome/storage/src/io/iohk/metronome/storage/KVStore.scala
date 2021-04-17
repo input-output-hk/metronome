@@ -54,9 +54,7 @@ object KVStore {
       )
 
     /** Apply a function on a value, if it exists. */
-    def update[K: Codec, V: Codec](
-        namespace: N,
-        key: K,
+    def update[K: Codec, V: Codec](namespace: N, key: K)(
         f: V => V
     ): KVStore[N, Unit] =
       get[K, V](namespace, key).flatMap {
@@ -65,9 +63,7 @@ object KVStore {
       }
 
     /** Insert, update or delete a value, depending on whether it exists. */
-    def alter[K: Codec, V: Codec](
-        namespace: N,
-        key: K,
+    def alter[K: Codec, V: Codec](namespace: N, key: K)(
         f: Option[V] => Option[V]
     ): KVStore[N, Unit] =
       get[K, V](namespace, key).flatMap { current =>
