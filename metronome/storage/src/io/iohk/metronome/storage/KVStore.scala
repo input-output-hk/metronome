@@ -68,9 +68,10 @@ object KVStore {
     ): KVStore[N, Unit] =
       get[K, V](namespace, key).flatMap { current =>
         (current, f(current)) match {
-          case (None, None)     => unit
-          case (_, Some(value)) => put(namespace, key, value)
-          case (Some(_), None)  => delete(namespace, key)
+          case ((None, None))                                       => unit
+          case ((Some(existing), Some(value))) if existing == value => unit
+          case (_, Some(value))                                     => put(namespace, key, value)
+          case (Some(_), None)                                      => delete(namespace, key)
         }
       }
 

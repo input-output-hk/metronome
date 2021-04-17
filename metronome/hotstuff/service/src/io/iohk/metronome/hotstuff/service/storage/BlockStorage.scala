@@ -29,9 +29,6 @@ class BlockStorage[N, A <: Agreement: Block](
 
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
-      parentToChildrenColl.alter(blockHash) { maybeChildren =>
-        maybeChildren orElse Set.empty.some
-      } >>
       parentToChildrenColl.alter(parentHash) { maybeChildren =>
         maybeChildren orElse Set.empty.some map (_ + blockHash)
       }
@@ -167,13 +164,24 @@ class BlockStorage[N, A <: Agreement: Block](
         case Some((blockHash, queue)) =>
           parentToChildrenColl.read(blockHash).flatMap {
             case None =>
-              loop(queue, acc)
+              // Since we're not inserting an empty child set,
+              // we can't tell here if the block exists or not.
+              loop(queue, blockHash :: acc)
             case Some(children) =>
               loop(queue ++ children, blockHash :: acc)
           }
       }
     }
-    loop(Queue(blockHash), Nil)
+    loop(Queue(blockHash), Nil).flatMap { result =>
+      if (result.size == 1) {
+        contains(blockHash).map {
+          case true  => result
+          case false => Nil
+        }
+      } else {
+        KVStoreRead[N].pure(result)
+      }
+    }
   }
 
   /** Delete all blocks which are not descendants of a given block,

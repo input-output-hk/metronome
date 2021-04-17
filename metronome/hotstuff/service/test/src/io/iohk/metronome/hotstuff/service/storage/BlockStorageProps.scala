@@ -250,6 +250,30 @@ object BlockStorageProps extends Properties("BlockStorage") {
       data.store.getDescendants(nonExisting.id).isEmpty
   }
 
+  property("getDescendants delete") = forAll(genSubTree) {
+    case (data, block, subTree) =>
+      val ds = data.store.getDescendants(block.id)
+
+      val (deleted, ok) = ds.foldLeft((data.store, true)) {
+        case ((store, oks), blockHash) =>
+          val (deleted, ok) = store.deleteBlock(blockHash)
+          (deleted, oks && ok)
+      }
+
+      val prefixTree  = data.tree.takeWhile(_ != block)
+      val prefixStore = TestKVStore.build(prefixTree)
+
+      all(
+        "ok" |: ok,
+        "not contains deleted" |:
+          ds.forall(!deleted.containsBlock(_)),
+        "contains non deleted" |:
+          prefixTree.map(_.id).forall(deleted.containsBlock(_)),
+        "same as a rebuild" |:
+          prefixStore == deleted
+      )
+  }
+
   property("pruneNonDescendants existing") = forAll(genSubTree) {
     case (data, block, subTree) =>
       val (s, ps)     = data.store.pruneNonDescendants(block.id)
