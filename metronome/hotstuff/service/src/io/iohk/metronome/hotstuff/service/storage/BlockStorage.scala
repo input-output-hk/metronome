@@ -29,8 +29,13 @@ class BlockStorage[N, A <: Agreement: Block](
 
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
-      parentToChildrenColl.put(blockHash, Set.empty) >>
-      parentToChildrenColl.update(parentHash)(_ + blockHash)
+      parentToChildrenColl.alter(blockHash) { maybeChildren =>
+        maybeChildren orElse Set.empty.some
+      } >>
+      parentToChildrenColl.alter(parentHash) { maybeChildren =>
+        maybeChildren orElse Set.empty.some map (_ + blockHash)
+      }
+
   }
 
   /** Retrieve a block by hash, if it exists. */

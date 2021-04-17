@@ -8,6 +8,7 @@ import org.scalacheck._
 import org.scalacheck.Prop.{all, forAll, propBoolean}
 import scodec.codecs.implicits._
 import scodec.Codec
+import scala.util.Random
 
 object BlockStorageProps extends Properties("BlockStorage") {
 
@@ -48,7 +49,12 @@ object BlockStorageProps extends Properties("BlockStorage") {
         new KVCollection[Namespace, Hash, Set[Hash]](Namespace.BlockToChildren)
       )
 
-  object TestKVStore extends KVStoreState[Namespace]
+  object TestKVStore extends KVStoreState[Namespace] {
+    def build(tree: List[TestBlock]): Store = {
+      val insert = tree.map(TestBlockStorage.put).sequence
+      compile(insert).runS(Map.empty).value
+    }
+  }
 
   implicit class TestStoreOps(store: TestKVStore.Store) {
     def putBlock(block: TestBlock) =
@@ -131,8 +137,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
   )
   object TestData {
     def apply(tree: List[TestBlock]): TestData = {
-      val insert = tree.map(TestBlockStorage.put).sequence
-      val store  = TestKVStore.compile(insert).runS(Map.empty).value
+      val store = TestKVStore.build(tree)
       TestData(tree, store)
     }
   }
@@ -160,6 +165,17 @@ object BlockStorageProps extends Properties("BlockStorage") {
     val s = data.store.putBlock(block)
     s(Namespace.Blocks)(block.id) == block
     s(Namespace.BlockToParent)(block.id) == block.parentId
+  }
+
+  property("put unordered") = forAll {
+    for {
+      ordered <- genNonEmptyBlockTree
+      unordered = Random.shuffle(ordered)
+    } yield (ordered, unordered)
+  } { case (ordered, unordered) =>
+    val orderedStore   = TestKVStore.build(ordered)
+    val unorderedStore = TestKVStore.build(unordered)
+    orderedStore == unorderedStore
   }
 
   property("contains existing") = forAll(genExisting) { case (data, existing) =>
