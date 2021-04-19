@@ -3,7 +3,7 @@ package io.iohk.metronome.storage
 import cats.{~>}
 import cats.free.Free
 import cats.free.Free.liftF
-import scodec.Codec
+import scodec.{Encoder, Decoder, Codec}
 
 /** Helper methods to read/write a key-value store. */
 object KVStore {
@@ -32,7 +32,7 @@ object KVStore {
     def pure[A](a: A) = KVStore.pure[N, A](a)
 
     /** Insert or replace a value under a key. */
-    def put[K: Codec, V: Codec](
+    def put[K: Encoder, V: Encoder](
         namespace: N,
         key: K,
         value: V
@@ -42,25 +42,28 @@ object KVStore {
       )
 
     /** Get a value under a key, if it exists. */
-    def get[K: Codec, V: Codec](namespace: N, key: K): KVStore[N, Option[V]] =
+    def get[K: Encoder, V: Decoder](
+        namespace: N,
+        key: K
+    ): KVStore[N, Option[V]] =
       liftF[KVNamespacedOp, Option[V]](
         Get[N, K, V](namespace, key)
       )
 
     /** Delete a value under a key. */
-    def delete[K: Codec](namespace: N, key: K): KVStore[N, Unit] =
+    def delete[K: Encoder](namespace: N, key: K): KVStore[N, Unit] =
       liftF[KVNamespacedOp, Unit](
         Delete[N, K](namespace, key)
       )
 
     /** Apply a function on a value, if it exists. */
-    def update[K: Codec, V: Codec](namespace: N, key: K)(
+    def update[K: Encoder, V: Codec](namespace: N, key: K)(
         f: V => V
     ): KVStore[N, Unit] =
       alter[K, V](namespace, key)(_ map f)
 
     /** Insert, update or delete a value, depending on whether it exists. */
-    def alter[K: Codec, V: Codec](namespace: N, key: K)(
+    def alter[K: Encoder, V: Codec](namespace: N, key: K)(
         f: Option[V] => Option[V]
     ): KVStore[N, Unit] =
       get[K, V](namespace, key).flatMap { current =>
