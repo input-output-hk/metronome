@@ -87,14 +87,33 @@ object ViewStateStorage {
       lockedQC: QuorumCertificate[A],
       commitQC: QuorumCertificate[A],
       lastExecutedBlockHash: A#Hash
-  )
+  ) {
+    assert(prepareQC.phase == Phase.Prepare)
+    assert(lockedQC.phase == Phase.PreCommit)
+    assert(commitQC.phase == Phase.Commit)
+  }
+  object Bundle {
+
+    /** Convenience method reflecting the expectation that the signature
+      * in the genesis Q.C. will not depend on the phase, just the genesis
+      * hash.
+      */
+    def fromGenesisQC[A <: Agreement](genesisQC: QuorumCertificate[A]) =
+      Bundle[A](
+        viewNumber = genesisQC.viewNumber,
+        prepareQC = genesisQC.copy[A](phase = Phase.Prepare),
+        lockedQC = genesisQC.copy[A](phase = Phase.PreCommit),
+        commitQC = genesisQC.copy[A](phase = Phase.Commit),
+        lastExecutedBlockHash = genesisQC.blockHash
+      )
+  }
 
   /** Create a ViewStateStorage instance by pre-loading it with the genesis,
     * unless it already has data.
     */
   def apply[N, A <: Agreement](
       namespace: N,
-      genesisQC: QuorumCertificate[A]
+      genesis: Bundle[A]
   )(implicit
       codecVN: Codec[ViewNumber],
       codecQC: Codec[QuorumCertificate[A]],
@@ -110,15 +129,20 @@ object ViewStateStorage {
 
     for {
       _ <- KVStore[N].alter(namespace, Key.ViewNumber)(
-        setDefault(genesisQC.viewNumber)
+        setDefault(genesis.viewNumber)
       )
-      _ <- KVStore[N].alter(namespace, Key.PrepareQC)(setDefault(genesisQC))
-      _ <- KVStore[N].alter(namespace, Key.LockedQC)(setDefault(genesisQC))
-      _ <- KVStore[N].alter(namespace, Key.CommitQC)(setDefault(genesisQC))
+      _ <- KVStore[N].alter(namespace, Key.PrepareQC)(
+        setDefault(genesis.prepareQC)
+      )
+      _ <- KVStore[N].alter(namespace, Key.LockedQC)(
+        setDefault(genesis.lockedQC)
+      )
+      _ <- KVStore[N].alter(namespace, Key.CommitQC)(
+        setDefault(genesis.commitQC)
+      )
       _ <- KVStore[N].alter(namespace, Key.LastExecutedBlockHash)(
-        setDefault(genesisQC.blockHash)
+        setDefault(genesis.lastExecutedBlockHash)
       )
     } yield new ViewStateStorage[N, A](namespace)
   }
-
 }
