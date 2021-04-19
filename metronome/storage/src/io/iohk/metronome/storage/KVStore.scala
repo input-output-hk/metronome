@@ -57,10 +57,7 @@ object KVStore {
     def update[K: Codec, V: Codec](namespace: N, key: K)(
         f: V => V
     ): KVStore[N, Unit] =
-      get[K, V](namespace, key).flatMap {
-        case None        => unit
-        case Some(value) => put(namespace, key, f(value))
-      }
+      alter[K, V](namespace, key)(_ map f)
 
     /** Insert, update or delete a value, depending on whether it exists. */
     def alter[K: Codec, V: Codec](namespace: N, key: K)(
