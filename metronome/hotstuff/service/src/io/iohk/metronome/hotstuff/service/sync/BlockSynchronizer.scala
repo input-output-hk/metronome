@@ -164,15 +164,13 @@ object BlockSynchronizer {
       getBlock: GetBlock[F, A]
   )(implicit
       storeRunner: KVStoreRunner[F, N]
-  ): Resource[F, BlockSynchronizer[F, N, A]] =
-    Resource.liftF {
-      for {
-        inMemoryStoreRef <- Ref.of[F, KVStoreState[N]#Store](Map.empty)
-        synchronizer = new BlockSynchronizer[F, N, A](
-          blockStorage,
-          getBlock,
-          inMemoryStoreRef
-        )
-      } yield synchronizer
-    }
+  ): F[BlockSynchronizer[F, N, A]] =
+    for {
+      inMemoryStoreRef <- Ref.of[F, KVStoreState[N]#Store](Map.empty)
+      synchronizer = new BlockSynchronizer[F, N, A](
+        blockStorage,
+        getBlock,
+        inMemoryStoreRef
+      )
+    } yield synchronizer
 }
