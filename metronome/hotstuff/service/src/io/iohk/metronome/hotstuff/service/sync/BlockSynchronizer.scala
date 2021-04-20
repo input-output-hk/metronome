@@ -41,6 +41,8 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
 )(implicit storeRunner: KVStoreRunner[F, N]) {
 
   // In memory KVStore query compiler.
+  // NOTE: Currently not utilising that we're storing the tree structure in memory,
+  // it could be replaced with a simple Map.
   val state = new KVStoreState[N]
 
   /** Download all blocks up to the one included in the Quorum Certificate. */
@@ -134,7 +136,10 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
               blockStorage.put(block)
             } >>
               writeInMemory {
-                blockStorage.delete(blockHash).void
+                // There could be other, overlapping paths being downoaded,
+                // but as long as they are on the call stack, it's okay to
+                // create a forest here.
+                blockStorage.deleteUnsafe(blockHash).void
               }
         }
     }
