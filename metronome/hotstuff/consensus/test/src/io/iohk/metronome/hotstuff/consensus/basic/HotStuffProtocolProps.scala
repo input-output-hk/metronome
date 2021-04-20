@@ -52,6 +52,7 @@ object HotStuffProtocolCommands extends Commands {
   implicit val block: Block[TestAgreement] = new Block[TestAgreement] {
     override def blockHash(b: TestBlock)       = b.blockHash
     override def parentBlockHash(b: TestBlock) = b.parentBlockHash
+    override def isValid(b: TestBlock)         = true
   }
 
   implicit val leaderSelection = LeaderSelection.Hashing

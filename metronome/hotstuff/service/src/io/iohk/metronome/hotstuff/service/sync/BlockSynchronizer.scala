@@ -106,13 +106,13 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       from: A#PKey,
       blockHash: A#Hash
   ): F[Option[A#Block]] =
-    getBlock(from, blockHash).map(validateBlock(blockHash))
+    getBlock(from, blockHash).map(validate(blockHash))
 
-  private def validateBlock(requestedBlockHash: A#Hash)(
+  private def validate(requestedBlockHash: A#Hash)(
       maybeDownloadedBlock: Option[A#Block]
   ): Option[A#Block] =
     maybeDownloadedBlock.filter { block =>
-      Block[A].blockHash(block) == requestedBlockHash
+      Block[A].blockHash(block) == requestedBlockHash && Block[A].isValid(block)
     }
 
   /** Move the blocks on the path from memory to persistent storage. */
@@ -136,7 +136,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
               blockStorage.put(block)
             } >>
               writeInMemory {
-                // There could be other, overlapping paths being downoaded,
+                // There could be other, overlapping paths being downloaded,
                 // but as long as they are on the call stack, it's okay to
                 // create a forest here.
                 blockStorage.deleteUnsafe(blockHash).void
