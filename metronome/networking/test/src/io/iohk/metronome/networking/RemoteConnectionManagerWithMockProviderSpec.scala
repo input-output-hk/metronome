@@ -1,6 +1,7 @@
 package io.iohk.metronome.networking
 
 import cats.effect.Resource
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.networking.ConnectionHandler.ConnectionAlreadyClosedException
 import io.iohk.metronome.networking.EncryptedConnectionProvider.DecodingError
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
@@ -59,7 +60,7 @@ class RemoteConnectionManagerWithMockProviderSpec
 
   it should "continue to make connections to unresponsive peers one connection at the time" in customTestCaseT {
     val connectionToMake =
-      (0 to 3).map(_ => (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)).toSet
+      (0 to 3).map(_ => (getFakeRandomKey(), fakeLocalAddress)).toSet
     MockEncryptedConnectionProvider().flatMap(provider =>
       buildConnectionsManagerWithMockProvider(
         provider,
@@ -168,7 +169,7 @@ class RemoteConnectionManagerWithMockProviderSpec
   it should "fail sending message to unknown peer" in customTestCaseResourceT(
     buildTestCaseWithNPeers(2)
   ) { case (provider, manager, _) =>
-    val randomKey = Secp256k1Key.getFakeRandomKey
+    val randomKey = getFakeRandomKey()
     for {
       sendResult <- manager.sendMessage(randomKey, MessageA(1))
     } yield {
@@ -186,7 +187,7 @@ class RemoteConnectionManagerWithMockProviderSpec
   ) { case (provider, manager, _) =>
     for {
       incomingPeerConnection <- provider.newIncomingPeer(
-        Secp256k1Key.getFakeRandomKey
+        getFakeRandomKey()
       )
       _ <- Task.sleep(100.milliseconds)
       notContainsNotAllowedIncoming <- manager.notContainsConnection(
@@ -269,7 +270,7 @@ class RemoteConnectionManagerWithMockProviderSpec
 
 object RemoteConnectionManagerWithMockProviderSpec {
   implicit class RemoteConnectionManagerOps(
-      manager: RemoteConnectionManager[Task, Secp256k1Key, TestMessage]
+      manager: RemoteConnectionManager[Task, ECPublicKey, TestMessage]
   ) {
     def waitForNConnections(
         n: Int
@@ -309,11 +310,11 @@ object RemoteConnectionManagerWithMockProviderSpec {
     Task,
     (
         MockEncryptedConnectionProvider,
-        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
-        Set[Secp256k1Key]
+        RemoteConnectionManager[Task, ECPublicKey, TestMessage],
+        Set[ECPublicKey]
     )
   ] = {
-    val keys = (0 until n).map(_ => (Secp256k1Key.getFakeRandomKey)).toSet
+    val keys = (0 until n).map(_ => getFakeRandomKey()).toSet
 
     for {
       provider <- Resource.liftF(MockEncryptedConnectionProvider())
@@ -341,21 +342,21 @@ object RemoteConnectionManagerWithMockProviderSpec {
 
   val fakeLocalAddress = new InetSocketAddress("localhost", 127)
 
-  val defalutAllowed = Secp256k1Key.getFakeRandomKey
-  val defaultToMake  = Secp256k1Key.getFakeRandomKey
+  val defalutAllowed = getFakeRandomKey()
+  val defaultToMake  = getFakeRandomKey()
 
-  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+  implicit val tracers: NetworkTracers[Task, ECPublicKey, TestMessage] =
     NetworkTracers(Tracer.noOpTracer)
 
   def buildConnectionsManagerWithMockProvider(
       ec: MockEncryptedConnectionProvider,
       retryConfig: RetryConfig = quickRetryConfig,
-      nodesInCluster: Set[(Secp256k1Key, InetSocketAddress)] = Set(
+      nodesInCluster: Set[(ECPublicKey, InetSocketAddress)] = Set(
         (defaultToMake, fakeLocalAddress)
       )
   ): Resource[
     Task,
-    RemoteConnectionManager[Task, Secp256k1Key, TestMessage]
+    RemoteConnectionManager[Task, ECPublicKey, TestMessage]
   ] = {
     val clusterConfig = ClusterConfig(nodesInCluster)
 

@@ -1,7 +1,8 @@
 package io.iohk.metronome.hotstuff.consensus.basic
 
-import io.iohk.metronome.crypto.{PartialSignature, GroupSignature}
-import io.iohk.metronome.hotstuff.consensus.{ViewNumber, Federation}
+import io.iohk.metronome.crypto.{GroupSignature, PartialSignature}
+import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
+import scodec.bits.ByteVector
 
 trait Signing[A <: Agreement] {
 
@@ -16,10 +17,7 @@ trait Signing[A <: Agreement] {
       signatures: Seq[Signing.PartialSig[A]]
   ): Signing.GroupSig[A]
 
-  /** Validate that partial signature was created by a given public key.
-    *
-    * Check that the signer is part of the federation.
-    */
+  /** Validate that partial signature was created by a given public key. */
   def validate(
       publicKey: A#PKey,
       signature: Signing.PartialSig[A],
@@ -65,6 +63,10 @@ trait Signing[A <: Agreement] {
 
 object Signing {
   def apply[A <: Agreement: Signing]: Signing[A] = implicitly[Signing[A]]
+
+  def secp256k1[A <: Secp256k1Agreement](
+      contentSerializer: (VotingPhase, ViewNumber, A#Hash) => ByteVector
+  ): Signing[A] = new Secp256k1Signing[A](contentSerializer)
 
   type PartialSig[A <: Agreement] =
     PartialSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#PSig]

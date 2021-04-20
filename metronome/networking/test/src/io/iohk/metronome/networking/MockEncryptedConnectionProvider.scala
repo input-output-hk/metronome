@@ -2,11 +2,12 @@ package io.iohk.metronome.networking
 
 import cats.effect.concurrent.{Deferred, Ref, TryableDeferred}
 import cats.implicits.toFlatMapOps
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.networking.EncryptedConnectionProvider.ConnectionAlreadyClosed
 import io.iohk.metronome.networking.MockEncryptedConnectionProvider._
 import io.iohk.metronome.networking.RemoteConnectionManagerTestUtils.{
-  Secp256k1Key,
-  TestMessage
+  TestMessage,
+  getFakeRandomKey
 }
 import io.iohk.metronome.networking.RemoteConnectionManagerWithMockProviderSpec.fakeLocalAddress
 import monix.catnap.ConcurrentQueue
@@ -18,14 +19,14 @@ class MockEncryptedConnectionProvider(
     private val incomingConnections: ConcurrentQueue[Task, IncomingServerEvent],
     private val onlineConnections: Ref[
       Task,
-      Map[Secp256k1Key, MockEncryptedConnection]
+      Map[ECPublicKey, MockEncryptedConnection]
     ],
     private val connectionStatistics: ConnectionStatisticsHolder,
-    val localPeerInfo: (Secp256k1Key, InetSocketAddress) =
-      (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
-) extends EncryptedConnectionProvider[Task, Secp256k1Key, TestMessage] {
+    val localPeerInfo: (ECPublicKey, InetSocketAddress) =
+      (getFakeRandomKey(), fakeLocalAddress)
+) extends EncryptedConnectionProvider[Task, ECPublicKey, TestMessage] {
 
-  private def connect(k: Secp256k1Key) = {
+  private def connect(k: ECPublicKey) = {
     onlineConnections.get.flatMap { state =>
       state.get(k) match {
         case Some(value) => Task.now(value)
@@ -36,7 +37,7 @@ class MockEncryptedConnectionProvider(
   }
 
   override def connectTo(
-      k: Secp256k1Key,
+      k: ECPublicKey,
       address: InetSocketAddress
   ): Task[MockEncryptedConnection] = {
     (for {
@@ -53,7 +54,7 @@ object MockEncryptedConnectionProvider {
   def apply(): Task[MockEncryptedConnectionProvider] = {
     for {
       queue <- ConcurrentQueue.unbounded[Task, IncomingServerEvent]()
-      connections <- Ref.of[Task, Map[Secp256k1Key, MockEncryptedConnection]](
+      connections <- Ref.of[Task, Map[ECPublicKey, MockEncryptedConnection]](
         Map.empty
       )
       connectionsStatistics <- Ref.of[Task, ConnectionStatistics](
@@ -72,7 +73,7 @@ object MockEncryptedConnectionProvider {
 
     private def disconnect(
         withFailure: Boolean,
-        chosenPeer: Option[Secp256k1Key] = None
+        chosenPeer: Option[ECPublicKey] = None
     ): Task[MockEncryptedConnection] = {
       provider.onlineConnections
         .modify { current =>
@@ -98,7 +99,7 @@ object MockEncryptedConnectionProvider {
     }
 
     def specificPeerDisconnect(
-        key: Secp256k1Key
+        key: ECPublicKey
     ): Task[MockEncryptedConnection] = {
       disconnect(withFailure = false, Some(key))
     }
@@ -107,7 +108,7 @@ object MockEncryptedConnectionProvider {
       disconnect(withFailure = true)
     }
 
-    def registerOnlinePeer(key: Secp256k1Key): Task[MockEncryptedConnection] = {
+    def registerOnlinePeer(key: ECPublicKey): Task[MockEncryptedConnection] = {
       for {
         connection <- MockEncryptedConnection((key, fakeLocalAddress))
         _ <- provider.onlineConnections.update { connections =>
@@ -125,7 +126,7 @@ object MockEncryptedConnectionProvider {
       )
     }
 
-    def newIncomingPeer(key: Secp256k1Key): Task[MockEncryptedConnection] = {
+    def newIncomingPeer(key: ECPublicKey): Task[MockEncryptedConnection] = {
       registerOnlinePeer(key).flatMap { connection =>
         provider.incomingConnections
           .offer(Some(Right(connection)))
@@ -134,7 +135,7 @@ object MockEncryptedConnectionProvider {
     }
 
     def getReceivedMessagesPerPeer
-        : Task[Set[(Secp256k1Key, List[TestMessage])]] = {
+        : Task[Set[(ECPublicKey, List[TestMessage])]] = {
       provider.onlineConnections.get.flatMap { connections =>
         Task.traverse(connections.toSet) { case (key, connection) =>
           connection.getReceivedMessages.map(received => (key, received))
@@ -150,11 +151,11 @@ object MockEncryptedConnectionProvider {
   case class ConnectionStatistics(
       inFlightConnections: Long,
       maxInFlightConnections: Long,
-      connectionCounts: Map[Secp256k1Key, Long]
+      connectionCounts: Map[ECPublicKey, Long]
   )
 
   class ConnectionStatisticsHolder(val stats: Ref[Task, ConnectionStatistics]) {
-    def incrementInFlight(connectionTo: Secp256k1Key): Task[Unit] = {
+    def incrementInFlight(connectionTo: ECPublicKey): Task[Unit] = {
       stats.update { current =>
         val newInFlight = current.inFlightConnections + 1
         val newMax =
@@ -181,7 +182,7 @@ object MockEncryptedConnectionProvider {
 
   type IncomingServerEvent = Option[Either[
     EncryptedConnectionProvider.HandshakeFailed,
-    EncryptedConnection[Task, Secp256k1Key, TestMessage]
+    EncryptedConnection[Task, ECPublicKey, TestMessage]
   ]]
 
   type IncomingConnectionEvent =
@@ -194,9 +195,9 @@ object MockEncryptedConnectionProvider {
       ],
       private val closeToken: TryableDeferred[Task, Unit],
       private val sentMessages: Ref[Task, List[TestMessage]],
-      val remotePeerInfo: (Secp256k1Key, InetSocketAddress) =
-        (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
-  ) extends EncryptedConnection[Task, Secp256k1Key, TestMessage] {
+      val remotePeerInfo: (ECPublicKey, InetSocketAddress) =
+        (getFakeRandomKey(), fakeLocalAddress)
+  ) extends EncryptedConnection[Task, ECPublicKey, TestMessage] {
 
     override def close: Task[Unit] = {
       Task
@@ -224,8 +225,8 @@ object MockEncryptedConnectionProvider {
 
   object MockEncryptedConnection {
     def apply(
-        remotePeerInfo: (Secp256k1Key, InetSocketAddress) =
-          (Secp256k1Key.getFakeRandomKey, fakeLocalAddress)
+        remotePeerInfo: (ECPublicKey, InetSocketAddress) =
+          (getFakeRandomKey(), fakeLocalAddress)
     ): Task[MockEncryptedConnection] = {
       for {
         incomingEvents <- ConcurrentQueue

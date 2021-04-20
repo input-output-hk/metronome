@@ -75,5 +75,5 @@ object Federation {
   }
 
   /** Maximum number of Byzantine nodes in a federation of size `n` */
-  private def maxByzantine(n: Int): Int = (n - 1) / 3
+  def maxByzantine(n: Int): Int = (n - 1) / 3
 }

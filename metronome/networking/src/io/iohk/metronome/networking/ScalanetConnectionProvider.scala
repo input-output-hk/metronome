@@ -1,6 +1,7 @@
 package io.iohk.metronome.networking
 
 import cats.effect.{Resource, Sync}
+import io.iohk.metronome.crypto.ECKeyPair
 import io.iohk.metronome.networking.EncryptedConnectionProvider.{
   ConnectionAlreadyClosed,
   ConnectionError,
@@ -21,7 +22,6 @@ import io.iohk.scalanet.peergroup.dynamictls.{DynamicTLSPeerGroup, Secp256k1}
 import io.iohk.scalanet.peergroup.{Channel, InetMultiAddress}
 import monix.eval.{Task, TaskLift}
 import monix.execution.Scheduler
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import scodec.Codec
 
 import java.net.InetSocketAddress
@@ -91,7 +91,7 @@ object ScalanetConnectionProvider {
   // Codec constraint for K is necessary as scalanet require peer key to be in BitVector format
   def scalanetProvider[F[_]: Sync: TaskLift, K: Codec, M: Codec](
       bindAddress: InetSocketAddress,
-      nodeKeyPair: AsymmetricCipherKeyPair,
+      nodeKeyPair: ECKeyPair,
       secureRandom: SecureRandom,
       useNativeTlsImplementation: Boolean,
       framingConfig: FramingConfig,
@@ -106,7 +106,7 @@ object ScalanetConnectionProvider {
             .Config(
               bindAddress,
               Secp256k1,
-              nodeKeyPair,
+              nodeKeyPair.underlying,
               secureRandom,
               useNativeTlsImplementation,
               framingConfig,

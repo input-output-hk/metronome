@@ -1,16 +1,17 @@
 package io.iohk.metronome.networking
 
 import cats.effect.Resource
-import io.iohk.metronome.crypto.Secp256k1Utils
+import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey}
+
 import java.net.{InetSocketAddress, ServerSocket}
 import java.security.SecureRandom
 import monix.eval.Task
 import monix.execution.Scheduler
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.Assertion
+
 import scala.concurrent.Future
 import scala.util.Random
-import scodec.bits.BitVector
+import scodec.bits.ByteVector
 import scodec.Codec
 
 object RemoteConnectionManagerTestUtils {
@@ -48,31 +49,18 @@ object RemoteConnectionManagerTestUtils {
       .typecase(2, utf8.as[MessageB])
   }
 
-  case class Secp256k1Key(key: BitVector)
-
-  object Secp256k1Key {
-    implicit val codec: Codec[Secp256k1Key] = bits.as[Secp256k1Key]
-
-    def getFakeRandomKey: Secp256k1Key = {
-      val array = new Array[Byte](64)
-      Random.nextBytes(array)
-      Secp256k1Key(BitVector(array))
-    }
-
+  def getFakeRandomKey(): ECPublicKey = {
+    val array = new Array[Byte](ECPublicKey.Length)
+    Random.nextBytes(array)
+    ECPublicKey(ByteVector(array))
   }
 
-  case class NodeInfo(keyPair: AsymmetricCipherKeyPair, publicKey: Secp256k1Key)
+  case class NodeInfo(keyPair: ECKeyPair)
 
   object NodeInfo {
     def generateRandom(secureRandom: SecureRandom): NodeInfo = {
-      val keyPair =
-        Secp256k1Utils.generateKeyPair(secureRandom)
-      NodeInfo(
-        keyPair,
-        Secp256k1Key(
-          Secp256k1Utils.keyPairToUncompressed(keyPair)
-        )
-      )
+      val keyPair = ECKeyPair.generate(secureRandom)
+      NodeInfo(keyPair)
     }
   }
 }

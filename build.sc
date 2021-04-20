@@ -188,7 +188,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
       ivy"io.iohk::mantis-crypto:${VersionOf.mantis}",
-      ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}"
+      ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}",
+      ivy"org.scodec::scodec-core:${VersionOf.`scodec-core`}"
     )
 
     object test extends TestModule
@@ -265,7 +266,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[PublishModule] =
         Seq(core, crypto, hotstuff.consensus)
 
-      object test extends TestModule
+      object test extends TestModule {
+        override def moduleDeps: Seq[JavaModule] =
+          super.moduleDeps ++ Seq(hotstuff.consensus.test)
+      }
     }
 
     /** Library to be included on the PoW side to talk to the checkpointing service.
