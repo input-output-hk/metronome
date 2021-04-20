@@ -46,7 +46,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   // insert them in the opposite order.
 
   // In memory KVStore query compiler.
-  val state = new KVStoreState[N]
+  private val state = new KVStoreState[N]
 
   /** Download all blocks up to the one included in the Quorum Certificate. */
   def sync(
@@ -58,7 +58,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
 
   /** Download a block and all of its ancestors into the in-memory block store. */
   private def download(
-      sender: A#PKey,
+      from: A#PKey,
       blockHash: A#Hash
   ): F[Unit] = {
     storeRunner
@@ -74,19 +74,19 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
             blockStorage.get(blockHash)
           }.flatMap {
             case Some(block) =>
-              downloadParent(sender, block)
+              downloadParent(from, block)
 
             case None =>
-              getAndValidateBlock(sender, blockHash)
+              getAndValidateBlock(from, blockHash)
                 .flatMap {
                   case Some(block) =>
                     writeInMemory {
                       blockStorage.put(block)
-                    } >> downloadParent(sender, block)
+                    } >> downloadParent(from, block)
 
                   case None =>
                     Timer[F].sleep(retryTimeout) >>
-                      download(sender, blockHash)
+                      download(from, blockHash)
                 }
           }
       }
@@ -129,24 +129,25 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
         ().pure[F]
 
       case blockHash :: rest =>
-        readInMemory {
-          blockStorage.get(blockHash)
-        } flatMap {
+        writeInMemory {
+          for {
+            maybeBlock <- blockStorage.get(blockHash).lift
+            // There could be other, overlapping paths being downloaded,
+            // but as long as they are on the call stack, it's okay to
+            // create a forest here.
+            _ <- blockStorage.deleteUnsafe(blockHash)
+          } yield maybeBlock
+        }.flatMap {
           case None =>
             // Another download has already persisted it.
-            persist(rest)
+            ().pure[F]
 
           case Some(block) =>
             storeRunner.runReadWrite {
               blockStorage.put(block)
-            } >>
-              writeInMemory {
-                // There could be other, overlapping paths being downloaded,
-                // but as long as they are on the call stack, it's okay to
-                // create a forest here.
-                blockStorage.deleteUnsafe(blockHash).void
-              }
-        }
+            }
+        } >>
+          persist(rest)
     }
 
   private def readInMemory[A](query: KVStoreRead[N, A]): F[A] =
