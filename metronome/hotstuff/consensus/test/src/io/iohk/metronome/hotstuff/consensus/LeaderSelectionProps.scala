@@ -1,18 +1,15 @@
 package io.iohk.metronome.hotstuff.consensus
 
 import io.iohk.metronome.core.Tagger
-import org.scalacheck._
+import io.iohk.metronome.hotstuff.consensus.ArbitraryInstances._
 import org.scalacheck.Prop.forAll
+import org.scalacheck._
 
 abstract class LeaderSelectionProps(name: String, val selector: LeaderSelection)
     extends Properties(name) {
 
   object Size extends Tagger[Int]
   type Size = Size.Tagged
-
-  implicit val arbViewNumber: Arbitrary[ViewNumber] = Arbitrary {
-    Gen.posNum[Long].map(ViewNumber(_))
-  }
 
   implicit val arbFederationSize: Arbitrary[Size] = Arbitrary {
     Gen.posNum[Int].map(Size(_))

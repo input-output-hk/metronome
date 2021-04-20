@@ -9,8 +9,6 @@ import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.hotstuff.consensus.basic.{Phase, QuorumCertificate}
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import java.nio.file.{Files, Path, StandardOpenOption}
-import org.scalacheck.Arbitrary
-import org.scalacheck.Arbitrary.arbitrary
 import org.scalactic.Equality
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -24,8 +22,6 @@ import scodec.bits.BitVector
 class RLPCodecsSpec extends AnyFlatSpec with Matchers {
   import ArbitraryInstances._
   import RLPCodecs._
-
-  def sample[T: Arbitrary] = arbitrary[T].sample.get
 
   // Structrual equality checker for RLPEncodeable.
   // It has different wrappers for items based on whether it was hand crafted or generated

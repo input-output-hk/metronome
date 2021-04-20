@@ -2,9 +2,9 @@ package io.iohk.metronome.networking
 
 import cats.data.NonEmptyList
 import cats.effect.concurrent.Ref
-import cats.effect.{Concurrent, ContextShift, Resource, Timer, Sync}
-import io.circe.{Json, JsonObject, Encoder}
-import io.iohk.metronome.crypto.Secp256k1Utils
+import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
+import io.circe.{Encoder, Json, JsonObject}
+import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey}
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
 import io.iohk.metronome.networking.RemoteConnectionManager.{
   ClusterConfig,
@@ -15,25 +15,26 @@ import io.iohk.metronome.networking.RemoteConnectionManagerWithScalanetProviderS
   Cluster,
   buildTestConnectionManager
 }
-import io.iohk.metronome.logging.{HybridLogObject, HybridLog, LogTracer}
+import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup.FramingConfig
 import io.iohk.scalanet.peergroup.PeerGroup
+
 import java.net.InetSocketAddress
 import java.security.SecureRandom
 import monix.eval.{Task, TaskLift, TaskLike}
 import monix.execution.Scheduler
 import monix.execution.UncaughtExceptionReporter
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.flatspec.AsyncFlatSpecLike
 import org.scalatest.Inspectors
 import org.scalatest.matchers.should.Matchers
+
 import scala.concurrent.duration._
 import scodec.Codec
 
 class RemoteConnectionManagerWithScalanetProviderSpec
     extends AsyncFlatSpecLike
     with Matchers {
-  import RemoteConnectionManagerWithScalanetProviderSpec.secp256k1Encoder
+  import RemoteConnectionManagerWithScalanetProviderSpec.ecPublicKeyEncoder
 
   implicit val testScheduler =
     Scheduler.fixedPool(
@@ -54,7 +55,7 @@ class RemoteConnectionManagerWithScalanetProviderSpec
   behavior of "RemoteConnectionManagerWithScalanetProvider"
 
   it should "start connectionManager without any connections" in customTestCaseResourceT(
-    buildTestConnectionManager[Task, Secp256k1Key, TestMessage]()
+    buildTestConnectionManager[Task, ECPublicKey, TestMessage]()
   ) { connectionManager =>
     for {
       connections <- connectionManager.getAcquiredConnections
@@ -134,8 +135,8 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     FramingConfig.buildStandardFrameConfig(1000000, 4).getOrElse(null)
   val testIncomingQueueSize = 20
 
-  implicit val secp256k1Encoder: Encoder[Secp256k1Key] =
-    Encoder.instance(key => Json.fromString(key.key.toHex))
+  implicit val ecPublicKeyEncoder: Encoder[ECPublicKey] =
+    Encoder.instance(key => Json.fromString(key.bytes.toHex))
 
   // Just an example of setting up logging.
   implicit def tracers[F[_]: Sync, K: io.circe.Encoder, M]
@@ -176,8 +177,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       M: Codec
   ](
       bindAddress: InetSocketAddress = randomAddress(),
-      nodeKeyPair: AsymmetricCipherKeyPair =
-        Secp256k1Utils.generateKeyPair(secureRandom),
+      nodeKeyPair: ECKeyPair = ECKeyPair.generate(secureRandom),
       secureRandom: SecureRandom = secureRandom,
       useNativeTlsImplementation: Boolean = false,
       framingConfig: FramingConfig = standardFraming,
@@ -205,11 +205,11 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   }
 
   type ClusterNodes = Map[
-    Secp256k1Key,
+    ECPublicKey,
     (
-        RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
-        AsymmetricCipherKeyPair,
-        ClusterConfig[Secp256k1Key],
+        RemoteConnectionManager[Task, ECPublicKey, TestMessage],
+        ECKeyPair,
+        ClusterConfig[ECPublicKey],
         Task[Unit]
     )
   ]
@@ -227,11 +227,11 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       _ <- Task.traverse(keyWithAddress) { case (info, address) =>
         val clusterConfig = ClusterConfig(clusterNodes =
           keyWithAddress.map(keyWithAddress =>
-            (keyWithAddress._1.publicKey, keyWithAddress._2)
+            (keyWithAddress._1.keyPair.pub, keyWithAddress._2)
           )
         )
 
-        buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+        buildTestConnectionManager[Task, ECPublicKey, TestMessage](
           bindAddress = address,
           nodeKeyPair = info.keyPair,
           clusterConfig = clusterConfig
@@ -248,7 +248,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
   class Cluster(nodes: Ref[Task, ClusterNodes]) {
 
     private def broadcastToAllConnections(
-        manager: RemoteConnectionManager[Task, Secp256k1Key, TestMessage],
+        manager: RemoteConnectionManager[Task, ECPublicKey, TestMessage],
         message: TestMessage
     ) = {
       manager.getAcquiredConnections.flatMap { connections =>
@@ -300,7 +300,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
 
     def sendMessageFromRandomNodeToAllOthers(
         message: TestMessage
-    ): Task[(Secp256k1Key, Set[Secp256k1Key])] = {
+    ): Task[(ECPublicKey, Set[ECPublicKey])] = {
       for {
         runningNodes <- nodes.get
         (key, (node, _, _, _)) = runningNodes.head
@@ -310,7 +310,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
 
     def sendMessageFromAllClusterNodesToTheirConnections(
         message: TestMessage
-    ): Task[List[(Secp256k1Key, Set[Secp256k1Key])]] = {
+    ): Task[List[(ECPublicKey, Set[ECPublicKey])]] = {
       nodes.get.flatMap { current =>
         Task.parTraverseUnordered(current.values) { case (manager, _, _, _) =>
           broadcastToAllConnections(manager, message).map { receivers =>
@@ -320,14 +320,14 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       }
     }
 
-    def getMessageFromNode(key: Secp256k1Key) = {
+    def getMessageFromNode(key: ECPublicKey) = {
       nodes.get.flatMap { runningNodes =>
         runningNodes(key)._1.incomingMessages.take(1).toListL.map(_.head)
       }
     }
 
     def shutdownRandomNode: Task[
-      (InetSocketAddress, AsymmetricCipherKeyPair, ClusterConfig[Secp256k1Key])
+      (InetSocketAddress, ECKeyPair, ClusterConfig[ECPublicKey])
     ] = {
       for {
         current <- nodes.get
@@ -342,16 +342,16 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
 
     def startNode(
         bindAddress: InetSocketAddress,
-        key: AsymmetricCipherKeyPair,
-        clusterConfig: ClusterConfig[Secp256k1Key]
+        keyPair: ECKeyPair,
+        clusterConfig: ClusterConfig[ECPublicKey]
     )(implicit s: Scheduler): Task[Unit] = {
-      buildTestConnectionManager[Task, Secp256k1Key, TestMessage](
+      buildTestConnectionManager[Task, ECPublicKey, TestMessage](
         bindAddress = bindAddress,
-        nodeKeyPair = key,
+        nodeKeyPair = keyPair,
         clusterConfig = clusterConfig
       ).allocated.flatMap { case (manager, release) =>
         nodes.update { current =>
-          current + (manager.getLocalPeerInfo._1 -> (manager, key, clusterConfig, release))
+          current + (manager.getLocalPeerInfo._1 -> (manager, keyPair, clusterConfig, release))
         }
       }
     }

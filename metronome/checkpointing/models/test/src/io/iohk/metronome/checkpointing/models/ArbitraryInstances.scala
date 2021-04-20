@@ -10,10 +10,10 @@ import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
 import scodec.bits.BitVector
-import scodec.bits.ByteVector
 import io.iohk.metronome.crypto.GroupSignature
 
-object ArbitraryInstances {
+object ArbitraryInstances
+    extends io.iohk.metronome.hotstuff.consensus.ArbitraryInstances {
   implicit val arbBitVector: Arbitrary[BitVector] =
     Arbitrary {
       for {
@@ -23,11 +23,6 @@ object ArbitraryInstances {
         n  <- Gen.choose(0, 64)
         bs <- Gen.listOfN(n, arbitrary[Byte])
       } yield BitVector(bs.toArray)
-    }
-
-  implicit val arbHash: Arbitrary[Hash] =
-    Arbitrary {
-      Gen.listOfN(32, arbitrary[Byte]).map(ByteVector(_)).map(Hash(_))
     }
 
   implicit val arbHeaderHash: Arbitrary[Block.Header.Hash] =

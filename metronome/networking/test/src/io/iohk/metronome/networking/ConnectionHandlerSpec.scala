@@ -2,6 +2,7 @@ package io.iohk.metronome.networking
 
 import cats.effect.Resource
 import cats.effect.concurrent.{Deferred, Ref}
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.networking.ConnectionHandler.{
   ConnectionAlreadyClosedException,
   FinishedConnection
@@ -308,19 +309,19 @@ object ConnectionHandlerSpec {
     }
   }
 
-  implicit val tracers: NetworkTracers[Task, Secp256k1Key, TestMessage] =
+  implicit val tracers: NetworkTracers[Task, ECPublicKey, TestMessage] =
     NetworkTracers(Tracer.noOpTracer)
 
   def buildHandlerResource(
-      cb: FinishedConnection[Secp256k1Key] => Task[Unit] = _ => Task(())
-  ): Resource[Task, ConnectionHandler[Task, Secp256k1Key, TestMessage]] = {
+      cb: FinishedConnection[ECPublicKey] => Task[Unit] = _ => Task(())
+  ): Resource[Task, ConnectionHandler[Task, ECPublicKey, TestMessage]] = {
     ConnectionHandler
-      .apply[Task, Secp256k1Key, TestMessage](cb)
+      .apply[Task, ECPublicKey, TestMessage](cb)
   }
 
   def buildHandlerResourceWithCallbackCounter: Resource[
     Task,
-    (ConnectionHandler[Task, Secp256k1Key, TestMessage], Ref[Task, Long])
+    (ConnectionHandler[Task, ECPublicKey, TestMessage], Ref[Task, Long])
   ] = {
     for {
       counter <- Resource.liftF(Ref.of[Task, Long](0L))
