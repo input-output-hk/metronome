@@ -2,7 +2,7 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
-import io.iohk.metronome.core.fibers.FiberMap
+import io.iohk.metronome.core.fibers.{FiberMap, FiberSet}
 import io.iohk.metronome.core.messages.RPCTracker
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -35,6 +35,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
     fiberMap: FiberMap[F, A#PKey],
+    fiberSet: FiberSet[F],
     rpcTracker: RPCTracker[F, SyncMessage[A]]
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
   import SyncMessage._
@@ -144,11 +145,13 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       .mapEval[Unit] { case request @ BlockSyncPipe.Request(sender, prepare) =>
         // It is enough to respond to the last block positively, it will indicate
         // that the whole range can be executed later (at that point from storage).
-        for {
-          _       <- blockSynchronizer.sync(sender, prepare.highQC)
-          isValid <- validateBlock(prepare.block)
-          _       <- blockSyncPipe.send(BlockSyncPipe.Response(request, isValid))
-        } yield ()
+        fiberSet.submit {
+          for {
+            _       <- blockSynchronizer.sync(sender, prepare.highQC)
+            isValid <- validateBlock(prepare.block)
+            _       <- blockSyncPipe.send(BlockSyncPipe.Response(request, isValid))
+          } yield ()
+        }.void
       }
       .completedL
   }
@@ -176,6 +179,7 @@ object SyncService {
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
       fiberMap <- FiberMap[F, A#PKey]()
+      fiberSet <- FiberSet[F]
       rpcTracker <- Resource.liftF {
         RPCTracker[F, SyncMessage[A]](timeout)
       }
@@ -185,10 +189,13 @@ object SyncService {
         blockSyncPipe,
         getState,
         fiberMap,
+        fiberSet,
         rpcTracker
       )
-      blockSync <- BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
-      _         <- Concurrent[F].background(service.processNetworkMessages)
-      _         <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
+      blockSync <- Resource.liftF {
+        BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
+      }
+      _ <- Concurrent[F].background(service.processNetworkMessages)
+      _ <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
     } yield service
 }
