@@ -8,6 +8,7 @@ import org.scalacheck._
 import org.scalacheck.Prop.{all, forAll, propBoolean}
 import scodec.codecs.implicits._
 import scodec.Codec
+import scala.util.Random
 
 object BlockStorageProps extends Properties("BlockStorage") {
 
@@ -48,7 +49,12 @@ object BlockStorageProps extends Properties("BlockStorage") {
         new KVCollection[Namespace, Hash, Set[Hash]](Namespace.BlockToChildren)
       )
 
-  object TestKVStore extends KVStoreState[Namespace]
+  object TestKVStore extends KVStoreState[Namespace] {
+    def build(tree: List[TestBlock]): Store = {
+      val insert = tree.map(TestBlockStorage.put).sequence
+      compile(insert).runS(Map.empty).value
+    }
+  }
 
   implicit class TestStoreOps(store: TestKVStore.Store) {
     def putBlock(block: TestBlock) =
@@ -131,8 +137,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
   )
   object TestData {
     def apply(tree: List[TestBlock]): TestData = {
-      val insert = tree.map(TestBlockStorage.put).sequence
-      val store  = TestKVStore.compile(insert).runS(Map.empty).value
+      val store = TestKVStore.build(tree)
       TestData(tree, store)
     }
   }
@@ -160,6 +165,17 @@ object BlockStorageProps extends Properties("BlockStorage") {
     val s = data.store.putBlock(block)
     s(Namespace.Blocks)(block.id) == block
     s(Namespace.BlockToParent)(block.id) == block.parentId
+  }
+
+  property("put unordered") = forAll {
+    for {
+      ordered <- genNonEmptyBlockTree
+      unordered = Random.shuffle(ordered)
+    } yield (ordered, unordered)
+  } { case (ordered, unordered) =>
+    val orderedStore   = TestKVStore.build(ordered)
+    val unorderedStore = TestKVStore.build(unordered)
+    orderedStore == unorderedStore
   }
 
   property("contains existing") = forAll(genExisting) { case (data, existing) =>
@@ -195,6 +211,13 @@ object BlockStorageProps extends Properties("BlockStorage") {
       data.store.deleteBlock(nonExisting.id)._2 == true
   }
 
+  property("reinsert one") = forAll(genExisting) { case (data, existing) =>
+    val (deleted, _) = data.store.deleteBlock(existing.id)
+    val inserted     = deleted.putBlock(existing)
+    // The existing child relationships should not be lost.
+    inserted == data.store
+  }
+
   property("getPathFromRoot existing") = forAll(genExisting) {
     case (data, existing) =>
       val path = data.store.getPathFromRoot(existing.id)
@@ -225,6 +248,30 @@ object BlockStorageProps extends Properties("BlockStorage") {
   property("getDescendants non-existing") = forAll(genNonExisting) {
     case (data, nonExisting) =>
       data.store.getDescendants(nonExisting.id).isEmpty
+  }
+
+  property("getDescendants delete") = forAll(genSubTree) {
+    case (data, block, subTree) =>
+      val ds = data.store.getDescendants(block.id)
+
+      val (deleted, ok) = ds.foldLeft((data.store, true)) {
+        case ((store, oks), blockHash) =>
+          val (deleted, ok) = store.deleteBlock(blockHash)
+          (deleted, oks && ok)
+      }
+
+      val prefixTree  = data.tree.takeWhile(_ != block)
+      val prefixStore = TestKVStore.build(prefixTree)
+
+      all(
+        "ok" |: ok,
+        "not contains deleted" |:
+          ds.forall(!deleted.containsBlock(_)),
+        "contains non deleted" |:
+          prefixTree.map(_.id).forall(deleted.containsBlock(_)),
+        "same as a rebuild" |:
+          prefixStore == deleted
+      )
   }
 
   property("pruneNonDescendants existing") = forAll(genSubTree) {

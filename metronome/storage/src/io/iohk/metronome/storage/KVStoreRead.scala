@@ -2,7 +2,7 @@ package io.iohk.metronome.storage
 
 import cats.free.Free
 import cats.free.Free.liftF
-import scodec.Codec
+import scodec.{Encoder, Decoder}
 
 /** Helper methods to compose operations that strictly only do reads, no writes.
   *
@@ -29,7 +29,7 @@ object KVStoreRead {
 
     def pure[A](a: A) = KVStoreRead.pure[N, A](a)
 
-    def read[K: Codec, V: Codec](
+    def read[K: Encoder, V: Decoder](
         namespace: N,
         key: K
     ): KVStoreRead[N, Option[V]] =

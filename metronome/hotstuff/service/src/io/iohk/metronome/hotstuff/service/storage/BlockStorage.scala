@@ -29,8 +29,10 @@ class BlockStorage[N, A <: Agreement: Block](
 
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
-      parentToChildrenColl.put(blockHash, Set.empty) >>
-      parentToChildrenColl.update(parentHash, _ + blockHash)
+      parentToChildrenColl.alter(parentHash) { maybeChildren =>
+        maybeChildren orElse Set.empty.some map (_ + blockHash)
+      }
+
   }
 
   /** Retrieve a block by hash, if it exists. */
@@ -86,16 +88,27 @@ class BlockStorage[N, A <: Agreement: Block](
   /** Delete a block and remove it from any parent-to-child mapping,
     * without any checking for the tree structure invariants.
     */
-  private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] =
+  private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] = {
+    def deleteIfEmpty(maybeChildren: Option[Set[A#Hash]]) =
+      maybeChildren match {
+        case None                               => None
+        case Some(children) if children.isEmpty => None
+        case children                           => children
+      }
+
     childToParentColl.get(blockHash).flatMap {
       case None =>
         KVStore[N].unit
       case Some(parentHash) =>
-        parentToChildrenColl.update(parentHash, _ - blockHash)
+        parentToChildrenColl.alter(parentHash) { maybeChildren =>
+          deleteIfEmpty(maybeChildren.map(_ - blockHash))
+        }
     } >>
       blockColl.delete(blockHash) >>
       childToParentColl.delete(blockHash) >>
-      parentToChildrenColl.delete(blockHash)
+      // Keep the association from existing children, until they last one is deleted.
+      parentToChildrenColl.alter(blockHash)(deleteIfEmpty)
+  }
 
   /** Get the ancestor chain of a block from the root,
     * including the block itself.
@@ -151,13 +164,24 @@ class BlockStorage[N, A <: Agreement: Block](
         case Some((blockHash, queue)) =>
           parentToChildrenColl.read(blockHash).flatMap {
             case None =>
-              loop(queue, acc)
+              // Since we're not inserting an empty child set,
+              // we can't tell here if the block exists or not.
+              loop(queue, blockHash :: acc)
             case Some(children) =>
               loop(queue ++ children, blockHash :: acc)
           }
       }
     }
-    loop(Queue(blockHash), Nil)
+    loop(Queue(blockHash), Nil).flatMap { result =>
+      if (result.size == 1) {
+        contains(blockHash).map {
+          case true  => result
+          case false => Nil
+        }
+      } else {
+        KVStoreRead[N].pure(result)
+      }
+    }
   }
 
   /** Delete all blocks which are not descendants of a given block,

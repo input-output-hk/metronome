@@ -28,7 +28,7 @@ import org.rocksdb.{
   CompressionType,
   ClockCache
 }
-import scodec.Codec
+import scodec.{Encoder, Decoder}
 import scodec.bits.BitVector
 import scala.collection.mutable
 import java.nio.file.Path
@@ -85,14 +85,14 @@ class RocksDBStore[F[_]: Sync](
   /** Execute one `Get` operation. */
   private def read[K, V](op: Get[Namespace, K, V]): F[Option[V]] = {
     for {
-      kbs  <- encode(op.key)(op.keyCodec)
+      kbs  <- encode(op.key)(op.keyEncoder)
       mvbs <- db.read(handles(op.namespace), kbs)
       mv <- mvbs match {
         case None =>
           none.pure[F]
 
         case Some(bytes) =>
-          decode(bytes)(op.valueCodec).map(_.some)
+          decode(bytes)(op.valueDecoder).map(_.some)
       }
     } yield mv
   }
@@ -110,8 +110,8 @@ class RocksDBStore[F[_]: Sync](
           case op @ Put(n, k, v) =>
             ReaderT { batch =>
               for {
-                kbs <- encode(k)(op.keyCodec)
-                vbs <- encode(v)(op.valueCodec)
+                kbs <- encode(k)(op.keyEncoder)
+                vbs <- encode(v)(op.valueEncoder)
                 _ = batch.put(handles(n), kbs, vbs)
               } yield ()
             }
@@ -123,7 +123,7 @@ class RocksDBStore[F[_]: Sync](
           case op @ Delete(n, k) =>
             ReaderT { batch =>
               for {
-                kbs <- encode(k)(op.keyCodec)
+                kbs <- encode(k)(op.keyEncoder)
                 _ = batch.delete(handles(n), kbs)
               } yield ()
             }
@@ -146,10 +146,10 @@ class RocksDBStore[F[_]: Sync](
         }
     }
 
-  private def encode[T](value: T)(implicit ev: Codec[T]): F[Array[Byte]] =
+  private def encode[T](value: T)(implicit ev: Encoder[T]): F[Array[Byte]] =
     Sync[F].fromTry(ev.encode(value).map(_.toByteArray).toTry)
 
-  private def decode[T](bytes: Array[Byte])(implicit ev: Codec[T]): F[T] =
+  private def decode[T](bytes: Array[Byte])(implicit ev: Decoder[T]): F[T] =
     Sync[F].fromTry(ev.decodeValue(BitVector(bytes)).toTry)
 
   /** Mostly meant for writing batches atomically.
