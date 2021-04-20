@@ -11,22 +11,23 @@ import mill.contrib.versionfile.VersionFileModule
 object versionFile extends VersionFileModule
 
 object VersionOf {
-  val cats             = "2.3.1"
-  val circe            = "0.12.3"
-  val config           = "1.4.1"
-  val `kind-projector` = "0.11.3"
-  val logback          = "1.2.3"
-  val mantis           = "3.2.1-SNAPSHOT"
-  val monix            = "3.3.0"
-  val prometheus       = "0.10.0"
-  val rocksdb          = "6.15.2"
-  val scalacheck       = "1.15.2"
-  val scalatest        = "3.2.5"
-  val scalanet         = "0.7.0"
-  val shapeless        = "2.3.3"
-  val slf4j            = "1.7.30"
-  val `scodec-core`    = "1.11.7"
-  val `scodec-bits`    = "1.1.12"
+  val `better-monadic-for` = "0.3.1"
+  val cats                 = "2.3.1"
+  val circe                = "0.12.3"
+  val config               = "1.4.1"
+  val `kind-projector`     = "0.11.3"
+  val logback              = "1.2.3"
+  val mantis               = "3.2.1-SNAPSHOT"
+  val monix                = "3.3.0"
+  val prometheus           = "0.10.0"
+  val rocksdb              = "6.15.2"
+  val scalacheck           = "1.15.2"
+  val scalatest            = "3.2.5"
+  val scalanet             = "0.7.0"
+  val shapeless            = "2.3.3"
+  val slf4j                = "1.7.30"
+  val `scodec-core`        = "1.11.7"
+  val `scodec-bits`        = "1.1.12"
 }
 
 // Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
@@ -75,6 +76,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def ivyDeps = Agg(
       ivy"org.typelevel::cats-core:${VersionOf.cats}",
       ivy"org.typelevel::cats-effect:${VersionOf.cats}"
+    )
+
+    override def scalacPluginIvyDeps = Agg(
+      ivy"com.olegpy::better-monadic-for:${VersionOf.`better-monadic-for`}"
     )
 
     override def repositories = super.repositories ++ Seq(
@@ -144,13 +149,14 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
-  /** Data models shared between all modules. */
+  /** Abstractions shared between all modules. */
   object core extends SubModule with Publishing {
     override def description: String =
-      "Common data models."
+      "Common abstractions."
 
-    override def ivyDeps = Agg(
-      ivy"com.chuusai::shapeless:${VersionOf.shapeless}"
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"com.chuusai::shapeless:${VersionOf.shapeless}",
+      ivy"io.monix::monix:${VersionOf.monix}"
     )
   }
 
@@ -315,8 +321,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"com.typesafe:config:${VersionOf.config}",
         ivy"ch.qos.logback:logback-classic:${VersionOf.logback}",
-        ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}",
-        ivy"io.monix::monix:${VersionOf.monix}"
+        ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}"
       )
 
       object test extends TestModule

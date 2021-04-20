@@ -45,10 +45,10 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     prepareQC: QuorumCertificate[A],
     // Locked QC, for which a replica voted Commit, because it received a Pre-Commit Q.C. from leader.
     lockedQC: QuorumCertificate[A],
-    // Hash of the block that was last decided upon.
-    lastExecutedBlockHash: A#Hash,
-    // Hash of the block the federation is currently voting on.
-    preparedBlockHash: A#Hash,
+    // Commit QC, which a replica received in the Decide phase, and then executed the block in it.
+    commitQC: QuorumCertificate[A],
+    // The block the federation is currently voting on.
+    preparedBlock: A#Block,
     // Timeout for the view, so that it can be adjusted next time if necessary.
     timeout: FiniteDuration,
     // Votes gathered by the leader in this phase. They are guarenteed to be over the same content.
@@ -70,6 +70,12 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     * This value can be lower if we have higher trust in the federation.
     */
   def quorumSize = federation.quorumSize
+
+  /** Hash of the block that was last decided upon. */
+  def lastExecutedBlockHash: A#Hash = commitQC.blockHash
+
+  /** Hash of the block currently being voted on. */
+  def preparedBlockHash: A#Hash = Block[A].blockHash(preparedBlock)
 
   /** No state transition. */
   private def stay: Transition[A] =
@@ -191,7 +197,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
                 sendVote(Phase.Prepare, blockHash)
               )
               val next = moveTo(Phase.PreCommit).copy(
-                preparedBlockHash = blockHash
+                preparedBlock = m.block
               )
               Right(next -> effects)
             } else {
@@ -206,7 +212,8 @@ case class ProtocolState[A <: Agreement: Block: Signing](
           handleVotes(e, Phase.Prepare) orElse
             handleQuorum(e, Phase.Prepare) { m =>
               val effects = Seq(
-                sendVote(Phase.PreCommit, m.quorumCertificate.blockHash)
+                sendVote(Phase.PreCommit, m.quorumCertificate.blockHash),
+                SaveBlock(preparedBlock)
               )
               val next = moveTo(Phase.Commit).copy(
                 prepareQC = m.quorumCertificate
@@ -244,7 +251,9 @@ case class ProtocolState[A <: Agreement: Block: Signing](
                     m.quorumCertificate
                   ) +: effects
 
-                  next -> withExec
+                  val withLast = next.copy(commitQC = m.quorumCertificate)
+
+                  withLast -> withExec
               }
             }
         }
@@ -470,26 +479,4 @@ object ProtocolState {
   /** Return an initial set of effects; at the minimum the timeout for the first round. */
   def init[A <: Agreement](state: ProtocolState[A]): Seq[Effect[A]] =
     List(Effect.ScheduleNextView(state.viewNumber, state.timeout))
-
-  private implicit class PhaseOps(val a: Phase) extends AnyVal {
-    import Phase._
-
-    /** Check that *within the same view* phase `a` precedes phase `b`. */
-    def isBefore(b: Phase): Boolean =
-      (a, b) match {
-        case (Prepare, PreCommit | Commit | Decide) => true
-        case (PreCommit, Commit | Decide)           => true
-        case (Commit, Decide)                       => true
-        case _                                      => false
-      }
-
-    /** Check that *within the same view* phase `a` follows phase `b`. */
-    def isAfter(b: Phase): Boolean =
-      (a, b) match {
-        case (PreCommit, Prepare)                   => true
-        case (Commit, Prepare | PreCommit)          => true
-        case (Decide, Prepare | PreCommit | Commit) => true
-        case _                                      => false
-      }
-  }
 }
