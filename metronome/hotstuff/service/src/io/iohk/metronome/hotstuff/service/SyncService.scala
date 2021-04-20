@@ -8,12 +8,12 @@ import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.sync.BlockSynchronizer
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
-import io.iohk.metronome.core.messages.RPCPair
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -39,7 +39,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     *
     * Returns `None` if we're not connected or the request times out.
     */
-  def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
+  private def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
     val request = GetBlockRequest(RequestId(), blockHash)
     for {
       join <- rpcTracker.register(request)
@@ -52,7 +52,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     *
     * Returns `None` if we're not connected or the request times out.
     */
-  def getStatus(from: A#PKey): F[Option[Status[A]]] = {
+  private def getStatus(from: A#PKey): F[Option[Status[A]]] = {
     val request = GetStatusRequest[A](RequestId())
     for {
       join <- rpcTracker.register(request)
@@ -128,29 +128,29 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     }
   }
 
-  /** Read Requests from the BlockSyncPipe and send Responses. */
-  def processBlockSyncPipe: F[Unit] = {
+  /** Read Requests from the BlockSyncPipe and send Responses.
+    *
+    * These are coming from the `ConsensusService` asking for a
+    * `Prepare` message to be synchronised with the sender.
+    */
+  def processBlockSyncPipe(
+      blockSynchronizer: BlockSynchronizer[F, N, A]
+  ): F[Unit] = {
     blockSyncPipe.receive
       .mapEval[Unit] { case request @ BlockSyncPipe.Request(sender, prepare) =>
-        // TODO (PM-3134): Block sync.
-        // TODO (PM-3132, PM-3133): Block validation.
-
-        // We must take care not to insert blocks into storage and risk losing
-        // the pointer to them in a restart. Maybe keep the unfinished tree
-        // in memory until we find a parent we do have in storage, then
-        // insert them in the opposite order, validating against the application side
-        // as we go along, finally responding to the requestor.
-        //
         // It is enough to respond to the last block positively, it will indicate
         // that the whole range can be executed later (at that point from storage).
-        val isValid: F[Boolean] = ???
-
-        isValid.flatMap { isValid =>
-          blockSyncPipe.send(BlockSyncPipe.Response(request, isValid))
-        }
+        for {
+          _       <- blockSynchronizer.sync(sender, prepare.highQC)
+          isValid <- validateBlock(prepare.block)
+          _       <- blockSyncPipe.send(BlockSyncPipe.Response(request, isValid))
+        } yield ()
       }
       .completedL
   }
+
+  // TODO (PM-3132, PM-3133): Block validation.
+  private def validateBlock(block: A#Block): F[Boolean] = ???
 }
 
 object SyncService {
@@ -183,7 +183,8 @@ object SyncService {
         fiberMap,
         rpcTracker
       )
-      _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processBlockSyncPipe)
+      blockSync <- BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
+      _         <- Concurrent[F].background(service.processNetworkMessages)
+      _         <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
     } yield service
 }
