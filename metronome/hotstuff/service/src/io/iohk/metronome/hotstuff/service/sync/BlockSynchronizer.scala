@@ -36,7 +36,7 @@ import scala.concurrent.duration._
 class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     blockStorage: BlockStorage[N, A],
     getBlock: BlockSynchronizer.GetBlock[F, A],
-    inMemoryStoreRef: Ref[F, KVStoreState[N]#Store],
+    storeRef: Ref[F, KVStoreState[N]#Store],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
 
@@ -46,7 +46,15 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   // insert them in the opposite order.
 
   // In memory KVStore query compiler.
-  private val state = new KVStoreState[N]
+  private val inMemory = new KVStoreState[N] with KVStoreRunner[F, N] {
+    def runReadOnly[A](query: KVStoreRead[N, A]): F[A] =
+      storeRef.get.map(compile(query).run)
+
+    def runReadWrite[A](query: KVStore[N, A]): F[A] =
+      storeRef.modify { store =>
+        compile(query).run(store).value
+      }
+  }
 
   /** Download all blocks up to the one included in the Quorum Certificate. */
   def sync(
@@ -70,25 +78,27 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
           ().pure[F]
 
         case false =>
-          readInMemory {
-            blockStorage.get(blockHash)
-          }.flatMap {
-            case Some(block) =>
-              downloadParent(from, block)
+          inMemory
+            .runReadOnly {
+              blockStorage.get(blockHash)
+            }
+            .flatMap {
+              case Some(block) =>
+                downloadParent(from, block)
 
-            case None =>
-              getAndValidateBlock(from, blockHash)
-                .flatMap {
-                  case Some(block) =>
-                    writeInMemory {
-                      blockStorage.put(block)
-                    } >> downloadParent(from, block)
+              case None =>
+                getAndValidateBlock(from, blockHash)
+                  .flatMap {
+                    case Some(block) =>
+                      inMemory.runReadWrite {
+                        blockStorage.put(block)
+                      } >> downloadParent(from, block)
 
-                  case None =>
-                    Timer[F].sleep(retryTimeout) >>
-                      download(from, blockHash)
-                }
-          }
+                    case None =>
+                      Timer[F].sleep(retryTimeout) >>
+                        download(from, blockHash)
+                  }
+            }
       }
   }
 
@@ -114,7 +124,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     * in-memory tree to the given block hash.
     */
   private def persist(blockHash: A#Hash): F[Unit] =
-    readInMemory {
+    inMemory.runReadOnly {
       blockStorage.getPathFromRoot(blockHash)
     } flatMap { path =>
       persist(path)
@@ -129,33 +139,27 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
         ().pure[F]
 
       case blockHash :: rest =>
-        writeInMemory {
-          for {
-            maybeBlock <- blockStorage.get(blockHash).lift
-            // There could be other, overlapping paths being downloaded,
-            // but as long as they are on the call stack, it's okay to
-            // create a forest here.
-            _ <- blockStorage.deleteUnsafe(blockHash)
-          } yield maybeBlock
-        }.flatMap {
-          case None =>
-            // Another download has already persisted it.
-            ().pure[F]
+        inMemory
+          .runReadWrite {
+            for {
+              maybeBlock <- blockStorage.get(blockHash).lift
+              // There could be other, overlapping paths being downloaded,
+              // but as long as they are on the call stack, it's okay to
+              // create a forest here.
+              _ <- blockStorage.deleteUnsafe(blockHash)
+            } yield maybeBlock
+          }
+          .flatMap {
+            case None =>
+              // Another download has already persisted it.
+              ().pure[F]
 
-          case Some(block) =>
-            storeRunner.runReadWrite {
-              blockStorage.put(block)
-            }
-        } >>
+            case Some(block) =>
+              storeRunner.runReadWrite {
+                blockStorage.put(block)
+              }
+          } >>
           persist(rest)
-    }
-
-  private def readInMemory[A](query: KVStoreRead[N, A]): F[A] =
-    inMemoryStoreRef.get.map(state.compile(query).run)
-
-  private def writeInMemory[A](query: KVStore[N, A]): F[A] =
-    inMemoryStoreRef.modify { store =>
-      state.compile(query).run(store).value
     }
 }
 
@@ -172,11 +176,11 @@ object BlockSynchronizer {
       storeRunner: KVStoreRunner[F, N]
   ): F[BlockSynchronizer[F, N, A]] =
     for {
-      inMemoryStoreRef <- Ref.of[F, KVStoreState[N]#Store](Map.empty)
+      storeRef <- Ref.of[F, KVStoreState[N]#Store](Map.empty)
       synchronizer = new BlockSynchronizer[F, N, A](
         blockStorage,
         getBlock,
-        inMemoryStoreRef
+        storeRef
       )
     } yield synchronizer
 }
