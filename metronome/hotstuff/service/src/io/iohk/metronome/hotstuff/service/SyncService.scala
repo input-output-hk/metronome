@@ -1,8 +1,9 @@
 package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
-import cats.effect.{Sync, Resource, Concurrent, ContextShift}
+import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import io.iohk.metronome.core.fibers.FiberMap
+import io.iohk.metronome.core.messages.RPCTracker
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
@@ -11,6 +12,8 @@ import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
 import scala.util.control.NonFatal
+import scala.concurrent.duration._
+import io.iohk.metronome.core.messages.RPCPair
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -27,20 +30,36 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     blockStorage: BlockStorage[N, A],
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
-    fiberMap: FiberMap[F, A#PKey]
+    fiberMap: FiberMap[F, A#PKey],
+    rpcTracker: RPCTracker[F, SyncMessage[A]]
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
+  import SyncMessage._
 
   /** Request a block from a peer.
     *
     * Returns `None` if we're not connected or the request times out.
     */
-  def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = ???
+  def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
+    val request = GetBlockRequest(RequestId(), blockHash)
+    for {
+      join <- rpcTracker.register(request)
+      _    <- network.sendMessage(from, request)
+      res  <- join
+    } yield res.map(_.block)
+  }
 
   /** Request the status of a peer.
     *
     * Returns `None` if we're not connected or the request times out.
     */
-  def getStatus(from: A#PKey): F[Option[Status[A]]] = ???
+  def getStatus(from: A#PKey): F[Option[Status[A]]] = {
+    val request = GetStatusRequest[A](RequestId())
+    for {
+      join <- rpcTracker.register(request)
+      _    <- network.sendMessage(from, request)
+      res  <- join
+    } yield res.map(_.status)
+  }
 
   /** Process incoming network messages. */
   private def processNetworkMessages: F[Unit] = {
@@ -69,8 +88,6 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       from: A#PKey,
       message: SyncMessage[A]
   ): F[Unit] = {
-    import SyncMessage._
-
     val process = message match {
       case GetStatusRequest(requestId) =>
         getState.flatMap { state =>
@@ -98,13 +115,12 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
               )
           }
 
-      case GetStatusResponse(requestId, status) =>
+      case response: SyncMessage.Response =>
         // TODO (PM-3063): Hand over to view synchronisation.
-        ???
-
-      case GetBlockResponse(requestId, block) =>
         // TODO (PM-3134): Hand over to block synchronisation.
-        ???
+        rpcTracker.complete(response).flatMap { ok =>
+          tracers.responseIgnored(response).whenA(!ok)
+        }
     }
 
     process.handleErrorWith { case NonFatal(ex) =>
@@ -143,11 +159,12 @@ object SyncService {
     * in the background, shutting processing down when the resource is
     * released.
     */
-  def apply[F[_]: Concurrent: ContextShift, N, A <: Agreement](
+  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement](
       network: Network[F, A, SyncMessage[A]],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Right,
-      getState: F[ProtocolState[A]]
+      getState: F[ProtocolState[A]],
+      timeout: FiniteDuration = 10.seconds
   )(implicit
       tracers: SyncTracers[F, A],
       storeRunner: KVStoreRunner[F, N]
@@ -155,12 +172,16 @@ object SyncService {
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
       fiberMap <- FiberMap[F, A#PKey]()
+      rpcTracker <- Resource.liftF {
+        RPCTracker[F, SyncMessage[A]](timeout)
+      }
       service = new SyncService(
         network,
         blockStorage,
         blockSyncPipe,
         getState,
-        fiberMap
+        fiberMap,
+        rpcTracker
       )
       _ <- Concurrent[F].background(service.processNetworkMessages)
       _ <- Concurrent[F].background(service.processBlockSyncPipe)
