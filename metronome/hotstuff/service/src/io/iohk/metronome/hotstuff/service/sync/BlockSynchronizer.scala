@@ -1,7 +1,7 @@
 package io.iohk.metronome.hotstuff.service.sync
 
 import cats.implicits._
-import cats.effect.{Resource, Sync, Timer}
+import cats.effect.{Sync, Timer}
 import cats.effect.concurrent.Ref
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -40,9 +40,12 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
 
+  // We must take care not to insert blocks into storage and risk losing
+  // the pointer to them in a restart, hence keeping the unfinished tree
+  // in memory until we find a parent we do have in storage, then
+  // insert them in the opposite order.
+
   // In memory KVStore query compiler.
-  // NOTE: Currently not utilising that we're storing the tree structure in memory,
-  // it could be replaced with a simple Map.
   val state = new KVStoreState[N]
 
   /** Download all blocks up to the one included in the Quorum Certificate. */
@@ -50,16 +53,13 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       sender: A#PKey,
       quorumCertificate: QuorumCertificate[A]
   ): F[Unit] =
-    sync(sender, quorumCertificate.blockHash, Nil)
+    download(sender, quorumCertificate.blockHash) >>
+      persist(quorumCertificate.blockHash)
 
-  // We must take care not to insert blocks into storage and risk losing
-  // the pointer to them in a restart, hence keeping the unfinished tree
-  // in memory until we find a parent we do have in storage, then
-  // insert them in the opposite order.
-  private def sync(
+  /** Download a block and all of its ancestors into the in-memory block store. */
+  private def download(
       sender: A#PKey,
-      blockHash: A#Hash,
-      path: List[A#Hash]
+      blockHash: A#Hash
   ): F[Unit] = {
     storeRunner
       .runReadOnly {
@@ -67,52 +67,57 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       }
       .flatMap {
         case true =>
-          persist(path)
+          ().pure[F]
 
         case false =>
           readInMemory {
             blockStorage.get(blockHash)
           }.flatMap {
             case Some(block) =>
-              syncParent(sender, block, path)
+              downloadParent(sender, block)
 
             case None =>
-              tryDownload(sender, blockHash)
+              getAndValidateBlock(sender, blockHash)
                 .flatMap {
                   case Some(block) =>
                     writeInMemory {
                       blockStorage.put(block)
-                    } >> syncParent(sender, block, path)
+                    } >> downloadParent(sender, block)
 
                   case None =>
                     Timer[F].sleep(retryTimeout) >>
-                      sync(sender, blockHash, path)
+                      download(sender, blockHash)
                 }
           }
       }
   }
 
-  private def syncParent(
+  private def downloadParent(
       from: A#PKey,
-      block: A#Block,
-      path: List[A#Hash]
-  ): F[Unit] = {
-    val blockHash       = Block[A].blockHash(block)
-    val parentBlockHash = Block[A].parentBlockHash(block)
-    sync(from, parentBlockHash, blockHash :: path)
-  }
+      block: A#Block
+  ): F[Unit] =
+    download(from, Block[A].parentBlockHash(block))
 
-  private def tryDownload(
+  /** Try downloading the block from the source and perform basic content validation. */
+  private def getAndValidateBlock(
       from: A#PKey,
       blockHash: A#Hash
   ): F[Option[A#Block]] =
-    getBlock(from, blockHash).map(validate(blockHash))
+    getBlock(from, blockHash).map { maybeBlock =>
+      maybeBlock.filter { block =>
+        Block[A].blockHash(block) == blockHash &&
+        Block[A].isValid(block)
+      }
+    }
 
-  private def validate(requestedBlockHash: A#Hash)(
-      maybeDownloadedBlock: Option[A#Block]
-  ): Option[A#Block] =
-    maybeDownloadedBlock.filter { block =>
-      Block[A].blockHash(block) == requestedBlockHash && Block[A].isValid(block)
+  /** Persist the path that leads from the its greatest ancestor in the
+    * in-memory tree to the given block hash.
+    */
+  private def persist(blockHash: A#Hash): F[Unit] =
+    readInMemory {
+      blockStorage.getPathFromRoot(blockHash)
+    } flatMap { path =>
+      persist(path)
     }
 
   /** Move the blocks on the path from memory to persistent storage. */
