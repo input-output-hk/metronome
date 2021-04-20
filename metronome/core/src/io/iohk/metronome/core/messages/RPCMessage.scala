@@ -20,4 +20,16 @@ abstract class RPCMessageCompanion {
 
   trait Request  extends RPCMessage
   trait Response extends RPCMessage
+
+  def pair[A <: Request, B <: Response]: RPCPair.Aux[A, B] =
+    new RPCPair[A] { type Response = B }
+}
+
+trait RPCPair[Request] {
+  type Response
+}
+object RPCPair {
+  type Aux[A, B] = RPCPair[A] {
+    type Response = B
+  }
 }
