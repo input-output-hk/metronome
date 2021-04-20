@@ -4,7 +4,11 @@ import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.core.messages.RPCTracker
-import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Agreement,
+  ProtocolState,
+  Block
+}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
@@ -159,7 +163,7 @@ object SyncService {
     * in the background, shutting processing down when the resource is
     * released.
     */
-  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement](
+  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
       network: Network[F, A, SyncMessage[A]],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Right,
