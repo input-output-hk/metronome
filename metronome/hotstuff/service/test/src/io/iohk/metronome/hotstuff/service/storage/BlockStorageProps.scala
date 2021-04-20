@@ -27,6 +27,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
     implicit val block = new BlockOps[TestAggreement] {
       override def blockHash(b: TestBlock)       = b.id
       override def parentBlockHash(b: TestBlock) = b.parentId
+      override def isValid(b: Block)             = true
     }
   }
   type TestAggreement = TestAggreement.type

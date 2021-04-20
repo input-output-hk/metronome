@@ -39,15 +39,17 @@ object Block {
       transactions: IndexedSeq[Transaction]
   ): Block = {
     val body = Body(transactions)
-    val txMerkleTree =
-      MerkleTree.build(transactions.map(tx => MerkleTree.Hash(tx.hash)))
     val header = Header(
       parentHash = parent.hash,
       postStateHash = postStateHash,
-      contentMerkleRoot = txMerkleTree.hash
+      contentMerkleRoot = Body.contentMerkleRoot(body)
     )
     makeUnsafe(header, body)
   }
+
+  /** Check that the block hashes are valid. */
+  def isValid(block: Block): Boolean =
+    block.header.contentMerkleRoot == Body.contentMerkleRoot(block.body)
 
   /** The first, empty block. */
   val genesis: Block = {
@@ -74,5 +76,10 @@ object Block {
       transactions: IndexedSeq[Transaction]
   ) extends RLPHash[Body, Body.Hash]
 
-  object Body extends RLPHashCompanion[Body]()(RLPCodecs.rlpBlockBody)
+  object Body extends RLPHashCompanion[Body]()(RLPCodecs.rlpBlockBody) {
+    def contentMerkleRoot(body: Body): MerkleTree.Hash =
+      MerkleTree
+        .build(body.transactions.map(tx => MerkleTree.Hash(tx.hash)))
+        .hash
+  }
 }
