@@ -24,8 +24,8 @@ class BlockStorage[N, A <: Agreement: Block](
     * then add this block to its children.
     */
   def put(block: A#Block): KVStore[N, Unit] = {
-    val blockHash  = implicitly[Block[A]].blockHash(block)
-    val parentHash = implicitly[Block[A]].parentBlockHash(block)
+    val blockHash  = Block[A].blockHash(block)
+    val parentHash = Block[A].parentBlockHash(block)
 
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
