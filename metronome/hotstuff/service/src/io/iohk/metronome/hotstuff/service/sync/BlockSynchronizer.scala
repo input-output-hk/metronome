@@ -46,7 +46,12 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       sender: A#PKey,
       quorumCertificate: QuorumCertificate[A]
   ): F[Unit] =
-    download(sender, quorumCertificate.blockHash) >>
+    // Only initiating one download from a given peer, so even if we try to sync
+    // an overlapping path, we don't end up asking the same block multiple times
+    // and re-inserting it into the memory store if another download removed it.
+    fiberMap.submit(sender) {
+      download(sender, quorumCertificate.blockHash)
+    } >>
       persist(quorumCertificate.blockHash)
 
   /** Download a block and all of its ancestors into the in-memory block store. */
@@ -80,6 +85,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
                       } >> downloadParent(from, block)
 
                     case None =>
+                      // TODO: Trace.
                       Timer[F].sleep(retryTimeout) >>
                         download(from, blockHash)
                   }
@@ -93,24 +99,17 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   ): F[Unit] =
     download(from, Block[A].parentBlockHash(block))
 
-  /** Try downloading the block from the source and perform basic content validation.
-    *
-    * Only send one download request to a peer at any given time.
-    */
+  /** Try downloading the block from the source and perform basic content validation. */
   private def getAndValidateBlock(
       from: A#PKey,
       blockHash: A#Hash
   ): F[Option[A#Block]] =
-    fiberMap
-      .submit(from) {
-        getBlock(from, blockHash).map { maybeBlock =>
-          maybeBlock.filter { block =>
-            Block[A].blockHash(block) == blockHash &&
-            Block[A].isValid(block)
-          }
-        }
+    getBlock(from, blockHash).map { maybeBlock =>
+      maybeBlock.filter { block =>
+        Block[A].blockHash(block) == blockHash &&
+        Block[A].isValid(block)
       }
-      .flatten
+    }
 
   /** Persist the path that leads from the its greatest ancestor in the
     * in-memory tree to the given block hash.
