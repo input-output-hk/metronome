@@ -192,10 +192,8 @@ object SyncService {
         fiberSet,
         rpcTracker
       )
-      blockSync <- Resource.liftF {
-        BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
-      }
-      _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
+      blockSync <- BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
+      _         <- Concurrent[F].background(service.processNetworkMessages)
+      _         <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
     } yield service
 }
