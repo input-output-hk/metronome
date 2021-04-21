@@ -52,7 +52,7 @@ class FiberSet[F[_]: Concurrent](
     fibers <- fibersRef.get
     _      <- fibers.toList.traverse(_.cancel)
     tasks  <- tasksRef.get
-    _      <- tasks.toList.traverse(_.shutdown)
+    _      <- tasks.toList.traverse(_.cancel)
   } yield ()
 }
 

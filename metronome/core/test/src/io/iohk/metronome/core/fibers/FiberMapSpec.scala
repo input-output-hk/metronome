@@ -135,11 +135,24 @@ class FiberMapSpec extends AsyncFlatSpec with Matchers with Inside {
         r <- r.attempt
       } yield {
         inside(r) { case Left(ex) =>
-          ex shouldBe a[RuntimeException]
-          ex.getMessage should include("shut down")
+          ex shouldBe a[DeferredTask.CanceledException]
         }
       }
     }
+  }
+
+  it should "cancel and raise errors in a canceled task" in testMap {
+    fiberMap =>
+      for {
+        _ <- fiberMap.submit("foo")(Task.never)
+        r <- fiberMap.submit("foo")(Task("easy"))
+        _ <- fiberMap.cancelQueue("foo")
+        r <- r.attempt
+      } yield {
+        inside(r) { case Left(ex) =>
+          ex shouldBe a[DeferredTask.CanceledException]
+        }
+      }
   }
 
   it should "keep processing even if a task fails" in testMap { fiberMap =>
