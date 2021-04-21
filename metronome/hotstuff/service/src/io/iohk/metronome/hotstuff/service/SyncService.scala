@@ -2,7 +2,7 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
-import io.iohk.metronome.core.fibers.{FiberMap, FiberSet}
+import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.core.messages.RPCTracker
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -34,8 +34,8 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     blockStorage: BlockStorage[N, A],
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
-    fiberMap: FiberMap[F, A#PKey],
-    fiberSet: FiberSet[F],
+    incomingFiberMap: FiberMap[F, A#PKey],
+    syncFiberMap: FiberMap[F, A#PKey],
     rpcTracker: RPCTracker[F, SyncMessage[A]]
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
   import SyncMessage._
@@ -72,7 +72,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     network.incomingMessages
       .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
         // Handle on a fiber dedicated to the source.
-        fiberMap
+        incomingFiberMap
           .submit(from) {
             processNetworkMessage(from, message)
           }
@@ -145,13 +145,22 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       .mapEval[Unit] { case request @ BlockSyncPipe.Request(sender, prepare) =>
         // It is enough to respond to the last block positively, it will indicate
         // that the whole range can be executed later (at that point from storage).
-        fiberSet.submit {
-          for {
-            _       <- blockSynchronizer.sync(sender, prepare.highQC)
-            isValid <- validateBlock(prepare.block)
-            _       <- blockSyncPipe.send(BlockSyncPipe.Response(request, isValid))
-          } yield ()
-        }.void
+        // If the same leader is sending us newer proposals, we can ignore the
+        // previous pepared blocks - they are either part of the new Q.C.,
+        // in which case they don't need to be validated, or they have not
+        // gathered enough votes, and been superceeded by a new proposal.
+        syncFiberMap.cancelQueue(sender) >>
+          syncFiberMap
+            .submit(sender) {
+              for {
+                _       <- blockSynchronizer.sync(sender, prepare.highQC)
+                isValid <- validateBlock(prepare.block)
+                _ <- blockSyncPipe.send(
+                  BlockSyncPipe.Response(request, isValid)
+                )
+              } yield ()
+            }
+            .void
       }
       .completedL
   }
@@ -178,8 +187,8 @@ object SyncService {
   ): Resource[F, SyncService[F, N, A]] =
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
-      fiberMap <- FiberMap[F, A#PKey]()
-      fiberSet <- FiberSet[F]
+      incomingFiberMap <- FiberMap[F, A#PKey]()
+      syncFiberMap     <- FiberMap[F, A#PKey]()
       rpcTracker <- Resource.liftF {
         RPCTracker[F, SyncMessage[A]](timeout)
       }
@@ -188,8 +197,8 @@ object SyncService {
         blockStorage,
         blockSyncPipe,
         getState,
-        fiberMap,
-        fiberSet,
+        incomingFiberMap,
+        syncFiberMap,
         rpcTracker
       )
       blockSync <- BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
