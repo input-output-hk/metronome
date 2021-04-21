@@ -1,7 +1,8 @@
 package io.iohk.metronome.hotstuff.service.sync
 
 import cats.implicits._
-import cats.effect.{Sync, Timer}
+import cats.effect.{Sync, Timer, Resource, Concurrent, ContextShift}
+import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   QuorumCertificate,
@@ -31,6 +32,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     blockStorage: BlockStorage[N, A],
     getBlock: BlockSynchronizer.GetBlock[F, A],
     inMemoryStore: KVStoreRunner[F, N],
+    fiberMap: FiberMap[F, A#PKey],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
 
@@ -91,17 +93,24 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   ): F[Unit] =
     download(from, Block[A].parentBlockHash(block))
 
-  /** Try downloading the block from the source and perform basic content validation. */
+  /** Try downloading the block from the source and perform basic content validation.
+    *
+    * Only send one download request to a peer at any given time.
+    */
   private def getAndValidateBlock(
       from: A#PKey,
       blockHash: A#Hash
   ): F[Option[A#Block]] =
-    getBlock(from, blockHash).map { maybeBlock =>
-      maybeBlock.filter { block =>
-        Block[A].blockHash(block) == blockHash &&
-        Block[A].isValid(block)
+    fiberMap
+      .submit(from) {
+        getBlock(from, blockHash).map { maybeBlock =>
+          maybeBlock.filter { block =>
+            Block[A].blockHash(block) == blockHash &&
+            Block[A].isValid(block)
+          }
+        }
       }
-    }
+      .flatten
 
   /** Persist the path that leads from the its greatest ancestor in the
     * in-memory tree to the given block hash.
@@ -152,18 +161,20 @@ object BlockSynchronizer {
   type GetBlock[F[_], A <: Agreement] = (A#PKey, A#Hash) => F[Option[A#Block]]
 
   /** Create a block synchronizer resource. Stop any background downloads when released. */
-  def apply[F[_]: Sync: Timer, N, A <: Agreement: Block](
+  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
       blockStorage: BlockStorage[N, A],
       getBlock: GetBlock[F, A]
   )(implicit
       storeRunner: KVStoreRunner[F, N]
-  ): F[BlockSynchronizer[F, N, A]] =
+  ): Resource[F, BlockSynchronizer[F, N, A]] =
     for {
-      inMemoryStore <- InMemoryKVStore[F, N]
+      fiberMap      <- FiberMap[F, A#PKey]()
+      inMemoryStore <- Resource.liftF(InMemoryKVStore[F, N])
       synchronizer = new BlockSynchronizer[F, N, A](
         blockStorage,
         getBlock,
-        inMemoryStore
+        inMemoryStore,
+        fiberMap
       )
     } yield synchronizer
 }
