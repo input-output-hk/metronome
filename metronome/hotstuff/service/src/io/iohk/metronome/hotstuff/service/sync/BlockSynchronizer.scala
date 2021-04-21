@@ -1,9 +1,8 @@
 package io.iohk.metronome.hotstuff.service.sync
 
 import cats.implicits._
-import cats.effect.{Sync, Timer, Resource, Concurrent, ContextShift}
+import cats.effect.{Sync, Timer, Concurrent, ContextShift}
 import cats.effect.concurrent.Semaphore
-import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   QuorumCertificate,
@@ -33,7 +32,6 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     blockStorage: BlockStorage[N, A],
     getBlock: BlockSynchronizer.GetBlock[F, A],
     inMemoryStore: KVStoreRunner[F, N],
-    fiberMap: FiberMap[F, A#PKey],
     semaphore: Semaphore[F],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
@@ -43,20 +41,24 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   // in memory until we find a parent we do have in storage, then
   // insert them in the opposite order.
 
-  /** Download all blocks up to the one included in the Quorum Certificate. */
+  /** Download all blocks up to the one included in the Quorum Certificate.
+    *
+    * Only expected to be called once per sender at the same time, otherwise
+    * it may request the same ancestor block multiple times concurrently.
+    *
+    * This could be managed with internal queueing, but not having that should
+    * make it easier to cancel all calling fibers and discard the synchronizer
+    * instance and its in-memory store, do state syncing, then replace it with
+    * a fresh one.
+    */
   def sync(
       sender: A#PKey,
       quorumCertificate: QuorumCertificate[A]
   ): F[Unit] =
-    // Only initiating one download from a given peer, so even if we try to sync
-    // an overlapping path, we don't end up asking the same block multiple times
-    // and re-inserting it into the memory store if another download removed it.
-    fiberMap
-      .submit(sender) {
-        download(sender, quorumCertificate.blockHash, Nil)
-      }
-      .flatten
-      .flatMap(persist(quorumCertificate.blockHash, _))
+    for {
+      path <- download(sender, quorumCertificate.blockHash, Nil)
+      _    <- persist(quorumCertificate.blockHash, path)
+    } yield ()
 
   /** Download a block and all of its ancestors into the in-memory block store.
     *
@@ -195,16 +197,14 @@ object BlockSynchronizer {
       getBlock: GetBlock[F, A]
   )(implicit
       storeRunner: KVStoreRunner[F, N]
-  ): Resource[F, BlockSynchronizer[F, N, A]] =
+  ): F[BlockSynchronizer[F, N, A]] =
     for {
-      fiberMap      <- FiberMap[F, A#PKey]()
-      semaphore     <- Resource.liftF(Semaphore[F](1))
-      inMemoryStore <- Resource.liftF(InMemoryKVStore[F, N])
+      semaphore     <- Semaphore[F](1)
+      inMemoryStore <- InMemoryKVStore[F, N]
       synchronizer = new BlockSynchronizer[F, N, A](
         blockStorage,
         getBlock,
         inMemoryStore,
-        fiberMap,
         semaphore
       )
     } yield synchronizer

@@ -148,7 +148,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
         // If the same leader is sending us newer proposals, we can ignore the
         // previous pepared blocks - they are either part of the new Q.C.,
         // in which case they don't need to be validated, or they have not
-        // gathered enough votes, and been superceeded by a new proposal.
+        // gathered enough votes, and been superseded by a new proposal.
         syncFiberMap.cancelQueue(sender) >>
           syncFiberMap
             .submit(sender) {
@@ -201,8 +201,10 @@ object SyncService {
         syncFiberMap,
         rpcTracker
       )
-      blockSync <- BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
-      _         <- Concurrent[F].background(service.processNetworkMessages)
-      _         <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
+      blockSync <- Resource.liftF {
+        BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
+      }
+      _ <- Concurrent[F].background(service.processNetworkMessages)
+      _ <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
     } yield service
 }
