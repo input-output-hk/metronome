@@ -2,6 +2,7 @@ package io.iohk.metronome.hotstuff.service.sync
 
 import cats.implicits._
 import cats.effect.{Sync, Timer, Resource, Concurrent, ContextShift}
+import cats.effect.concurrent.Semaphore
 import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -33,6 +34,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     getBlock: BlockSynchronizer.GetBlock[F, A],
     inMemoryStore: KVStoreRunner[F, N],
     fiberMap: FiberMap[F, A#PKey],
+    semaphore: Semaphore[F],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
 
@@ -49,23 +51,34 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     // Only initiating one download from a given peer, so even if we try to sync
     // an overlapping path, we don't end up asking the same block multiple times
     // and re-inserting it into the memory store if another download removed it.
-    fiberMap.submit(sender) {
-      download(sender, quorumCertificate.blockHash)
-    } >>
-      persist(quorumCertificate.blockHash)
+    fiberMap
+      .submit(sender) {
+        download(sender, quorumCertificate.blockHash, Nil)
+      }
+      .flatten
+      .flatMap(persist(quorumCertificate.blockHash, _))
 
-  /** Download a block and all of its ancestors into the in-memory block store. */
+  /** Download a block and all of its ancestors into the in-memory block store.
+    *
+    * Returns the path from the greatest ancestor that had to be downloaded
+    * to the originally requested block, so that we can persist them in that order.
+    *
+    * The path is maintained separately from the in-memory store in case another
+    * ongoing download would re-insert something on a path already partially removed
+    * resulting in a forest that cannot be traversed fully.
+    */
   private def download(
       from: A#PKey,
-      blockHash: A#Hash
-  ): F[Unit] = {
+      blockHash: A#Hash,
+      path: List[A#Hash]
+  ): F[List[A#Hash]] = {
     storeRunner
       .runReadOnly {
         blockStorage.contains(blockHash)
       }
       .flatMap {
         case true =>
-          ().pure[F]
+          path.pure[F]
 
         case false =>
           inMemoryStore
@@ -74,7 +87,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
             }
             .flatMap {
               case Some(block) =>
-                downloadParent(from, block)
+                downloadParent(from, block, path)
 
               case None =>
                 getAndValidateBlock(from, blockHash)
@@ -82,12 +95,12 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
                     case Some(block) =>
                       inMemoryStore.runReadWrite {
                         blockStorage.put(block)
-                      } >> downloadParent(from, block)
+                      } >> downloadParent(from, block, path)
 
                     case None =>
                       // TODO: Trace.
                       Timer[F].sleep(retryTimeout) >>
-                        download(from, blockHash)
+                        download(from, blockHash, path)
                   }
             }
       }
@@ -95,9 +108,13 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
 
   private def downloadParent(
       from: A#PKey,
-      block: A#Block
-  ): F[Unit] =
-    download(from, Block[A].parentBlockHash(block))
+      block: A#Block,
+      path: List[A#Hash]
+  ): F[List[A#Hash]] = {
+    val blockHash       = Block[A].blockHash(block)
+    val parentBlockHash = Block[A].parentBlockHash(block)
+    download(from, parentBlockHash, blockHash :: path)
+  }
 
   /** Try downloading the block from the source and perform basic content validation. */
   private def getAndValidateBlock(
@@ -111,19 +128,31 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       }
     }
 
-  /** Persist the path that leads from the its greatest ancestor in the
-    * in-memory tree to the given block hash.
+  /** See how far we can go in memory from the original block hash we asked for,
+    * which indicates the blocks that no concurrent download has persisted yet,
+    * then persist the rest.
+    *
+    * Only doing oine persist operation at a time to make sure there's no competition
+    * in the insertion order of the path elements among concurrent downloads.
     */
-  private def persist(blockHash: A#Hash): F[Unit] =
-    inMemoryStore.runReadOnly {
-      blockStorage.getPathFromRoot(blockHash)
-    } flatMap { path =>
-      persist(path)
+  private def persist(
+      blockHash: A#Hash,
+      path: List[A#Hash]
+  ): F[Unit] =
+    semaphore.withPermit {
+      inMemoryStore
+        .runReadOnly {
+          blockStorage.getPathFromRoot(blockHash).map(_.toSet)
+        }
+        .flatMap { unpersisted =>
+          persist(path, unpersisted)
+        }
     }
 
   /** Move the blocks on the path from memory to persistent storage. */
   private def persist(
-      path: List[A#Hash]
+      path: List[A#Hash],
+      unpersisted: Set[A#Hash]
   ): F[Unit] =
     path match {
       case Nil =>
@@ -141,16 +170,17 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
             } yield maybeBlock
           }
           .flatMap {
-            case None =>
+            case Some(block) if unpersisted(blockHash) =>
+              storeRunner
+                .runReadWrite {
+                  blockStorage.put(block)
+                }
+            case _ =>
               // Another download has already persisted it.
               ().pure[F]
 
-            case Some(block) =>
-              storeRunner.runReadWrite {
-                blockStorage.put(block)
-              }
           } >>
-          persist(rest)
+          persist(rest, unpersisted)
     }
 }
 
@@ -168,12 +198,14 @@ object BlockSynchronizer {
   ): Resource[F, BlockSynchronizer[F, N, A]] =
     for {
       fiberMap      <- FiberMap[F, A#PKey]()
+      semaphore     <- Resource.liftF(Semaphore[F](1))
       inMemoryStore <- Resource.liftF(InMemoryKVStore[F, N])
       synchronizer = new BlockSynchronizer[F, N, A](
         blockStorage,
         getBlock,
         inMemoryStore,
-        fiberMap
+        fiberMap,
+        semaphore
       )
     } yield synchronizer
 }
