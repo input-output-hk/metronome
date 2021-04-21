@@ -121,8 +121,6 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
           }
 
       case response: SyncMessage.Response =>
-        // TODO (PM-3063): Hand over to view synchronisation.
-        // TODO (PM-3134): Hand over to block synchronisation.
         rpcTracker.complete(response).flatMap { ok =>
           tracers.responseIgnored(response).whenA(!ok)
         }
@@ -142,25 +140,34 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       blockSynchronizer: BlockSynchronizer[F, N, A]
   ): F[Unit] = {
     blockSyncPipe.receive
-      .mapEval[Unit] { case request @ BlockSyncPipe.Request(sender, prepare) =>
-        // It is enough to respond to the last block positively, it will indicate
-        // that the whole range can be executed later (at that point from storage).
-        // If the same leader is sending us newer proposals, we can ignore the
-        // previous pepared blocks - they are either part of the new Q.C.,
-        // in which case they don't need to be validated, or they have not
-        // gathered enough votes, and been superseded by a new proposal.
-        syncFiberMap.cancelQueue(sender) >>
-          syncFiberMap
-            .submit(sender) {
-              for {
-                _       <- blockSynchronizer.sync(sender, prepare.highQC)
-                isValid <- validateBlock(prepare.block)
-                _ <- blockSyncPipe.send(
-                  BlockSyncPipe.Response(request, isValid)
-                )
-              } yield ()
-            }
-            .void
+      .mapEval[Unit] {
+        // TODO (PM-3063): Change `BlockSyncPipe` to just `SyncPipe` and add
+        // ViewState sync requests which poll the fedreation for the latest
+        // Commit Q.C. and jump to it. When that signal comes, cancel the
+        // `syncFiberMap`, discard the `blockSynchronizer` and move over to
+        // state syncing, then create a new new block synchronizer and resume.
+        // For this, change the input of this method to a `F[BlockSynchronizer[F,N,A]]`
+        // and call some mutually recursive method representing different states:
+
+        case request @ BlockSyncPipe.Request(sender, prepare) =>
+          // It is enough to respond to the last block positively, it will indicate
+          // that the whole range can be executed later (at that point from storage).
+          // If the same leader is sending us newer proposals, we can ignore the
+          // previous pepared blocks - they are either part of the new Q.C.,
+          // in which case they don't need to be validated, or they have not
+          // gathered enough votes, and been superseded by a new proposal.
+          syncFiberMap.cancelQueue(sender) >>
+            syncFiberMap
+              .submit(sender) {
+                for {
+                  _       <- blockSynchronizer.sync(sender, prepare.highQC)
+                  isValid <- validateBlock(prepare.block)
+                  _ <- blockSyncPipe.send(
+                    BlockSyncPipe.Response(request, isValid)
+                  )
+                } yield ()
+              }
+              .void
       }
       .completedL
   }
