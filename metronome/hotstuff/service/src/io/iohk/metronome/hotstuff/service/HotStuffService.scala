@@ -12,7 +12,10 @@ import io.iohk.metronome.hotstuff.service.messages.{
   SyncMessage
 }
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
-import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
+}
 import io.iohk.metronome.hotstuff.service.tracing.{
   ConsensusTracers,
   SyncTracers
@@ -26,6 +29,7 @@ object HotStuffService {
       publicKey: A#PKey,
       network: Network[F, A, HotStuffMessage[A]],
       blockStorage: BlockStorage[N, A],
+      viewStateStorage: ViewStateStorage[N, A],
       initState: ProtocolState[A]
   )(implicit
       consensusTracers: ConsensusTracers[F, A],
@@ -53,6 +57,7 @@ object HotStuffService {
         publicKey,
         consensusNetwork,
         blockStorage,
+        viewStateStorage,
         blockSyncPipe.left,
         initState
       )
