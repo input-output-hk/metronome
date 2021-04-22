@@ -3,7 +3,6 @@ package io.iohk.metronome.hotstuff.service.storage
 import cats.implicits._
 import io.iohk.metronome.storage.{KVCollection, KVStoreState}
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, Block => BlockOps}
-import java.util.UUID
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.{all, forAll, propBoolean}
@@ -17,22 +16,22 @@ object BlockStorageProps extends Properties("BlockStorage") {
     def isGenesis = parentId.isEmpty
   }
 
-  object TestAggreement extends Agreement {
+  object TestAgreement extends Agreement {
     type Block = TestBlock
     type Hash  = String
     type PSig  = Nothing
-    type GSig  = Nothing
-    type PKey  = Nothing
+    type GSig  = Unit
+    type PKey  = Int
     type SKey  = Nothing
 
-    implicit val block = new BlockOps[TestAggreement] {
+    implicit val block = new BlockOps[TestAgreement] {
       override def blockHash(b: TestBlock)       = b.id
       override def parentBlockHash(b: TestBlock) = b.parentId
       override def isValid(b: Block)             = true
     }
   }
-  type TestAggreement = TestAggreement.type
-  type Hash           = TestAggreement.Hash
+  type TestAgreement = TestAgreement.type
+  type Hash          = TestAgreement.Hash
 
   implicit def `Codec[Set[T]]`[T: Codec] =
     implicitly[Codec[List[T]]].xmap[Set[T]](_.toSet, _.toList)
@@ -45,7 +44,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
   }
 
   object TestBlockStorage
-      extends BlockStorage[Namespace, TestAggreement](
+      extends BlockStorage[Namespace, TestAgreement](
         new KVCollection[Namespace, Hash, TestBlock](Namespace.Blocks),
         new KVCollection[Namespace, Hash, Hash](Namespace.BlockToParent),
         new KVCollection[Namespace, Hash, Set[Hash]](Namespace.BlockToChildren)
@@ -96,7 +95,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
   }
 
   def genBlockId: Gen[Hash] =
-    Gen.delay(UUID.randomUUID().toString)
+    Gen.uuid.map(_.toString)
 
   /** Generate a block with a given parent, using the next available ID. */
   def genBlock(parentId: Hash): Gen[TestBlock] =
