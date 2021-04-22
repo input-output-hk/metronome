@@ -8,12 +8,21 @@ sealed trait SyncEvent[+A <: Agreement]
 object SyncEvent {
 
   /** A federation member is sending us so many requests that its work queue is full. */
-  case class QueueFull[A <: Agreement](publicKey: A#PKey) extends SyncEvent[A]
+  case class QueueFull[A <: Agreement](
+      sender: A#PKey
+  ) extends SyncEvent[A]
+
+  /** A request we sent couldn't be matched with a response in time. */
+  case class RequestTimeout[A <: Agreement](
+      recipient: A#PKey,
+      request: SyncMessage[A] with SyncMessage.Request
+  ) extends SyncEvent[A]
 
   /** A response was ignored either because the request ID didn't match, or it already timed out,
     * or the response type didn't match the expected one based on the request.
     */
   case class ResponseIgnored[A <: Agreement](
+      sender: A#PKey,
       response: SyncMessage[A] with SyncMessage.Response
   ) extends SyncEvent[A]
 
