@@ -134,7 +134,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     * which indicates the blocks that no concurrent download has persisted yet,
     * then persist the rest.
     *
-    * Only doing oine persist operation at a time to make sure there's no competition
+    * Only doing oinepersist operation at a time to make sure there's no competition
     * in the insertion order of the path elements among concurrent downloads.
     */
   private def persist(

@@ -20,8 +20,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     TestBlockStorage,
     TestKVStore,
     Namespace,
-    genNonEmptyBlockTree,
-    genBlockTree
+    genNonEmptyBlockTree
   }
 
   // Insert the prefix three into "persistent" storage,
@@ -59,16 +58,12 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       val isLost    = Random.nextDouble() < 0.1
       val isCorrupt = Random.nextDouble() < 0.1
 
-      val block = if (isCorrupt) {
-        blockMap(blockHash).copy(id = TestFixture.CorruptId)
-      } else {
-        blockMap(blockHash)
-      }
-
       if (isLost) {
         Task.pure(None).delayResult(timeout.millis)
       } else {
-        Task.pure(Some(block)).delayResult(delay.millis)
+        val block  = blockMap(blockHash)
+        val result = if (isCorrupt) corrupt(block) else block
+        Task.pure(Some(result)).delayResult(delay.millis)
       }
     }
 
@@ -85,21 +80,23 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       import monix.execution.Scheduler.Implicits.global
       Semaphore[Task](1).runSyncUnsafe()
     }
+
+    def corrupt(block: TestBlock)   = block.copy(id = "corrupt")
+    def isCorrupt(block: TestBlock) = block.id == "corrupt"
   }
   object TestFixture {
-    val CorruptId = "corrupt"
 
     implicit val arb: Arbitrary[TestFixture] = Arbitrary {
       for {
         ancestorTree <- genNonEmptyBlockTree
         leaf = ancestorTree.last
-        descendantTree <- genBlockTree(parentId = leaf.id)
+        descendantTree <- genNonEmptyBlockTree(parentId = leaf.id)
 
         federationSize <- Gen.choose(1, 10)
         federationKeys = Range(0, federationSize).toVector
 
         existingPrepares <- Gen.someOf(ancestorTree)
-        newPrepares      <- Gen.someOf(descendantTree)
+        newPrepares      <- Gen.atLeastOne(descendantTree)
 
         prepares = (existingPrepares ++ newPrepares).toList
         proposerKeys <- Gen.listOfN(prepares.size, Gen.oneOf(federationKeys))
@@ -136,7 +133,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         },
         "all uncorrupted" |: persistent(Namespace.Blocks).forall {
           case (blockHash, block: TestBlock) =>
-            blockHash == block.id && blockHash != TestFixture.CorruptId
+            blockHash == block.id && !fixture.isCorrupt(block)
         }
       )
     }
