@@ -6,8 +6,8 @@ import monix.tail.Iterant
 import monix.catnap.ConcurrentQueue
 
 /** A `Pipe` is a connection between two components where
-  * messages of type `L` are going from left to right, and
-  * message of type `R` are going from right to left.
+  * messages of type `L` are going from left to right and
+  * messages of type `R` are going from right to left.
   */
 trait Pipe[F[_], L, R] {
   type Left  = Pipe.Side[F, L, R]

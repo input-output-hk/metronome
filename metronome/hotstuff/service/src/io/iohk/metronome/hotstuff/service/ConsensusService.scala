@@ -165,7 +165,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       BlockSyncPipe.Request(sender, prepare)
     )
 
-  /** Process the synchronization. result queue. */
+  /** Process the synchronization result queue. */
   private def processBlockSyncPipe: F[Unit] =
     blockSyncPipe.receive
       .mapEval[Unit] { case BlockSyncPipe.Response(request, isValid) =>

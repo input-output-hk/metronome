@@ -22,7 +22,7 @@ object ViewStateStorageProps extends Properties("ViewStateStorage") {
 }
 
 object ViewStateStorageCommands extends Commands {
-  object TestAggreement extends Agreement {
+  object TestAgreement extends Agreement {
     type Block = Nothing
     type Hash  = String
     type PSig  = Unit
@@ -30,13 +30,13 @@ object ViewStateStorageCommands extends Commands {
     type PKey  = Nothing
     type SKey  = Nothing
   }
-  type TestAggreement = TestAggreement.type
+  type TestAgreement = TestAgreement.type
 
   type Namespace = String
 
   object TestKVStoreState extends KVStoreState[Namespace]
 
-  type TestViewStateStorage = ViewStateStorage[Namespace, TestAggreement]
+  type TestViewStateStorage = ViewStateStorage[Namespace, TestAgreement]
 
   class StorageWrapper(
       viewStateStorage: TestViewStateStorage,
@@ -53,16 +53,17 @@ object ViewStateStorageCommands extends Commands {
     def read[A](
         f: TestViewStateStorage => KVStoreRead[Namespace, A]
     ): A = {
+      val b = scodec.bits.ByteVector.empty
       TestKVStoreState.compile(f(viewStateStorage)).run(store)
     }
   }
 
-  type State = ViewStateStorage.Bundle[TestAggreement]
+  type State = ViewStateStorage.Bundle[TestAgreement]
   type Sut   = StorageWrapper
 
   val genesisState = ViewStateStorage.Bundle
-    .fromGenesisQC[TestAggreement] {
-      QuorumCertificate[TestAggreement](
+    .fromGenesisQC[TestAgreement] {
+      QuorumCertificate[TestAgreement](
         Phase.Prepare,
         ViewNumber(1),
         "",
@@ -89,7 +90,7 @@ object ViewStateStorageCommands extends Commands {
 
   override def newSut(state: State): Sut = {
     val init = TestKVStoreState.compile(
-      ViewStateStorage[Namespace, TestAggreement]("test-namespace", state)
+      ViewStateStorage[Namespace, TestAgreement]("test-namespace", state)
     )
     val (store, storage) = init.run(Map.empty).value
     new StorageWrapper(storage, store)
@@ -116,9 +117,9 @@ object ViewStateStorageCommands extends Commands {
   def genSetQuorumCertificate(state: State) =
     for {
       p <- Gen.oneOf(Phase.Prepare, Phase.PreCommit, Phase.Commit)
-      h <- arbitrary[TestAggreement.Hash]
-      s <- arbitrary[TestAggreement.GSig]
-      qc = QuorumCertificate[TestAggreement](
+      h <- arbitrary[TestAgreement.Hash]
+      s <- arbitrary[TestAgreement.GSig]
+      qc = QuorumCertificate[TestAgreement](
         p,
         state.viewNumber,
         h,
@@ -147,7 +148,7 @@ object ViewStateStorageCommands extends Commands {
     override def postCondition(state: State, success: Boolean): Prop = success
   }
 
-  case class SetQuorumCertificateCommand(qc: QuorumCertificate[TestAggreement])
+  case class SetQuorumCertificateCommand(qc: QuorumCertificate[TestAgreement])
       extends UnitCommand {
     override def run(sut: Sut): Result =
       sut.write(_.setQuorumCertificate(qc))
@@ -165,7 +166,7 @@ object ViewStateStorageCommands extends Commands {
     override def postCondition(state: State, success: Boolean): Prop = success
   }
 
-  case class SetLastExecutedBlockHashCommand(blockHash: TestAggreement.Hash)
+  case class SetLastExecutedBlockHashCommand(blockHash: TestAgreement.Hash)
       extends UnitCommand {
     override def run(sut: Sut): Result =
       sut.write(_.setLastExecutedBlockHash(blockHash))
@@ -182,7 +183,7 @@ object ViewStateStorageCommands extends Commands {
   }
 
   case object GetBundleCommand extends Command {
-    type Result = ViewStateStorage.Bundle[TestAggreement]
+    type Result = ViewStateStorage.Bundle[TestAgreement]
 
     override def run(sut: Sut): Result               = sut.read(_.getBundle)
     override def nextState(state: State): State      = state
