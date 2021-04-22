@@ -126,10 +126,13 @@ object BlockStorageProps extends Properties("BlockStorage") {
   def genBlockTree: Gen[List[TestBlock]] =
     genBlockTree(parentId = "")
 
-  def genNonEmptyBlockTree: Gen[List[TestBlock]] = for {
-    genesis <- genBlock(parentId = "")
+  def genNonEmptyBlockTree(parentId: Hash): Gen[List[TestBlock]] = for {
+    genesis <- genBlock(parentId = parentId)
     tree    <- genBlockTree(genesis.id)
   } yield genesis +: tree
+
+  def genNonEmptyBlockTree: Gen[List[TestBlock]] =
+    genNonEmptyBlockTree(parentId = "")
 
   case class TestData(
       tree: List[TestBlock],
