@@ -3,7 +3,11 @@ package io.iohk.metronome.hotstuff.service
 import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import io.iohk.metronome.core.fibers.FiberMap
-import io.iohk.metronome.core.messages.RPCTracker
+import io.iohk.metronome.core.messages.{
+  RPCMessageCompanion,
+  RPCPair,
+  RPCTracker
+}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
@@ -18,6 +22,7 @@ import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
+import scala.reflect.ClassTag
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -40,32 +45,36 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
   import SyncMessage._
 
-  /** Request a block from a peer.
-    *
-    * Returns `None` if we're not connected or the request times out.
-    */
+  /** Request a block from a peer. */
   private def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
     val request = GetBlockRequest(RequestId(), blockHash)
-    for {
-      join <- rpcTracker.register(request)
-      _    <- network.sendMessage(from, request)
-      res  <- join
-      _    <- tracers.requestTimeout(from -> request).whenA(res.isEmpty)
-    } yield res.map(_.block)
+    sendRequest(from, request) map (_.map(_.block))
   }
 
-  /** Request the status of a peer.
+  /** Request the status of a peer. */
+  private def getStatus(from: A#PKey): F[Option[Status[A]]] = {
+    val request = GetStatusRequest[A](RequestId())
+    sendRequest(from, request) map (_.map(_.status))
+  }
+
+  /** Send a request to the peer and track the response.
     *
     * Returns `None` if we're not connected or the request times out.
     */
-  private def getStatus(from: A#PKey): F[Option[Status[A]]] = {
-    val request = GetStatusRequest[A](RequestId())
+  private def sendRequest[
+      Req <: RPCMessageCompanion#Request,
+      Res <: RPCMessageCompanion#Response
+  ](from: A#PKey, request: Req)(implicit
+      ev1: Req <:< SyncMessage[A] with SyncMessage.Request,
+      ev2: RPCPair.Aux[Req, Res],
+      ct: ClassTag[Res]
+  ): F[Option[Res]] = {
     for {
-      join <- rpcTracker.register(request)
+      join <- rpcTracker.register[Req, Res](request)
       _    <- network.sendMessage(from, request)
       res  <- join
       _    <- tracers.requestTimeout(from -> request).whenA(res.isEmpty)
-    } yield res.map(_.status)
+    } yield res
   }
 
   /** Process incoming network messages. */
@@ -138,7 +147,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     * These are coming from the `ConsensusService` asking for a
     * `Prepare` message to be synchronised with the sender.
     */
-  def processBlockSyncPipe(
+  private def processBlockSyncPipe(
       blockSynchronizer: BlockSynchronizer[F, N, A]
   ): F[Unit] = {
     blockSyncPipe.receive
