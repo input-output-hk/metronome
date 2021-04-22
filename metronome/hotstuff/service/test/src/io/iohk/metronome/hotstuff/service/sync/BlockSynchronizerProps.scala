@@ -49,21 +49,25 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       block.id -> block
     }.toMap
 
+    val downloadedRef = Ref.unsafe[Task, Set[TestAgreement.Hash]](Set.empty)
+
     def getBlock(
         from: TestAgreement.PKey,
         blockHash: TestAgreement.Hash
     ): Task[Option[TestAgreement.Block]] = {
       val timeout   = 5000
-      val delay     = Random.nextDouble() * 1000
-      val isLost    = Random.nextDouble() < 0.1
-      val isCorrupt = Random.nextDouble() < 0.1
+      val delay     = Random.nextDouble() * 3000
+      val isLost    = Random.nextDouble() < 0.2
+      val isCorrupt = Random.nextDouble() < 0.2
 
       if (isLost) {
         Task.pure(None).delayResult(timeout.millis)
       } else {
         val block  = blockMap(blockHash)
         val result = if (isCorrupt) corrupt(block) else block
-        Task.pure(Some(result)).delayResult(delay.millis)
+        Task {
+          downloadedRef.update(_ + blockHash)
+        }.as(Some(result)).delayResult(delay.millis)
       }
     }
 
@@ -119,10 +123,11 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     implicit val scheduler = TestScheduler()
 
     val test = for {
-      fibers <- Task.parTraverse(fixture.requests) { case (publicKey, qc) =>
+      fibers <- Task.traverse(fixture.requests) { case (publicKey, qc) =>
         fixture.synchronizer.sync(publicKey, qc).start
       }
       _          <- Task.traverse(fibers)(_.join)
+      downloaded <- fixture.downloadedRef.get
       persistent <- fixture.persistentRef.get
       ephemeral  <- fixture.ephemeralRef.get
     } yield {
@@ -134,6 +139,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         "all uncorrupted" |: persistent(Namespace.Blocks).forall {
           case (blockHash, block: TestBlock) =>
             blockHash == block.id && !fixture.isCorrupt(block)
+        },
+        "not download already persisted" |: fixture.ancestorTree.forall {
+          block => !downloaded(block.id)
         }
       )
     }
@@ -150,14 +158,14 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   property("no forest") = forAll(
     for {
       fixture  <- arbitrary[TestFixture]
-      duration <- arbitrary[Int].map(_.seconds)
+      duration <- Gen.choose(1, fixture.requests.size).map(_ * 500.millis)
     } yield (fixture, duration)
   ) { case (fixture: TestFixture, duration: FiniteDuration) =>
     implicit val scheduler = TestScheduler()
 
     // Schedule the downloads in the background.
     Task
-      .parTraverse(fixture.requests) { case (publicKey, qc) =>
+      .traverse(fixture.requests) { case (publicKey, qc) =>
         fixture.synchronizer.sync(publicKey, qc).startAndForget
       }
       .runAsyncAndForget
@@ -170,9 +178,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       persistent <- fixture.persistentRef.get
     } yield {
       persistent(Namespace.Blocks).forall { case (_, block: TestBlock) =>
-        block.parentId.isEmpty || persistent(Namespace.Blocks).contains(
-          block.parentId
-        )
+        block.parentId.isEmpty ||
+          persistent(Namespace.Blocks).contains(block.parentId)
       }
     }
 
