@@ -50,6 +50,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       join <- rpcTracker.register(request)
       _    <- network.sendMessage(from, request)
       res  <- join
+      _    <- tracers.requestTimeout(from -> request).whenA(res.isEmpty)
     } yield res.map(_.block)
   }
 
@@ -63,6 +64,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
       join <- rpcTracker.register(request)
       _    <- network.sendMessage(from, request)
       res  <- join
+      _    <- tracers.requestTimeout(from -> request).whenA(res.isEmpty)
     } yield res.map(_.status)
   }
 
@@ -122,7 +124,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
 
       case response: SyncMessage.Response =>
         rpcTracker.complete(response).flatMap { ok =>
-          tracers.responseIgnored(response).whenA(!ok)
+          tracers.responseIgnored(from -> response).whenA(!ok)
         }
     }
 

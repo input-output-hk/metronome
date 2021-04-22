@@ -100,7 +100,6 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
                       } >> downloadParent(from, block, path)
 
                     case None =>
-                      // TODO: Trace.
                       Timer[F].sleep(retryTimeout) >>
                         download(from, blockHash, path)
                   }
