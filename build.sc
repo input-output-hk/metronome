@@ -314,7 +314,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           checkpointing.interpreter
         )
 
-      object test extends TestModule
+      object test extends TestModule {
+        override def moduleDeps: Seq[JavaModule] =
+          super.moduleDeps ++ Seq(checkpointing.models.test)
+      }
     }
 
     /** Executable application for running HotStuff and checkpointing as a stand-alone process,

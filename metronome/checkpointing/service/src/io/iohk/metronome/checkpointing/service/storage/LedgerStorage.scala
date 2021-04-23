@@ -27,11 +27,12 @@ class LedgerStorage[N](
     ledgerMetaNamespace: N,
     maxHistorySize: Int
 )(implicit codecH: Codec[Ledger.Hash]) {
+  require(maxHistorySize > 0, "Has to store at least one ledger.")
+
   import LedgerStorage._
   import scodec.codecs.implicits.implicitIntCodec
 
-  private implicit val kvn  = KVStore.instance[N]
-  private implicit val kvrn = KVStoreRead.instance[N]
+  private implicit val kvn = KVStore.instance[N]
 
   private def getMetaData[V: Decoder](key: MetaKey[V]) =
     KVStore[N].get[MetaKey[V], V](ledgerMetaNamespace, key)
@@ -39,6 +40,7 @@ class LedgerStorage[N](
   private def putMetaData[V: Encoder](key: MetaKey[V], value: V) =
     KVStore[N].put(ledgerMetaNamespace, key, value)
 
+  /** Return the index of the next bucket to write the data into. */
   private def nextIndex(maybeIndex: Option[Int]): Int =
     maybeIndex.fold(0)(index => (index + 1) % maxHistorySize)
 
@@ -77,11 +79,13 @@ object LedgerStorage {
   /** Keys for different pieces of meta-data stored under a single namespace. */
   sealed trait MetaKey[V]
 
-  /** Key under which the current bucket index of the ring buffer is stored. */
+  /** Key under which the last written index of the ring buffer is stored. */
   case object BucketIndex extends MetaKey[Int]
 
-  /** Contents of a bucket by index. */
-  case class Bucket(index: Int) extends MetaKey[Ledger.Hash]
+  /** Contents of a ring buffer bucket by index. */
+  case class Bucket(index: Int) extends MetaKey[Ledger.Hash] {
+    assert(index >= 0)
+  }
 
   implicit val metaKeyEncoder: Encoder[MetaKey[_]] =
     scodec.codecs.implicits.implicitIntCodec.asEncoder.contramap {
