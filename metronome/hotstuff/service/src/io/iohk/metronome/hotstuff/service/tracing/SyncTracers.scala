@@ -4,11 +4,13 @@ import cats.implicits._
 import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
+import io.iohk.metronome.hotstuff.service.Status
 
 case class SyncTracers[F[_], A <: Agreement](
     queueFull: Tracer[F, A#PKey],
     requestTimeout: Tracer[F, SyncTracers.Request[A]],
     responseIgnored: Tracer[F, SyncTracers.Response[A]],
+    statusPoll: Tracer[F, SyncTracers.Statuses[A]],
     error: Tracer[F, Throwable]
 )
 
@@ -20,6 +22,9 @@ object SyncTracers {
 
   type Response[A <: Agreement] =
     (A#PKey, SyncMessage[A] with SyncMessage.Response)
+
+  type Statuses[A <: Agreement] =
+    (IndexedSeq[A#PKey], IndexedSeq[Option[Status[A]]])
 
   def apply[F[_], A <: Agreement](
       tracer: Tracer[F, SyncEvent[A]]
@@ -33,6 +38,10 @@ object SyncTracers {
       responseIgnored = tracer
         .contramap[Response[A]] { case (sender, response) =>
           ResponseIgnored(sender, response)
+        },
+      statusPoll = tracer
+        .contramap[Statuses[A]] { case (publicKeys, maybeStatuses) =>
+          StatusPoll[A]((publicKeys zip maybeStatuses).toMap)
         },
       error = tracer.contramap[Throwable](Error(_))
     )

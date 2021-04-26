@@ -2,6 +2,7 @@ package io.iohk.metronome.hotstuff.service.tracing
 
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
+import io.iohk.metronome.hotstuff.service.Status
 
 sealed trait SyncEvent[+A <: Agreement]
 
@@ -24,6 +25,13 @@ object SyncEvent {
   case class ResponseIgnored[A <: Agreement](
       sender: A#PKey,
       response: SyncMessage[A] with SyncMessage.Response
+  ) extends SyncEvent[A]
+
+  /** Performed a poll for `Status` across the federation. Federation members that
+    * didn't respond in time are represented by `None` in the results.
+    */
+  case class StatusPoll[A <: Agreement](
+      statuses: Map[A#PKey, Option[Status[A]]]
   ) extends SyncEvent[A]
 
   /** An unexpected error in one of the background tasks. */
