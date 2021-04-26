@@ -3,19 +3,24 @@ package io.iohk.metronome.hotstuff.service.sync
 import cats._
 import cats.implicits._
 import cats.effect.{Timer, Sync}
-import io.iohk.metronome.hotstuff.consensus.Federation
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
+import cats.data.NonEmptyVector
+import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Agreement,
+  Signing,
+  QuorumCertificate
+}
 import io.iohk.metronome.hotstuff.service.Status
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import scala.concurrent.duration._
-import cats.data.NonEmptyVector
+import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
 
 /** The job of the `ViewSynchronizer` is to ask the other federation members
   * what their status is and figure out a view number we should be using.
   * This is something we must do after startup, or if we have for some reason
   * fallen out of sync with the rest of the federation.
   */
-class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement](
+class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
     federation: Federation[A#PKey],
     getStatus: ViewSynchronizer.GetStatus[F, A],
     retryTimeout: FiniteDuration = 5.seconds
@@ -32,7 +37,7 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement](
     */
   def sync: F[Status[A]] = {
     federation.publicKeys.toVector
-      .parTraverse(getStatus)
+      .parTraverse(getAndValidateStatus)
       .flatMap { maybeStatuses =>
         tracers
           .statusPoll(federation.publicKeys -> maybeStatuses)
@@ -48,6 +53,29 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement](
           Timer[F].sleep(retryTimeout) >> sync
       }
   }
+
+  private def getAndValidateStatus(from: A#PKey): F[Option[Status[A]]] =
+    getStatus(from).flatMap { maybeStatus =>
+      maybeStatus.filterA { status =>
+        validate(from, status).fold(
+          tracers.invalidQC(_).as(false),
+          _ => true.pure[F]
+        )
+      }
+    }
+
+  private def validate(
+      from: A#PKey,
+      status: Status[A]
+  ): Either[ProtocolError.InvalidQuorumCertificate[A], Unit] =
+    List(status.prepareQC, status.commitQC).traverse(validate(from, _)).void
+
+  private def validate(from: A#PKey, qc: QuorumCertificate[A]) =
+    Either.cond(
+      Signing[A].validate(federation, qc),
+      (),
+      ProtocolError.InvalidQuorumCertificate(from, qc)
+    )
 }
 
 object ViewSynchronizer {
@@ -57,12 +85,17 @@ object ViewSynchronizer {
 
   def aggregateStatus[A <: Agreement](
       statuses: NonEmptyVector[Status[A]]
-  ): Status[A] =
+  ): Status[A] = {
+    val prepareQC = statuses.map(_.prepareQC).maximumBy(_.viewNumber)
+    val commitQC  = statuses.map(_.commitQC).maximumBy(_.viewNumber)
+    val viewNumber =
+      math.max(median(statuses.map(_.viewNumber)), prepareQC.viewNumber)
     Status(
-      viewNumber = median(statuses.map(_.viewNumber)),
-      prepareQC = statuses.map(_.prepareQC).maximumBy(_.viewNumber),
-      commitQC = statuses.map(_.commitQC).maximumBy(_.viewNumber)
+      viewNumber = ViewNumber(viewNumber),
+      prepareQC = prepareQC,
+      commitQC = commitQC
     )
+  }
 
   def median[T: Order](xs: NonEmptyVector[T]): T =
     xs.sorted.getUnsafe((xs.size / 2).toInt)

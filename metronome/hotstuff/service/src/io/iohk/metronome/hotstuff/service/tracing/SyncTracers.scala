@@ -2,7 +2,7 @@ package io.iohk.metronome.hotstuff.service.tracing
 
 import cats.implicits._
 import io.iohk.metronome.tracer.Tracer
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
+import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolError}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.Status
 
@@ -11,6 +11,7 @@ case class SyncTracers[F[_], A <: Agreement](
     requestTimeout: Tracer[F, SyncTracers.Request[A]],
     responseIgnored: Tracer[F, SyncTracers.Response[A]],
     statusPoll: Tracer[F, SyncTracers.Statuses[A]],
+    invalidQC: Tracer[F, ProtocolError.InvalidQuorumCertificate[A]],
     error: Tracer[F, Throwable]
 )
 
@@ -37,8 +38,16 @@ object SyncTracers {
         .contramap[Response[A]]((ResponseIgnored.apply[A] _).tupled),
       statusPoll = tracer
         .contramap[Statuses[A]] { case (publicKeys, maybeStatuses) =>
-          StatusPoll[A]((publicKeys zip maybeStatuses).toMap)
+          StatusPoll[A] {
+            (publicKeys zip maybeStatuses).toMap.collect {
+              case (key, Some(status)) => key -> status
+            }
+          }
         },
+      invalidQC = tracer
+        .contramap[ProtocolError.InvalidQuorumCertificate[A]](
+          InvalidStatusQuorumCertificate(_)
+        ),
       error = tracer.contramap[Throwable](Error(_))
     )
 }
