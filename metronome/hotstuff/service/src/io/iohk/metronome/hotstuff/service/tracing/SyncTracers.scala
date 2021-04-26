@@ -29,7 +29,7 @@ object SyncTracers {
     (IndexedSeq[A#PKey], IndexedSeq[Option[Validated[Status[A]]]])
 
   type StatusError[A <: Agreement] =
-    (Status[A], ProtocolError.InvalidQuorumCertificate[A])
+    (Status[A], ProtocolError.InvalidQuorumCertificate[A], String)
 
   def apply[F[_], A <: Agreement](
       tracer: Tracer[F, SyncEvent[A]]
@@ -48,9 +48,10 @@ object SyncTracers {
             }
           }
         },
-      invalidStatus = tracer.contramap[StatusError[A]] { case (status, error) =>
-        InvalidStatus(status, error)
-      },
+      invalidStatus =
+        tracer.contramap[StatusError[A]] { case (status, error, hint) =>
+          InvalidStatus(status, error, hint)
+        },
       error = tracer.contramap[Throwable](Error(_))
     )
 }

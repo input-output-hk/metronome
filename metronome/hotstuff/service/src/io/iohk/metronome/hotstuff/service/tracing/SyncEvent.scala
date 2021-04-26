@@ -40,7 +40,8 @@ object SyncEvent {
   /** A federation members sent a `Status` with invalid content. */
   case class InvalidStatus[A <: Agreement](
       status: Status[A],
-      error: ProtocolError.InvalidQuorumCertificate[A]
+      error: ProtocolError.InvalidQuorumCertificate[A],
+      hint: String
   ) extends SyncEvent[A]
 
   /** An unexpected error in one of the background tasks. */
