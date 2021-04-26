@@ -63,6 +63,7 @@ object HotStuffService {
       )
 
       syncService <- SyncService(
+        publicKey,
         syncNetwork,
         blockStorage,
         blockSyncPipe.right,

@@ -35,6 +35,7 @@ import scala.reflect.ClassTag
   * to send requests to the network.
   */
 class SyncService[F[_]: Sync, N, A <: Agreement](
+    publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
     blockStorage: BlockStorage[N, A],
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
@@ -45,6 +46,11 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
   import SyncMessage._
 
+  private def protocolStatus: F[Status[A]] =
+    getState.map { state =>
+      Status(state.viewNumber, state.prepareQC, state.commitQC)
+    }
+
   /** Request a block from a peer. */
   private def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
     val request = GetBlockRequest(RequestId(), blockHash)
@@ -53,8 +59,12 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
 
   /** Request the status of a peer. */
   private def getStatus(from: A#PKey): F[Option[Status[A]]] = {
-    val request = GetStatusRequest[A](RequestId())
-    sendRequest(from, request) map (_.map(_.status))
+    if (from == publicKey) {
+      protocolStatus.map(_.some)
+    } else {
+      val request = GetStatusRequest[A](RequestId())
+      sendRequest(from, request) map (_.map(_.status))
+    }
   }
 
   /** Send a request to the peer and track the response.
@@ -106,10 +116,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
   ): F[Unit] = {
     val process = message match {
       case GetStatusRequest(requestId) =>
-        getState.flatMap { state =>
-          val status =
-            Status(state.viewNumber, state.prepareQC, state.commitQC)
-
+        protocolStatus.flatMap { status =>
           network.sendMessage(
             from,
             GetStatusResponse(requestId, status)
@@ -194,6 +201,7 @@ object SyncService {
     * released.
     */
   def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
+      publicKey: A#PKey,
       network: Network[F, A, SyncMessage[A]],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Right,
@@ -211,6 +219,7 @@ object SyncService {
         RPCTracker[F, SyncMessage[A]](timeout)
       }
       service = new SyncService(
+        publicKey,
         network,
         blockStorage,
         blockSyncPipe,
