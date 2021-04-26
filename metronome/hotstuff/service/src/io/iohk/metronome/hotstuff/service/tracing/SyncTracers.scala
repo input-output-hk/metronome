@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.service.tracing
 
 import cats.implicits._
+import io.iohk.metronome.core.Validated
 import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolError}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
@@ -11,7 +12,7 @@ case class SyncTracers[F[_], A <: Agreement](
     requestTimeout: Tracer[F, SyncTracers.Request[A]],
     responseIgnored: Tracer[F, SyncTracers.Response[A]],
     statusPoll: Tracer[F, SyncTracers.Statuses[A]],
-    invalidQC: Tracer[F, ProtocolError.InvalidQuorumCertificate[A]],
+    invalidStatus: Tracer[F, SyncTracers.StatusError[A]],
     error: Tracer[F, Throwable]
 )
 
@@ -25,7 +26,10 @@ object SyncTracers {
     (A#PKey, SyncMessage[A] with SyncMessage.Response)
 
   type Statuses[A <: Agreement] =
-    (IndexedSeq[A#PKey], IndexedSeq[Option[Status[A]]])
+    (IndexedSeq[A#PKey], IndexedSeq[Option[Validated[Status[A]]]])
+
+  type StatusError[A <: Agreement] =
+    (Status[A], ProtocolError.InvalidQuorumCertificate[A])
 
   def apply[F[_], A <: Agreement](
       tracer: Tracer[F, SyncEvent[A]]
@@ -48,10 +52,9 @@ object SyncTracers {
             }
           }
         },
-      invalidQC = tracer
-        .contramap[ProtocolError.InvalidQuorumCertificate[A]](
-          InvalidStatusQuorumCertificate(_)
-        ),
+      invalidStatus = tracer.contramap[StatusError[A]] { case (status, error) =>
+        InvalidStatus(status, error)
+      },
       error = tracer.contramap[Throwable](Error(_))
     )
 }

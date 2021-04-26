@@ -1,5 +1,6 @@
 package io.iohk.metronome.hotstuff.service.tracing
 
+import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolError}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.Status
@@ -32,11 +33,12 @@ object SyncEvent {
     * Only contains results for federation members that responded within the timeout.
     */
   case class StatusPoll[A <: Agreement](
-      statuses: Map[A#PKey, Status[A]]
+      statuses: Map[A#PKey, Validated[Status[A]]]
   ) extends SyncEvent[A]
 
-  /** A federation members sent a `Status` with an invalid Q.C. */
-  case class InvalidStatusQuorumCertificate[A <: Agreement](
+  /** A federation members sent a `Status` with invalid content. */
+  case class InvalidStatus[A <: Agreement](
+      status: Status[A],
       error: ProtocolError.InvalidQuorumCertificate[A]
   ) extends SyncEvent[A]
 
