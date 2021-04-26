@@ -252,7 +252,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           hotstuff.forensics
         )
 
-      object test extends TestModule
+      object test extends TestModule {
+        override def moduleDeps: Seq[JavaModule] =
+          super.moduleDeps ++ Seq(hotstuff.consensus.test)
+      }
     }
   }
 

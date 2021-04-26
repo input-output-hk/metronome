@@ -14,9 +14,9 @@ import scala.annotation.nowarn
 import scala.concurrent.duration._
 import scala.util.{Try, Failure, Success}
 
-object HotStuffProtocolProps extends Properties("Basic HotStuff") {
+object ProtocolStateProps extends Properties("Basic HotStuff") {
 
-  property("protocol") = HotStuffProtocolCommands.property()
+  property("protocol") = ProtocolStateCommands.property()
 
 }
 
@@ -26,7 +26,7 @@ object HotStuffProtocolProps extends Properties("Basic HotStuff") {
   * and invalid commands using `genCommand`. Each `Command`, has its individual post-condition
   * check comparing the model state to the actual protocol results.
   */
-object HotStuffProtocolCommands extends Commands {
+object ProtocolStateCommands extends Commands {
 
   case class TestBlock(blockHash: Int, parentBlockHash: Int, command: String)
 
@@ -71,12 +71,10 @@ object HotStuffProtocolCommands extends Commands {
         (phase, viewNumber, blockHash).hashCode
 
       private def isGenesis(
-          phase: VotingPhase,
           viewNumber: ViewNumber,
           blockHash: TestAgreement.Hash
       ): Boolean =
-        phase == genesisQC.phase &&
-          viewNumber == genesisQC.viewNumber &&
+        viewNumber == genesisQC.viewNumber &&
           blockHash == genesisQC.blockHash
 
       private def sign(
@@ -125,7 +123,7 @@ object HotStuffProtocolCommands extends Commands {
           viewNumber: ViewNumber,
           blockHash: TestAgreement.Hash
       ): Boolean = {
-        if (isGenesis(phase, viewNumber, blockHash)) {
+        if (isGenesis(viewNumber, blockHash)) {
           signature.sig.isEmpty
         } else {
           val h = hash(phase, viewNumber, blockHash)
