@@ -65,8 +65,8 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
 
       case Some(status) =>
         validate(from, status) match {
-          case Left(error) =>
-            tracers.invalidStatus(status, error).as(none)
+          case Left((error, hint)) =>
+            tracers.invalidStatus(status, error, hint).as(none)
           case Right(valid) =>
             valid.some.pure[F]
         }
@@ -75,44 +75,59 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
   private def validate(
       from: A#PKey,
       status: Status[A]
-  ): Either[ProtocolError.InvalidQuorumCertificate[A], Validated[Status[A]]] =
+  ): Either[
+    (ProtocolError.InvalidQuorumCertificate[A], ViewSynchronizer.Hint),
+    Validated[Status[A]]
+  ] =
     for {
       _ <- validateQC(from, status.prepareQC)(
         checkPhase(Phase.Prepare),
         checkSignature,
         checkVisible(status),
-        _.viewNumber >= status.commitQC.viewNumber
+        qc =>
+          check(
+            qc.viewNumber >= status.commitQC.viewNumber,
+            "Prepare Q.C. lower than Commit Q.C."
+          )
       )
       _ <- validateQC(from, status.commitQC)(
         checkPhase(Phase.Commit),
         checkSignature,
-        checkVisible(status),
-        _.viewNumber <= status.prepareQC.viewNumber
+        checkVisible(status)
       )
     } yield Validated[Status[A]](status)
 
+  private def check(cond: Boolean, hint: => String) =
+    if (cond) none else hint.some
+
   private def checkPhase(phase: Phase)(qc: QuorumCertificate[A]) =
-    phase == qc.phase
+    check(phase == qc.phase, s"Phase should be $phase.")
 
   private def checkSignature(qc: QuorumCertificate[A]) =
-    Signing[A].validate(federation, qc)
+    check(Signing[A].validate(federation, qc), "Invalid signature.")
 
   private def checkVisible(status: Status[A])(qc: QuorumCertificate[A]) =
-    status.viewNumber >= qc.viewNumber
+    check(
+      status.viewNumber >= qc.viewNumber,
+      "View number of status earlier than Q.C."
+    )
 
   private def validateQC(from: A#PKey, qc: QuorumCertificate[A])(
-      checks: (QuorumCertificate[A] => Boolean)*
+      checks: (QuorumCertificate[A] => Option[String])*
   ) =
     checks.toList.traverse { check =>
-      Either.cond(
-        check(qc),
-        (),
-        ProtocolError.InvalidQuorumCertificate(from, qc)
-      )
+      check(qc)
+        .map { hint =>
+          ProtocolError.InvalidQuorumCertificate(from, qc) -> hint
+        }
+        .toLeft(())
     }
 }
 
 object ViewSynchronizer {
+
+  /** Extra textual description for errors. */
+  type Hint = String
 
   /** Send a network request to get the status of a replica. */
   type GetStatus[F[_], A <: Agreement] = A#PKey => F[Option[Status[A]]]
