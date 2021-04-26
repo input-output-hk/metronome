@@ -4,11 +4,13 @@ import cats._
 import cats.implicits._
 import cats.effect.{Timer, Sync}
 import cats.data.NonEmptyVector
+import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Signing,
-  QuorumCertificate
+  QuorumCertificate,
+  Phase
 }
 import io.iohk.metronome.hotstuff.service.Status
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
@@ -54,28 +56,60 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
       }
   }
 
-  private def getAndValidateStatus(from: A#PKey): F[Option[Status[A]]] =
-    getStatus(from).flatMap { maybeStatus =>
-      maybeStatus.filterA { status =>
-        validate(from, status).fold(
-          tracers.invalidQC(_).as(false),
-          _ => true.pure[F]
-        )
-      }
+  private def getAndValidateStatus(
+      from: A#PKey
+  ): F[Option[Validated[Status[A]]]] =
+    getStatus(from).flatMap {
+      case None =>
+        none.pure[F]
+
+      case Some(status) =>
+        validate(from, status) match {
+          case Left(error) =>
+            tracers.invalidStatus(status, error).as(none)
+          case Right(valid) =>
+            valid.some.pure[F]
+        }
     }
 
   private def validate(
       from: A#PKey,
       status: Status[A]
-  ): Either[ProtocolError.InvalidQuorumCertificate[A], Unit] =
-    List(status.prepareQC, status.commitQC).traverse(validate(from, _)).void
+  ): Either[ProtocolError.InvalidQuorumCertificate[A], Validated[Status[A]]] =
+    for {
+      _ <- validateQC(from, status.prepareQC)(
+        checkPhase(Phase.Prepare),
+        checkSignature,
+        checkVisible(status),
+        _.viewNumber >= status.commitQC.viewNumber
+      )
+      _ <- validateQC(from, status.commitQC)(
+        checkPhase(Phase.Commit),
+        checkSignature,
+        checkVisible(status),
+        _.viewNumber <= status.prepareQC.viewNumber
+      )
+    } yield Validated[Status[A]](status)
 
-  private def validate(from: A#PKey, qc: QuorumCertificate[A]) =
-    Either.cond(
-      Signing[A].validate(federation, qc),
-      (),
-      ProtocolError.InvalidQuorumCertificate(from, qc)
-    )
+  private def checkPhase(phase: Phase)(qc: QuorumCertificate[A]) =
+    phase == qc.phase
+
+  private def checkSignature(qc: QuorumCertificate[A]) =
+    Signing[A].validate(federation, qc)
+
+  private def checkVisible(status: Status[A])(qc: QuorumCertificate[A]) =
+    status.viewNumber >= qc.viewNumber
+
+  private def validateQC(from: A#PKey, qc: QuorumCertificate[A])(
+      checks: (QuorumCertificate[A] => Boolean)*
+  ) =
+    checks.toList.traverse { check =>
+      Either.cond(
+        check(qc),
+        (),
+        ProtocolError.InvalidQuorumCertificate(from, qc)
+      )
+    }
 }
 
 object ViewSynchronizer {
