@@ -14,7 +14,7 @@ import io.iohk.metronome.hotstuff.service.messages.{
   HotStuffMessage,
   SyncMessage
 }
-import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
+import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
   ViewStateStorage
@@ -55,14 +55,14 @@ object HotStuffService {
           }
         )
 
-      blockSyncPipe <- Resource.liftF { BlockSyncPipe[F, A] }
+      syncPipe <- Resource.liftF { SyncPipe[F, A] }
 
       consensusService <- ConsensusService(
         initState.publicKey,
         consensusNetwork,
         blockStorage,
         viewStateStorage,
-        blockSyncPipe.left,
+        syncPipe.left,
         initState
       )
 
@@ -71,7 +71,7 @@ object HotStuffService {
         initState.federation,
         syncNetwork,
         blockStorage,
-        blockSyncPipe.right,
+        syncPipe.right,
         consensusService.getState
       )
     } yield ()
