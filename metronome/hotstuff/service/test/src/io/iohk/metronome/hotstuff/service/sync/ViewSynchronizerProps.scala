@@ -187,15 +187,21 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
     ): Gen[Responses] =
       if (round == rounds) Gen.const(accum)
       else {
+        val keepCommit = Gen.const(commitQC)
+
+        def maybeCommit(qc: QuorumCertificate[TestAgreement]) =
+          if (qc.blockHash != commitQC.blockHash) genCommitQC(qc)
+          else keepCommit
+
         val genRound = for {
           nextPrepareQC <- Gen.oneOf(
             Gen.const(prepareQC),
             genPrepareQC(prepareQC)
           )
           nextCommitQC <- Gen.oneOf(
-            Gen.const(commitQC),
-            genCommitQC(prepareQC).filter(_.viewNumber > 0),
-            genCommitQC(nextPrepareQC).filter(_.viewNumber > 0)
+            keepCommit,
+            maybeCommit(prepareQC),
+            maybeCommit(nextPrepareQC)
           )
           status = Status(ViewNumber(round + 1), nextPrepareQC, nextCommitQC)
           responses <- Gen.sequence[Vector[TestResponse], TestResponse] {
@@ -318,5 +324,39 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
     } yield (m, rnd.shuffle(ls ++ Seq(m) ++ hs))
   ) { case (m, xs) =>
     m == ViewSynchronizer.median(NonEmptySeq.fromSeqUnsafe(xs))
+  }
+
+  property("aggregateStatus") = forAllNoShrink(
+    for {
+      fixture <- arbitrary[TestFixture]
+      statuses = fixture.responses.flatMap(_.values).collect {
+        case TestResponse.ValidStatus(status) => status
+      }
+      if (statuses.nonEmpty)
+      rnd <- arbitrary[Int].map(new Random(_))
+    } yield NonEmptySeq.fromSeqUnsafe(rnd.shuffle(statuses))
+  ) { statuses =>
+    val status =
+      ViewSynchronizer.aggregateStatus(statuses)
+
+    val medianViewNumber = ViewSynchronizer.median(statuses.map(_.viewNumber))
+
+    val maxViewNumber =
+      statuses.map(_.viewNumber).toSeq.max
+
+    val maxPrepareQC =
+      statuses.find(_.viewNumber == maxViewNumber).get.prepareQC
+
+    val maxCommitQC =
+      statuses.find(_.viewNumber == maxViewNumber).get.commitQC
+
+    all(
+      "viewNumber" |:
+        status.viewNumber ==
+        (if (maxPrepareQC.viewNumber > medianViewNumber) maxPrepareQC.viewNumber
+         else medianViewNumber),
+      "prepareQC" |: status.prepareQC == maxPrepareQC,
+      s"commitQC ${status.commitQC} vs ${maxCommitQC}" |: status.commitQC == maxCommitQC
+    )
   }
 }
