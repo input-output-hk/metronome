@@ -17,10 +17,12 @@ import io.iohk.metronome.hotstuff.service.tracing.{SyncTracers, SyncEvent}
 import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
-import org.scalacheck.{Arbitrary, Properties, Gen}
-import org.scalacheck.Prop.{forAll, propBoolean, all}
+import org.scalacheck.{Arbitrary, Properties, Gen}, Arbitrary.arbitrary
+import org.scalacheck.Prop.{forAll, forAllNoShrink, propBoolean, all}
 import scala.concurrent.duration._
 import java.util.concurrent.TimeoutException
+import cats.data.NonEmptySeq
+import scala.util.Random
 
 object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
   import ProtocolStateCommands.{
@@ -303,5 +305,18 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
     scheduler.tick(syncTimeout)
 
     testFuture.value.get.get
+  }
+
+  property("median") = forAllNoShrink(
+    for {
+      m   <- arbitrary[Int].map(_.toLong)
+      l   <- Gen.posNum[Int]
+      h   <- Gen.oneOf(l, l + 1)
+      ls  <- Gen.listOfN(l, Gen.posNum[Int].map(m - _))
+      hs  <- Gen.listOfN(l, Gen.posNum[Int].map(m + _))
+      rnd <- arbitrary[Int].map(new Random(_))
+    } yield (m, rnd.shuffle(ls ++ Seq(m) ++ hs))
+  ) { case (m, xs) =>
+    m == ViewSynchronizer.median(NonEmptySeq.fromSeqUnsafe(xs))
   }
 }
