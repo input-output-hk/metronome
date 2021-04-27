@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service.sync
 import cats._
 import cats.implicits._
 import cats.effect.{Timer, Sync}
-import cats.data.NonEmptySeq
+import cats.data.{NonEmptySeq, NonEmptyVector}
 import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{
@@ -54,14 +54,11 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
           val statuses = statusMap.values.toList
           val status   = aggregateStatus(NonEmptySeq.fromSeqUnsafe(statuses))
 
-          val commitSources = statusMap.collect {
-            case (memberKey, memberStatus)
-                if memberStatus.commitQC == status.commitQC =>
-              memberKey
-          }.toList
+          // Returning everyone who responded so we always have a quorum sized set to talk to.
+          val sources =
+            NonEmptyVector.fromVectorUnsafe(statusMap.keySet.toVector)
 
-          FederationStatus(status, NonEmptySeq.fromSeqUnsafe(commitSources))
-            .pure[F]
+          FederationStatus(status, sources).pure[F]
 
         case _ =>
           // We traced all responses, so we can detect if we're in an endless loop.
@@ -189,6 +186,6 @@ object ViewSynchronizer {
   /** The final status coupled with the federation members that can serve the data. */
   case class FederationStatus[A <: Agreement](
       status: Status[A],
-      commitSources: NonEmptySeq[A#PKey]
+      sources: NonEmptyVector[A#PKey]
   )
 }
