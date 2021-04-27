@@ -327,9 +327,7 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
         // Considering the committed block as executed, we have its state already.
         _ <- viewStateStorage.setLastExecutedBlockHash(blockHash)
         _ <- viewStateStorage.setRootBlockHash(blockHash)
-        _ <- viewStateStorage.setViewNumber(status.viewNumber)
-        _ <- viewStateStorage.setQuorumCertificate(status.prepareQC)
-        _ <- viewStateStorage.setQuorumCertificate(status.commitQC)
+        // The rest of the fields will be set by the ConsensusService.
       } yield ()
 
     storeRunner.runReadWrite(query)
