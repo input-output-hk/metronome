@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service.sync
 import cats._
 import cats.implicits._
 import cats.effect.{Timer, Sync}
-import cats.data.NonEmptyVector
+import cats.data.NonEmptySeq
 import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{
@@ -45,7 +45,7 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
           .statusPoll(federation.publicKeys -> maybeStatuses)
           .as(maybeStatuses.flatten)
       }
-      .map(NonEmptyVector.fromVector)
+      .map(NonEmptySeq.fromSeq)
       .flatMap {
         case Some(statuses) if statuses.size >= federation.quorumSize =>
           aggregateStatus(statuses).pure[F]
@@ -133,7 +133,7 @@ object ViewSynchronizer {
   type GetStatus[F[_], A <: Agreement] = A#PKey => F[Option[Status[A]]]
 
   def aggregateStatus[A <: Agreement](
-      statuses: NonEmptyVector[Status[A]]
+      statuses: NonEmptySeq[Status[A]]
   ): Status[A] = {
     val prepareQC = statuses.map(_.prepareQC).maximumBy(_.viewNumber)
     val commitQC  = statuses.map(_.commitQC).maximumBy(_.viewNumber)
@@ -146,6 +146,6 @@ object ViewSynchronizer {
     )
   }
 
-  def median[T: Order](xs: NonEmptyVector[T]): T =
+  def median[T: Order](xs: NonEmptySeq[T]): T =
     xs.sorted.getUnsafe((xs.size / 2).toInt)
 }
