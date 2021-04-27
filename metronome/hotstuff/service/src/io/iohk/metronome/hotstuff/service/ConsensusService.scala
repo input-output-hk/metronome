@@ -15,6 +15,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Phase,
   Message,
   Block,
+  Signing,
   QuorumCertificate
 }
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
@@ -34,7 +35,9 @@ import scala.util.control.NonFatal
   *
   * It handles the `consensus.basic.Message` events coming from the network.
   */
-class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
+class ConsensusService[F[
+    _
+]: Timer: Concurrent, N, A <: Agreement: Block: Signing](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
     blockStorage: BlockStorage[N, A],
@@ -181,9 +184,24 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
           }
 
         case SyncPipe.StatusResponse(status) =>
-          ???
+          fastForwardState(status)
       }
       .completedL
+
+  /** Replace the current protocol state based on what was synced with the federation. */
+  private def fastForwardState(status: Status[A]): F[Unit] = {
+    stateRef.get.flatMap { state =>
+      val forward = state.copy[A](
+        viewNumber = status.viewNumber,
+        prepareQC = status.prepareQC,
+        commitQC = status.commitQC
+      )
+      // Trigger the next view, so we get proper tracing and effect execution.
+      handleTransition {
+        forward.handleNextView(Event.NextView(forward.viewNumber))
+      }
+    }
+  }
 
   /** Add a validated event to the queue for processing against the protocol state. */
   private def enqueueEvent(event: Validated[Event[A]]): F[Unit] =
@@ -472,7 +490,9 @@ object ConsensusService {
     * `initState` is expected to be restored from persistent storage
     * instances upon restart.
     */
-  def apply[F[_]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
+  def apply[F[
+      _
+  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block: Signing](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       blockStorage: BlockStorage[N, A],
@@ -508,7 +528,7 @@ object ConsensusService {
 
   private def build[F[
       _
-  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
+  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block: Signing](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       blockStorage: BlockStorage[N, A],
