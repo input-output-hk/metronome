@@ -71,6 +71,7 @@ object HotStuffService {
         initState.federation,
         syncNetwork,
         blockStorage,
+        viewStateStorage,
         syncPipe.right,
         consensusService.getState
       )

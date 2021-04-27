@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
+import cats.Parallel
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import cats.effect.concurrent.Ref
 import io.iohk.metronome.core.fibers.FiberMap
@@ -18,16 +19,20 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
 }
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
-import io.iohk.metronome.hotstuff.service.storage.BlockStorage
-import io.iohk.metronome.hotstuff.service.sync.BlockSynchronizer
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
+}
+import io.iohk.metronome.hotstuff.service.sync.{
+  BlockSynchronizer,
+  ViewSynchronizer
+}
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import io.iohk.metronome.networking.ConnectionHandler
-import io.iohk.metronome.storage.KVStoreRunner
+import io.iohk.metronome.storage.{KVStoreRunner, KVStore}
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
-import io.iohk.metronome.hotstuff.service.sync.ViewSynchronizer
-import cats.Parallel
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -39,10 +44,11 @@ import cats.Parallel
   * The block and view synchronisation components will use this service
   * to send requests to the network.
   */
-class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
+class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
     blockStorage: BlockStorage[N, A],
+    viewStateStorage: ViewStateStorage[N, A],
     syncPipe: SyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
     incomingFiberMap: FiberMap[F, A#PKey],
@@ -206,6 +212,7 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
       }
     } yield ()
 
+  /** Sync with the sender up to the High Q.C. it sent, then validate the prepared block. */
   private def handlePrepareRequest(
       syncModeRef: SyncModeRef,
       request: SyncPipe.PrepareRequest[A]
@@ -239,6 +246,10 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
     }
   }
 
+  /** Get the latest status of federation members, download the corresponding block
+    * and prune all existing block history, making the latest Commit Q.C. the new
+    * root in the block tree.
+    */
   private def handleStatusRequest(
       syncModeRef: SyncModeRef,
       syncModeFactory: SyncMode.Factory[F, N, A],
@@ -276,8 +287,10 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
               )
 
               // Prune the block store from earlier blocks that are no longer traversable.
+              _ <- fastForwardStorage(status, block)
 
-              // TODO (PM-3135): Tell the application to sync state of the block.
+              // Sync any application specific state, e.g. a ledger.
+              _ <- syncAppState(status.commitQC.blockHash)
 
               // Switch back to block sync mode
               _ <- syncModeRef.set(blockMode)
@@ -296,8 +309,45 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
     }
   }
 
+  /** Replace the state we have persisted with what we synced with the federation.
+    *
+    * Prunes old blocks, the Commit Q.C. will be the new root.
+    */
+  private def fastForwardStorage(status: Status[A], block: A#Block): F[Unit] = {
+    val blockHash = Block[A].blockHash(block)
+    assert(blockHash == status.commitQC.blockHash)
+
+    val query: KVStore[N, Unit] =
+      for {
+        viewState <- viewStateStorage.getBundle.lift
+        // Insert the new block.
+        _ <- blockStorage.put(block)
+
+        // Prune old data, but keep the new block.
+        ds <- blockStorage
+          .getDescendants(
+            viewState.rootBlockHash,
+            skip = Set(blockHash)
+          )
+          .lift
+        _ <- ds.traverse(blockStorage.deleteUnsafe(_))
+
+        // Considering the committed block as executed, we have its state already.
+        _ <- viewStateStorage.setLastExecutedBlockHash(blockHash)
+        _ <- viewStateStorage.setRootBlockHash(blockHash)
+        _ <- viewStateStorage.setViewNumber(status.viewNumber)
+        _ <- viewStateStorage.setQuorumCertificate(status.prepareQC)
+        _ <- viewStateStorage.setQuorumCertificate(status.commitQC)
+      } yield ()
+
+    storeRunner.runReadWrite(query)
+  }
+
   // TODO (PM-3132, PM-3133): Block validation.
-  private def validateBlock(block: A#Block): F[Boolean] = ???
+  private def validateBlock(block: A#Block): F[Boolean] = true.pure[F]
+
+  // TODO (PM-3135): Tell the application to sync state of the block.
+  private def syncAppState(blockHash: A#Hash): F[Unit] = ().pure[F]
 }
 
 object SyncService {
@@ -313,6 +363,7 @@ object SyncService {
       federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],
       blockStorage: BlockStorage[N, A],
+      viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Right,
       getState: F[ProtocolState[A]],
       timeout: FiniteDuration = 10.seconds
@@ -330,6 +381,7 @@ object SyncService {
         publicKey,
         network,
         blockStorage,
+        viewStateStorage,
         syncPipe,
         getState,
         incomingFiberMap,
@@ -339,16 +391,16 @@ object SyncService {
       syncModeFactory = new SyncMode.Factory[F, N, A] {
         override def block(viewNumber: ViewNumber) =
           for {
-            (syncFiberMap, syncFiberMapRelease) <- FiberMap[
-              F,
-              A#PKey
-            ]().allocated
+            (syncFiberMap, syncFiberMapRelease) <-
+              FiberMap[F, A#PKey]().allocated
+
             blockSynchronizer <- BlockSynchronizer[F, N, A](
               publicKey,
               federation,
               blockStorage,
               service.getBlock
             )
+
             mode = SyncMode.Block(
               blockSynchronizer,
               syncFiberMap,
