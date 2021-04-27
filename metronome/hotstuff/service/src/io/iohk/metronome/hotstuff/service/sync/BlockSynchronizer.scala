@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.service.sync
 
 import cats.implicits._
+import cats.data.NonEmptyVector
 import cats.effect.{Sync, Timer, Concurrent, ContextShift}
 import cats.effect.concurrent.Semaphore
 import io.iohk.metronome.hotstuff.consensus.basic.{
@@ -59,6 +60,32 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       path <- download(sender, quorumCertificate.blockHash, Nil)
       _    <- persist(quorumCertificate.blockHash, path)
     } yield ()
+
+  /** Download the block in the Quorum Certificate without ancestors.
+    *
+    * Return it without being persisted.
+    */
+  def downloadBlockInQC(
+      sources: NonEmptyVector[A#PKey],
+      quorumCertificate: QuorumCertificate[A]
+  ): F[A#Block] = {
+    def loop(i: Int): F[A#Block] = {
+      val source = sources.getUnsafe(i % sources.length)
+      getAndValidateBlock(source, quorumCertificate.blockHash).flatMap {
+        case None        => loop(i + 1)
+        case Some(block) => block.pure[F]
+      }
+    }
+
+    storeRunner
+      .runReadOnly {
+        blockStorage.get(quorumCertificate.blockHash)
+      }
+      .flatMap {
+        case None        => loop(0)
+        case Some(block) => block.pure[F]
+      }
+  }
 
   /** Download a block and all of its ancestors into the in-memory block store.
     *

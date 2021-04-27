@@ -164,11 +164,24 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
     */
   private def processSyncPipe(
       syncModeFactory: SyncMode.Factory[F, N, A]
-  ): F[Unit] = {
-    syncModeFactory
-      .block(ViewNumber(0))
-      .flatMap(Ref.of[F, SyncMode[F, N, A]](_))
-      .flatMap { syncModeRef =>
+  ): Resource[F, Unit] =
+    for {
+      // Initialize the sync mode from view number 0, which accepts
+      // any requests. Make sure the synchronizer is shut down at
+      // the end, if it's running.
+      syncModeRef <- Resource.make(
+        syncModeFactory
+          .block(ViewNumber(0))
+          .flatMap(Ref.of[F, SyncMode[F, N, A]](_))
+      ) { syncModeRef =>
+        syncModeRef.get.flatMap {
+          case SyncMode.View(_)                          => ().pure[F]
+          case SyncMode.Block(_, _, fiberMapShutdown, _) => fiberMapShutdown
+        }
+      }
+
+      // Start processing messages from the pipe.
+      _ <- Concurrent[F].background {
         syncPipe.receive
           .mapEval[Unit] {
             case request @ SyncPipe.PrepareRequest(_, _) =>
@@ -183,7 +196,7 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
           }
           .completedL
       }
-  }
+    } yield ()
 
   private def handlePrepareRequest(
       syncModeRef: SyncModeRef,
@@ -233,30 +246,43 @@ class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
         // We have already synced to a view that covers the state where the request was made.
         ().pure[F]
 
-      case SyncMode.Block(_, _, shutdownBlockSync, _) =>
-        // 1. Switch to view sync mode
-        // 2. Cancel all outstanding block syncing
-        // 3. Sync to the latest Commit Q.C.
-        // 4. Switch back to block sync mode
+      case SyncMode.Block(_, _, shutdownBlockSync, lastSyncedViewNumber) =>
         for {
+          // Switch to view sync mode
           viewMode <- syncModeFactory.view
           _        <- syncModeRef.set(viewMode)
-          _        <- shutdownBlockSync
+          // Cancel all outstanding block syncing.
+          _ <- shutdownBlockSync
+          // Perform the rest in the background, so we keep processing the pipe.
           _ <- Concurrent[F].start {
-            for {
+            val task = for {
+              // Sync to the latest Commit Q.C.
               federationStatus <- viewMode.synchronizer.sync
               status = federationStatus.status
               blockMode <- syncModeFactory.block(status.viewNumber)
 
-              _ <- federationStatus.commitSources.toList.parTraverse { source =>
-                blockMode.synchronizer.sync(source, status.commitQC)
-              }
+              // Download the block in the Commit Q.C.
+              block <- blockMode.synchronizer.downloadBlockInQC(
+                federationStatus.sources,
+                status.commitQC
+              )
 
-              // TODO (PM-3135): Tell the application to sync state.
+              // Prune the block store from earlier blocks that are no longer traversable.
 
+              // TODO (PM-3135): Tell the application to sync state of the block.
+
+              // Switch back to block sync mode
               _ <- syncModeRef.set(blockMode)
               _ <- syncPipe.send(SyncPipe.StatusResponse(status))
             } yield ()
+
+            task.handleErrorWith { case NonFatal(ex) =>
+              // Restore block syncing, so we don't get stuck.
+              tracers.error(ex) >>
+                syncModeFactory
+                  .block(lastSyncedViewNumber)
+                  .flatMap(syncModeRef.set)
+            }
           }
         } yield ()
     }
@@ -331,7 +357,7 @@ object SyncService {
       }
 
       _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processSyncPipe(syncModeFactory))
+      _ <- service.processSyncPipe(syncModeFactory)
     } yield service
 
   /** The `SyncService` can be in two modes: either we're in sync with the federation
