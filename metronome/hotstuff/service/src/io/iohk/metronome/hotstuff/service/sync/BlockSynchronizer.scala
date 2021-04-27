@@ -12,6 +12,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.storage.{InMemoryKVStore, KVStoreRunner}
 import scala.concurrent.duration._
+import scala.util.control.NoStackTrace
 
 /** The job of the `BlockSynchronizer` is to procure missing blocks when a `Prepare`
   * message builds on a High Q.C. that we don't have.
@@ -36,6 +37,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     semaphore: Semaphore[F],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
+  import BlockSynchronizer.DownloadFailedException
 
   // We must take care not to insert blocks into storage and risk losing
   // the pointer to them in a restart, hence keeping the unfinished tree
@@ -67,13 +69,23 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     */
   def downloadBlockInQC(
       sources: NonEmptyVector[A#PKey],
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A],
+      maxRetries: Int = 5
   ): F[A#Block] = {
     def loop(i: Int): F[A#Block] = {
-      val source = sources.getUnsafe(i % sources.length)
-      getAndValidateBlock(source, quorumCertificate.blockHash).flatMap {
-        case None        => loop(i + 1)
-        case Some(block) => block.pure[F]
+      if (i == maxRetries * sources.size) {
+        Sync[F].raiseError {
+          new DownloadFailedException(
+            quorumCertificate.blockHash,
+            sources.toVector
+          )
+        }
+      } else {
+        val source = sources.getUnsafe(i % sources.length)
+        getAndValidateBlock(source, quorumCertificate.blockHash).flatMap {
+          case None        => loop(i + 1)
+          case Some(block) => block.pure[F]
+        }
       }
     }
 
@@ -213,6 +225,14 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
 }
 
 object BlockSynchronizer {
+
+  class DownloadFailedException[A <: Agreement](
+      blockHash: A#Hash,
+      sources: Seq[A#PKey]
+  ) extends RuntimeException(
+        s"Failed to download block ${blockHash} from ${sources.size} sources."
+      )
+      with NoStackTrace
 
   /** Send a network request to get a block. */
   type GetBlock[F[_], A <: Agreement] = (A#PKey, A#Hash) => F[Option[A#Block]]
