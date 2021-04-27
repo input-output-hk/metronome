@@ -35,7 +35,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   case class TestFixture(
       ancestorTree: List[TestBlock],
       descendantTree: List[TestBlock],
-      requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])]
+      requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])],
+      random: Random
   ) {
     val persistentRef = Ref.unsafe[Task, TestKVStore.Store] {
       TestKVStore.build(ancestorTree)
@@ -56,9 +57,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         blockHash: TestAgreement.Hash
     ): Task[Option[TestAgreement.Block]] = {
       val timeout   = 5000
-      val delay     = Random.nextDouble() * 3000
-      val isLost    = Random.nextDouble() < 0.2
-      val isCorrupt = Random.nextDouble() < 0.2
+      val delay     = random.nextDouble() * 3000
+      val isLost    = random.nextDouble() < 0.2
+      val isCorrupt = random.nextDouble() < 0.2
 
       if (isLost) {
         Task.pure(None).delayResult(timeout.millis)
@@ -115,7 +116,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
             )
         }
 
-      } yield TestFixture(ancestorTree, descendantTree, requests)
+        random <- arbitrary[Int].map(seed => new Random(seed))
+
+      } yield TestFixture(ancestorTree, descendantTree, requests, random)
     }
   }
 
