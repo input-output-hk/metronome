@@ -313,7 +313,8 @@ object ProtocolStateCommands extends Commands {
         genLazy(
           qc.copy[TestAgreement](blockHash = invalidateHash(qc.blockHash))
         ),
-        genLazy(qc.copy[TestAgreement](phase = nextVoting(qc.phase))),
+        genLazy(qc.copy[TestAgreement](phase = nextVoting(qc.phase)))
+          .suchThat(_.blockHash != genesisQC.blockHash),
         genLazy(
           qc.copy[TestAgreement](viewNumber =
             invalidateViewNumber(qc.viewNumber)
