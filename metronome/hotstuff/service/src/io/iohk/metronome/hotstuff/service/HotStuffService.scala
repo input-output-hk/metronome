@@ -73,6 +73,7 @@ object HotStuffService {
         federation,
         syncNetwork,
         blockStorage,
+        viewStateStorage,
         syncPipe.right,
         consensusService.getState
       )
