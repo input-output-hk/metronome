@@ -30,9 +30,8 @@ class FiberMap[F[_]: Concurrent: ContextShift, K](
   def submit[A](key: K)(task: F[A]): F[F[A]] = {
     isShutdownRef.get.flatMap {
       case true =>
-        Sync[F].raiseError(
-          new IllegalStateException("The pool is already shut down.")
-        )
+        Sync[F].raiseError(new FiberMap.ShutdownException)
+
       case false =>
         actorMapRef.get.map(_.get(key)).flatMap {
           case Some(actor) =>
@@ -81,6 +80,9 @@ object FiberMap {
   class QueueFullException
       extends RuntimeException("The fiber task queue is full.")
       with NoStackTrace
+
+  class ShutdownException
+      extends IllegalStateException("The pool is already shut down.")
 
   private class Actor[F[_]: Concurrent](
       queue: ConcurrentQueue[F, DeferredTask[F, _]],

@@ -16,9 +16,7 @@ class FiberSet[F[_]: Concurrent](
 ) {
   private def raiseIfShutdown: F[Unit] =
     isShutdownRef.get.ifM(
-      Concurrent[F].raiseError(
-        new IllegalStateException("The pool is already shut down.")
-      ),
+      Concurrent[F].raiseError(new FiberSet.ShutdownException),
       ().pure[F]
     )
 
@@ -57,6 +55,9 @@ class FiberSet[F[_]: Concurrent](
 }
 
 object FiberSet {
+  class ShutdownException
+      extends IllegalStateException("The pool is already shut down.")
+
   def apply[F[_]: Concurrent]: Resource[F, FiberSet[F]] =
     Resource.make[F, FiberSet[F]] {
       for {
