@@ -14,6 +14,7 @@ import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.storage.{InMemoryKVStore, KVStoreRunner}
 import scala.concurrent.duration._
 import scala.util.Random
+import scala.util.control.NoStackTrace
 
 /** The job of the `BlockSynchronizer` is to procure missing blocks when a `Prepare`
   * message builds on a High Q.C. that we don't have.
@@ -40,6 +41,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     semaphore: Semaphore[F],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
+  import BlockSynchronizer.DownloadFailedException
 
   private val otherPublicKeys =
     federation.publicKeys.filterNot(_ == publicKey)
@@ -76,11 +78,23 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       sources: NonEmptyVector[A#PKey],
       quorumCertificate: QuorumCertificate[A]
   ): F[A#Block] = {
-    def loop(i: Int): F[A#Block] = {
-      val source = sources.getUnsafe(i % sources.length)
-      getAndValidateBlock(source, quorumCertificate.blockHash).flatMap {
-        case None        => loop(i + 1)
-        case Some(block) => block.pure[F]
+    val otherSources = sources.filterNot(_ == publicKey).toList
+
+    def loop(alternatives: List[A#PKey]): F[A#Block] = {
+      alternatives match {
+        case Nil =>
+          Sync[F].raiseError {
+            new DownloadFailedException(
+              quorumCertificate.blockHash,
+              sources.toVector
+            )
+          }
+        case source :: alternatives =>
+          getAndValidateBlock(source, quorumCertificate.blockHash, otherSources)
+            .flatMap {
+              case None        => loop(alternatives)
+              case Some(block) => block.pure[F]
+            }
       }
     }
 
@@ -89,8 +103,10 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
         blockStorage.get(quorumCertificate.blockHash)
       }
       .flatMap {
-        case None        => loop(0)
-        case Some(block) => block.pure[F]
+        case None =>
+          loop(Random.shuffle(otherSources))
+        case Some(block) =>
+          block.pure[F]
       }
   }
 
@@ -157,7 +173,8 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     */
   private def getAndValidateBlock(
       from: A#PKey,
-      blockHash: A#Hash
+      blockHash: A#Hash,
+      alternativeSources: Seq[A#PKey] = otherPublicKeys
   ): F[Option[A#Block]] = {
     def fetch(from: A#PKey) =
       getBlock(from, blockHash)
@@ -171,16 +188,16 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     def loop(sources: List[A#PKey]): F[Option[A#Block]] =
       sources match {
         case Nil => none.pure[F]
-        case from :: alternatives =>
+        case from :: sources =>
           fetch(from).flatMap {
-            case None  => loop(alternatives)
+            case None  => loop(sources)
             case block => block.pure[F]
           }
       }
 
     loop(List(from)).flatMap {
       case None =>
-        loop(Random.shuffle(otherPublicKeys.filterNot(_ == from).toList))
+        loop(Random.shuffle(alternativeSources.filterNot(_ == from).toList))
       case block =>
         block.pure[F]
     }
@@ -251,6 +268,14 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
 }
 
 object BlockSynchronizer {
+
+  class DownloadFailedException[A <: Agreement](
+      blockHash: A#Hash,
+      sources: Seq[A#PKey]
+  ) extends RuntimeException(
+        s"Failed to download block ${blockHash} from ${sources.size} sources."
+      )
+      with NoStackTrace
 
   /** Send a network request to get a block. */
   type GetBlock[F[_], A <: Agreement] = (A#PKey, A#Hash) => F[Option[A#Block]]
