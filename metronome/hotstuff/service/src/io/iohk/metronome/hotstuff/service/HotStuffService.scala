@@ -1,11 +1,14 @@
 package io.iohk.metronome.hotstuff.service
 
+import cats.Parallel
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
+import io.iohk.metronome.hotstuff.consensus.Federation
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
   Message,
-  Block
+  Block,
+  Signing
 }
 import io.iohk.metronome.hotstuff.service.messages.{
   HotStuffMessage,
@@ -25,8 +28,11 @@ import io.iohk.metronome.storage.KVStoreRunner
 object HotStuffService {
 
   /** Start up the HotStuff service stack. */
-  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
+  def apply[F[
+      _
+  ]: Concurrent: ContextShift: Timer: Parallel, N, A <: Agreement: Block: Signing](
       publicKey: A#PKey,
+      federation: Federation[A#PKey],
       network: Network[F, A, HotStuffMessage[A]],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
@@ -64,6 +70,7 @@ object HotStuffService {
 
       syncService <- SyncService(
         publicKey,
+        federation,
         syncNetwork,
         blockStorage,
         blockSyncPipe.right,
