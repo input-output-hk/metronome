@@ -36,6 +36,10 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
   /** Projected responses in each round from every federation member. */
   type Responses = Vector[Map[TestAgreement.PKey, TestResponse]]
 
+  /** Generate N rounds worth of test responses, during which the synchronizer
+    * should find the first quorum, unless there's none in any of the rounds,
+    * in which case it will just keep getting timeouts forever.
+    */
   case class TestFixture(
       rounds: Int,
       federation: Federation[TestAgreement.PKey],
@@ -279,8 +283,10 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       pollSizes = events.collect { case SyncEvent.StatusPoll(statuses) =>
         statuses.size
       }
+
+      responseCounter <- fixture.responseCounterRef.get
     } yield {
-      status match {
+      val statusProps = status match {
         case Right(status) =>
           "status" |: all(
             "quorum" |: hasQuorum,
@@ -304,6 +310,11 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
         case Left(ex) =>
           ex.getMessage |: false
       }
+
+      all(
+        statusProps,
+        "poll everyone in each round" |: responseCounter.values.toList.distinct.size == 1
+      )
     }
 
     val testFuture = test.runToFuture
