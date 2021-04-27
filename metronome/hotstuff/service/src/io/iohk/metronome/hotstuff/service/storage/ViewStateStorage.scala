@@ -44,13 +44,17 @@ class ViewStateStorage[N, A <: Agreement] private (
   def setLastExecutedBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
     put(Key.LastExecutedBlockHash, blockHash)
 
+  def setRootBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
+    put(Key.RootBlockHash, blockHash)
+
   def getBundle: KVStoreRead[N, ViewStateStorage.Bundle[A]] =
     (
       read(Key.ViewNumber),
       read(Key.PrepareQC),
       read(Key.LockedQC),
       read(Key.CommitQC),
-      read(Key.LastExecutedBlockHash)
+      read(Key.LastExecutedBlockHash),
+      read(Key.RootBlockHash)
     ).mapN(ViewStateStorage.Bundle.apply[A] _)
 
 }
@@ -68,6 +72,7 @@ object ViewStateStorage {
       case object LockedQC              extends Key[QuorumCertificate[A]]
       case object CommitQC              extends Key[QuorumCertificate[A]]
       case object LastExecutedBlockHash extends Key[A#Hash]
+      case object RootBlockHash         extends Key[A#Hash]
 
       implicit def encoder[V]: Encoder[Key[V]] =
         scodec.codecs.implicits.implicitStringCodec
@@ -86,7 +91,8 @@ object ViewStateStorage {
       prepareQC: QuorumCertificate[A],
       lockedQC: QuorumCertificate[A],
       commitQC: QuorumCertificate[A],
-      lastExecutedBlockHash: A#Hash
+      lastExecutedBlockHash: A#Hash,
+      rootBlockHash: A#Hash
   ) {
     assert(prepareQC.phase == Phase.Prepare)
     assert(lockedQC.phase == Phase.PreCommit)
@@ -104,7 +110,8 @@ object ViewStateStorage {
         prepareQC = genesisQC.copy[A](phase = Phase.Prepare),
         lockedQC = genesisQC.copy[A](phase = Phase.PreCommit),
         commitQC = genesisQC.copy[A](phase = Phase.Commit),
-        lastExecutedBlockHash = genesisQC.blockHash
+        lastExecutedBlockHash = genesisQC.blockHash,
+        rootBlockHash = genesisQC.blockHash
       )
   }
 
@@ -142,6 +149,9 @@ object ViewStateStorage {
       )
       _ <- KVStore[N].alter(namespace, Key.LastExecutedBlockHash)(
         setDefault(genesis.lastExecutedBlockHash)
+      )
+      _ <- KVStore[N].alter(namespace, Key.RootBlockHash)(
+        setDefault(genesis.rootBlockHash)
       )
     } yield new ViewStateStorage[N, A](namespace)
   }
