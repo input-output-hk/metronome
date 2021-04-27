@@ -12,7 +12,8 @@ import io.iohk.metronome.hotstuff.consensus.Federation
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
-  Block
+  Block,
+  Signing
 }
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
@@ -24,6 +25,8 @@ import io.iohk.metronome.storage.KVStoreRunner
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
+import io.iohk.metronome.hotstuff.service.sync.ViewSynchronizer
+import cats.Parallel
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -189,9 +192,9 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
                 for {
                   _       <- blockSynchronizer.sync(sender, prepare.highQC)
                   isValid <- validateBlock(prepare.block)
-                  _ <- blockSyncPipe.send(
+                  _ <- blockSyncPipe.send {
                     BlockSyncPipe.Response(request, isValid)
-                  )
+                  }
                 } yield ()
               }
               .void
@@ -209,7 +212,9 @@ object SyncService {
     * in the background, shutting processing down when the resource is
     * released.
     */
-  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
+  def apply[F[
+      _
+  ]: Concurrent: ContextShift: Timer: Parallel, N, A <: Agreement: Block: Signing](
       publicKey: A#PKey,
       federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],
@@ -246,6 +251,7 @@ object SyncService {
           service.getBlock
         )
       }
+      viewSync = new ViewSynchronizer[F, A](federation, service.getStatus)
       _ <- Concurrent[F].background(service.processNetworkMessages)
       _ <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
     } yield service
