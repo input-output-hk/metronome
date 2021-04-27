@@ -39,7 +39,7 @@ import cats.Parallel
   * The block and view synchronisation components will use this service
   * to send requests to the network.
   */
-class SyncService[F[_]: Sync, N, A <: Agreement](
+class SyncService[F[_]: Concurrent: Parallel, N, A <: Agreement](
     publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
     blockStorage: BlockStorage[N, A],
@@ -242,13 +242,22 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
           viewMode <- syncModeFactory.view
           _        <- syncModeRef.set(viewMode)
           _        <- shutdownBlockSync
+          _ <- Concurrent[F].start {
+            for {
+              federationStatus <- viewMode.synchronizer.sync
+              status = federationStatus.status
+              blockMode <- syncModeFactory.block(status.viewNumber)
 
-          status <- viewMode.synchronizer.sync
-          // TODO: Get the block, tell the application to sync the state.
-          _ <- syncPipe.send(SyncPipe.StatusResponse(status))
+              _ <- federationStatus.commitSources.toList.parTraverse { source =>
+                blockMode.synchronizer.sync(source, status.commitQC)
+              }
 
-          blockMode <- syncModeFactory.block(status.viewNumber)
-          _         <- syncModeRef.set(blockMode)
+              // TODO (PM-3135): Tell the application to sync state.
+
+              _ <- syncModeRef.set(blockMode)
+              _ <- syncPipe.send(SyncPipe.StatusResponse(status))
+            } yield ()
+          }
         } yield ()
     }
   }
@@ -296,7 +305,10 @@ object SyncService {
       syncModeFactory = new SyncMode.Factory[F, N, A] {
         override def block(viewNumber: ViewNumber) =
           for {
-            (syncFiberMap, release) <- FiberMap[F, A#PKey]().allocated
+            (syncFiberMap, syncFiberMapRelease) <- FiberMap[
+              F,
+              A#PKey
+            ]().allocated
             blockSynchronizer <- BlockSynchronizer[F, N, A](
               blockStorage,
               service.getBlock
@@ -304,7 +316,7 @@ object SyncService {
             mode = SyncMode.Block(
               blockSynchronizer,
               syncFiberMap,
-              release,
+              syncFiberMapRelease,
               viewNumber
             )
           } yield mode
@@ -334,8 +346,8 @@ object SyncService {
   object SyncMode {
     case class Block[F[_], N, A <: Agreement](
         synchronizer: BlockSynchronizer[F, N, A],
-        syncFiberMap: FiberMap[F, A#PKey],
-        syncFiberMapShutdown: F[Unit],
+        fiberMap: FiberMap[F, A#PKey],
+        fiberMapShutdown: F[Unit],
         lastSyncedViewNumber: ViewNumber
     ) extends SyncMode[F, N, A]
 

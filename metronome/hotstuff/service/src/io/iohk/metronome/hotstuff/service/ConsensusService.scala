@@ -168,16 +168,20 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
   /** Process the synchronization result queue. */
   private def processSyncPipe: F[Unit] =
     syncPipe.receive
-      .mapEval[Unit] { case SyncPipe.PrepareResponse(request, isValid) =>
-        if (isValid) {
-          enqueueEvent(
-            validated(Event.MessageReceived(request.sender, request.prepare))
-          )
-        } else {
-          protocolError(
-            ProtocolError.UnsafeExtension(request.sender, request.prepare)
-          )
-        }
+      .mapEval[Unit] {
+        case SyncPipe.PrepareResponse(request, isValid) =>
+          if (isValid) {
+            enqueueEvent(
+              validated(Event.MessageReceived(request.sender, request.prepare))
+            )
+          } else {
+            protocolError(
+              ProtocolError.UnsafeExtension(request.sender, request.prepare)
+            )
+          }
+
+        case SyncPipe.StatusResponse(status) =>
+          ???
       }
       .completedL
 

@@ -32,6 +32,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
     genInitialState,
     genHash
   }
+  import ViewSynchronizer.FederationStatus
 
   /** Projected responses in each round from every federation member. */
   type Responses = Vector[Map[TestAgreement.PKey, TestResponse]]
@@ -287,7 +288,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       responseCounter <- fixture.responseCounterRef.get
     } yield {
       val statusProps = status match {
-        case Right(status) =>
+        case Right(FederationStatus(status, commitSources)) =>
           "status" |: all(
             "quorum" |: hasQuorum,
             "reports polls each round" |:
@@ -296,7 +297,8 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
               pollSizes.last >= quorumSize &&
               pollSizes.init.forall(_ < quorumSize),
             "reports all invalid" |:
-              invalidEventCount == invalidResponseCount
+              invalidEventCount == invalidResponseCount,
+            "returns sources" |: commitSources.toSeq.size >= quorumSize
           )
 
         case Left(ex: TimeoutException) =>
