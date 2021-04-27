@@ -16,7 +16,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Signing
 }
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
-import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
+import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.hotstuff.service.sync.BlockSynchronizer
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
@@ -42,7 +42,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
     blockStorage: BlockStorage[N, A],
-    blockSyncPipe: BlockSyncPipe[F, A]#Right,
+    syncPipe: SyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
     incomingFiberMap: FiberMap[F, A#PKey],
     syncFiberMap: FiberMap[F, A#PKey],
@@ -153,17 +153,17 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     }
   }
 
-  /** Read Requests from the BlockSyncPipe and send Responses.
+  /** Read Requests from the SyncPipe and send Responses.
     *
     * These are coming from the `ConsensusService` asking for a
     * `Prepare` message to be synchronised with the sender.
     */
-  private def processBlockSyncPipe(
+  private def processSyncPipe(
       blockSynchronizer: BlockSynchronizer[F, N, A]
   ): F[Unit] = {
-    blockSyncPipe.receive
+    syncPipe.receive
       .mapEval[Unit] {
-        // TODO (PM-3063): Change `BlockSyncPipe` to just `SyncPipe` and add
+        // TODO (PM-3063): Change `SyncPipe` to just `SyncPipe` and add
         // ViewState sync requests which poll the fedreation for the latest
         // Commit Q.C. and jump to it. When that signal comes, cancel the
         // `syncFiberMap`, discard the `blockSynchronizer` and move over to
@@ -171,7 +171,7 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
         // For this, change the input of this method to a `F[BlockSynchronizer[F,N,A]]`
         // and call some mutually recursive method representing different states:
 
-        case request @ BlockSyncPipe.Request(sender, prepare) =>
+        case request @ SyncPipe.PrepareRequest(sender, prepare) =>
           // It is enough to respond to the last block positively, it will indicate
           // that the whole range can be executed later (at that point from storage).
           // If the same leader is sending us newer proposals, we can ignore the
@@ -184,8 +184,8 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
                 for {
                   _       <- blockSynchronizer.sync(sender, prepare.highQC)
                   isValid <- validateBlock(prepare.block)
-                  _ <- blockSyncPipe.send {
-                    BlockSyncPipe.Response(request, isValid)
+                  _ <- syncPipe.send {
+                    SyncPipe.PrepareResponse(request, isValid)
                   }
                 } yield ()
               }
@@ -211,7 +211,7 @@ object SyncService {
       federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],
       blockStorage: BlockStorage[N, A],
-      blockSyncPipe: BlockSyncPipe[F, A]#Right,
+      syncPipe: SyncPipe[F, A]#Right,
       getState: F[ProtocolState[A]],
       timeout: FiniteDuration = 10.seconds
   )(implicit
@@ -229,7 +229,7 @@ object SyncService {
         publicKey,
         network,
         blockStorage,
-        blockSyncPipe,
+        syncPipe,
         getState,
         incomingFiberMap,
         syncFiberMap,
@@ -240,6 +240,6 @@ object SyncService {
       }
       viewSync = new ViewSynchronizer[F, A](federation, service.getStatus)
       _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))
+      _ <- Concurrent[F].background(service.processSyncPipe(blockSync))
     } yield service
 }
