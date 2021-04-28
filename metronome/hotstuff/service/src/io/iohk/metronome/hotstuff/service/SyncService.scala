@@ -3,7 +3,6 @@ package io.iohk.metronome.hotstuff.service
 import cats.implicits._
 import cats.Parallel
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
-import cats.effect.concurrent.Ref
 import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.core.messages.{
   RPCMessageCompanion,
@@ -44,7 +43,7 @@ import scala.reflect.ClassTag
   * The block and view synchronisation components will use this service
   * to send requests to the network.
   */
-class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
+class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
     applicationService: ApplicationService[F, A],
@@ -56,9 +55,8 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
     rpcTracker: RPCTracker[F, SyncMessage[A]]
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
   import SyncMessage._
-  import SyncService.SyncMode
 
-  type SyncModeRef = Ref[F, SyncMode[F, N, A]]
+  type BlockSync = SyncService.BlockSynchronizerWithFiberMap[F, N, A]
 
   private def protocolStatus: F[Status[A]] =
     getState.map { state =>
@@ -178,143 +176,133 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
     * for the view to be synchronized with the whole federation.
     */
   private def processSyncPipe(
-      syncModeFactory: SyncMode.Factory[F, N, A]
-  ): Resource[F, Unit] =
-    for {
-      // Initialize the sync mode from view number 0, which accepts
-      // any requests. Make sure the synchronizer is shut down at
-      // the end, if it's running.
-      syncModeRef <- Resource.make(
-        syncModeFactory
-          .block(ViewNumber(0))
-          .flatMap(Ref.of[F, SyncMode[F, N, A]](_))
-      ) { syncModeRef =>
-        syncModeRef.get.flatMap {
-          case SyncMode.View(_)                          => ().pure[F]
-          case SyncMode.Block(_, _, fiberMapShutdown, _) => fiberMapShutdown
+      makeBlockSync: F[BlockSync],
+      viewSynchronizer: ViewSynchronizer[F, A]
+  ): F[Unit] =
+    syncPipe.receive.consume.use { consumer =>
+      def loop(
+          blockSync: BlockSync,
+          lastSyncedViewNumber: ViewNumber
+      ): F[Unit] = {
+        consumer.pull.flatMap {
+          case Right(SyncPipe.PrepareRequest(_, prepare))
+              if prepare.viewNumber < lastSyncedViewNumber =>
+            // We have already synced to a Commit Q.C. higher than this old PrepareRequest.
+            loop(blockSync, lastSyncedViewNumber)
+
+          case Right(SyncPipe.StatusRequest(viewNumber))
+              if viewNumber < lastSyncedViewNumber =>
+            // We have already synced higher than this old StatusRequest.
+            loop(blockSync, lastSyncedViewNumber)
+
+          case Right(request @ SyncPipe.PrepareRequest(sender, prepare)) =>
+            handlePrepareRequest(blockSync, request) >>
+              loop(blockSync, lastSyncedViewNumber)
+
+          case Right(request @ SyncPipe.StatusRequest(_)) =>
+            handleStatusRequest(
+              makeBlockSync,
+              blockSync,
+              viewSynchronizer,
+              request
+            ).flatMap {
+              (loop _).tupled
+            }
+
+          case Left(maybeError) =>
+            blockSync.fiberMapRelease >>
+              maybeError.fold(().pure[F])(Sync[F].raiseError(_))
         }
       }
 
-      // Start processing messages from the pipe.
-      _ <- Concurrent[F].background {
-        syncPipe.receive
-          .mapEval[Unit] {
-            case request @ SyncPipe.PrepareRequest(_, _) =>
-              handlePrepareRequest(syncModeRef, request)
-
-            case request @ SyncPipe.StatusRequest(_) =>
-              handleStatusRequest(
-                syncModeRef,
-                syncModeFactory,
-                request
-              )
-          }
-          .completedL
+      makeBlockSync.flatMap { blockSync =>
+        loop(blockSync, ViewNumber(0))
       }
-    } yield ()
+    }
 
-  /** Sync with the sender up to the High Q.C. it sent, then validate the prepared block. */
+  /** Sync with the sender up to the High Q.C. it sent, then validate the prepared block.
+    *
+    * This is done in the background, while further requests are taken from the pipe.
+    */
   private def handlePrepareRequest(
-      syncModeRef: SyncModeRef,
+      blockSync: BlockSync,
       request: SyncPipe.PrepareRequest[A]
   ): F[Unit] = {
-    syncModeRef.get.flatMap {
-      case SyncMode.View(_) =>
-        // We're in the process of syncing the view, so we can ignore any further
-        // blocks until we switch back.
-        ().pure[F]
-
-      case SyncMode.Block(_, _, _, lastSyncedViewNumber)
-          if lastSyncedViewNumber > request.prepare.highQC.viewNumber =>
-        // We already have synced to a Commit Q.C. higher than this prepare. Must be an old message.
-        ().pure[F]
-
-      case SyncMode.Block(blockSynchronizer, syncFiberMap, _, _) =>
-        val sender  = request.sender
-        val prepare = request.prepare
-        // It is enough to respond to the last block positively, it will indicate
-        // that the whole range can be executed later (at that point from storage).
-        // If the same leader is sending us newer proposals, we can ignore the
-        // previous pepared blocks - they are either part of the new Q.C.,
-        // in which case they don't need to be validated, or they have not
-        // gathered enough votes, and been superseded by a new proposal.
-        syncFiberMap.cancelQueue(sender) >>
-          syncFiberMap
-            .submit(sender) {
-              for {
-                _       <- blockSynchronizer.sync(sender, prepare.highQC)
-                isValid <- applicationService.validateBlock(prepare.block)
-                _       <- syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
-              } yield ()
-            }
-            .attemptNarrow[FiberMap.ShutdownException] // Ignore shutdowns
-            .void
-    }
+    val sender  = request.sender
+    val prepare = request.prepare
+    // It is enough to respond to the last block positively, it will indicate
+    // that the whole range can be executed later (at that point from storage).
+    // If the same leader is sending us newer proposals, we can ignore the
+    // previous pepared blocks - they are either part of the new Q.C.,
+    // in which case they don't need to be validated, or they have not
+    // gathered enough votes, and been superseded by a new proposal.
+    blockSync.fiberMap.cancelQueue(sender) >>
+      blockSync.fiberMap
+        .submit(sender) {
+          for {
+            _       <- blockSync.synchronizer.sync(sender, prepare.highQC)
+            isValid <- applicationService.validateBlock(prepare.block)
+            _       <- syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
+          } yield ()
+        }
+        .void
   }
+
+  /** Shut down the any outstanding block downloads, sync the view,
+    * then create another block synchronizer instance to resume with.
+    */
+  private def handleStatusRequest(
+      makeBlockSync: F[BlockSync],
+      blockSync: BlockSync,
+      viewSynchronizer: ViewSynchronizer[F, A],
+      request: SyncPipe.StatusRequest
+  ): F[(BlockSync, ViewNumber)] =
+    for {
+      // Cancel all outstanding block syncing.
+      _ <- blockSync.fiberMapRelease
+      // The block synchronizer is still usable.
+      viewNumber <- syncStatus(
+        blockSync.synchronizer,
+        viewSynchronizer
+      ).handleErrorWith { case NonFatal(ex) =>
+        tracers.error(ex).as(request.viewNumber)
+      }
+      // Create a fresh fiber and block synchronizer instance.
+      // When the previous goes out of scope, its ephemeral storage is freed.
+      newBlockSync <- makeBlockSync
+    } yield (newBlockSync, viewNumber)
 
   /** Get the latest status of federation members, download the corresponding block
     * and prune all existing block history, making the latest Commit Q.C. the new
     * root in the block tree.
+    *
+    * This is done in the foreground, no further requests are taken from the pipe.
     */
-  private def handleStatusRequest(
-      syncModeRef: SyncModeRef,
-      syncModeFactory: SyncMode.Factory[F, N, A],
-      request: SyncPipe.StatusRequest
-  ): F[Unit] = {
-    syncModeRef.get.flatMap {
-      case SyncMode.View(_) =>
-        // We're already syncing the view, so we can ignore any further requests.
-        ().pure[F]
+  private def syncStatus(
+      blockSynchronizer: BlockSynchronizer[F, N, A],
+      viewSynchronizer: ViewSynchronizer[F, A]
+  ): F[ViewNumber] =
+    for {
+      // Sync to the latest Commit Q.C.
+      federationStatus <- viewSynchronizer.sync
+      status = federationStatus.status
 
-      case SyncMode.Block(_, _, _, lastSyncedViewNumber)
-          if lastSyncedViewNumber >= request.viewNumber =>
-        // We have already synced to a view that covers the state where the request was made.
-        ().pure[F]
+      // Download the block in the Commit Q.C.
+      block <- blockSynchronizer.getBlockFromQuorumCertificate(
+        federationStatus.sources,
+        status.commitQC
+      )
 
-      case SyncMode.Block(_, _, shutdownBlockSync, lastSyncedViewNumber) =>
-        for {
-          // Switch to view sync mode
-          viewMode <- syncModeFactory.view
-          _        <- syncModeRef.set(viewMode)
-          // Cancel all outstanding block syncing.
-          _ <- shutdownBlockSync
-          // Perform the rest in the background, so we keep processing the pipe.
-          _ <- Concurrent[F].start {
-            val task = for {
-              // Sync to the latest Commit Q.C.
-              federationStatus <- viewMode.synchronizer.sync
-              status = federationStatus.status
-              blockMode <- syncModeFactory.block(status.viewNumber)
+      // Sync any application specific state, e.g. a ledger.
+      // Do this before we prune the existing blocks and set the new root.
+      _ <- applicationService.syncState(federationStatus.sources, block)
 
-              // Download the block in the Commit Q.C.
-              block <- blockMode.synchronizer.getBlockFromQuorumCertificate(
-                federationStatus.sources,
-                status.commitQC
-              )
+      // Prune the block store from earlier blocks that are no longer traversable.
+      _ <- fastForwardStorage(status, block)
 
-              // Sync any application specific state, e.g. a ledger.
-              // Do this before we prune the existing blocks and set the new root.
-              _ <- applicationService.syncState(federationStatus.sources, block)
-
-              // Prune the block store from earlier blocks that are no longer traversable.
-              _ <- fastForwardStorage(status, block)
-
-              // Switch back to block sync mode
-              _ <- syncModeRef.set(blockMode)
-              _ <- syncPipe.send(SyncPipe.StatusResponse(status))
-            } yield ()
-
-            task.handleErrorWith { case NonFatal(ex) =>
-              // Restore block syncing, so we don't get stuck.
-              tracers.error(ex) >>
-                syncModeFactory
-                  .block(lastSyncedViewNumber)
-                  .flatMap(syncModeRef.set)
-            }
-          }
-        } yield ()
-    }
-  }
+      // Tell the ConsensusService about the new Status.
+      _ <- syncPipe.send(SyncPipe.StatusResponse(status))
+    } yield status.viewNumber
 
   /** Replace the state we have persisted with what we synced with the federation.
     *
@@ -389,38 +377,31 @@ object SyncService {
         rpcTracker
       )
 
-      syncModeFactory = new SyncMode.Factory[F, N, A] {
-        override def block(viewNumber: ViewNumber) =
-          for {
-            (syncFiberMap, syncFiberMapRelease) <-
-              FiberMap[F, A#PKey]().allocated
+      blockSync = for {
+        (syncFiberMap, syncFiberMapRelease) <- FiberMap[F, A#PKey]().allocated
+        blockSynchronizer <- BlockSynchronizer[F, N, A](
+          publicKey,
+          federation,
+          blockStorage,
+          service.getBlock
+        )
+      } yield BlockSynchronizerWithFiberMap(
+        blockSynchronizer,
+        syncFiberMap,
+        syncFiberMapRelease
+      )
 
-            blockSynchronizer <- BlockSynchronizer[F, N, A](
-              publicKey,
-              federation,
-              blockStorage,
-              service.getBlock
-            )
+      viewSynchronizer = new ViewSynchronizer[F, A](
+        federation,
+        service.getStatus
+      )
 
-            mode = SyncMode.Block(
-              blockSynchronizer,
-              syncFiberMap,
-              syncFiberMapRelease,
-              viewNumber
-            )
-          } yield mode
-
-        override val view =
-          Sync[F]
-            .delay {
-              new ViewSynchronizer[F, A](federation, service.getStatus)
-            }
-            .map(SyncMode.View(_))
-
+      _ <- Concurrent[F].background {
+        service.processNetworkMessages
       }
-
-      _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- service.processSyncPipe(syncModeFactory)
+      _ <- Concurrent[F].background {
+        service.processSyncPipe(blockSync, viewSynchronizer)
+      }
     } yield service
 
   /** The `SyncService` can be in two modes: either we're in sync with the federation
@@ -429,24 +410,14 @@ object SyncService {
     * is, and then jump straight to the latest Commit Quorum Certificate.
     *
     * Our implementation assumes that this is always supported by the application.
+    *
+    * When we go from block sync to view sync, the block syncs happening in the
+    * background on the fiber ap in this class are canceled, and the synchronizer
+    * instance with its ephemeral storage is discarded.
     */
-  sealed trait SyncMode[F[_], N, A <: Agreement]
-
-  object SyncMode {
-    case class Block[F[_], N, A <: Agreement](
-        synchronizer: BlockSynchronizer[F, N, A],
-        fiberMap: FiberMap[F, A#PKey],
-        fiberMapShutdown: F[Unit],
-        lastSyncedViewNumber: ViewNumber
-    ) extends SyncMode[F, N, A]
-
-    case class View[F[_], N, A <: Agreement](
-        synchronizer: ViewSynchronizer[F, A]
-    ) extends SyncMode[F, N, A]
-
-    trait Factory[F[_], N, A <: Agreement] {
-      def block(viewNumber: ViewNumber): F[Block[F, N, A]]
-      def view: F[View[F, N, A]]
-    }
-  }
+  case class BlockSynchronizerWithFiberMap[F[_], N, A <: Agreement](
+      synchronizer: BlockSynchronizer[F, N, A],
+      fiberMap: FiberMap[F, A#PKey],
+      fiberMapRelease: F[Unit]
+  )
 }
