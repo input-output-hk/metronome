@@ -90,11 +90,7 @@ class BlockStorage[N, A <: Agreement: Block](
     */
   private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] = {
     def deleteIfEmpty(maybeChildren: Option[Set[A#Hash]]) =
-      maybeChildren match {
-        case None                               => None
-        case Some(children) if children.isEmpty => None
-        case children                           => children
-      }
+      maybeChildren.filter(_.nonEmpty)
 
     childToParentColl.get(blockHash).flatMap {
       case None =>

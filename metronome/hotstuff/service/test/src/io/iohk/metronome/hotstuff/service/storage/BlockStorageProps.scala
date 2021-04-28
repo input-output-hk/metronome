@@ -5,6 +5,7 @@ import io.iohk.metronome.storage.{KVCollection, KVStoreState}
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, Block => BlockOps}
 import java.util.UUID
 import org.scalacheck._
+import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.{all, forAll, propBoolean}
 import scodec.codecs.implicits._
 import scodec.Codec
@@ -170,7 +171,8 @@ object BlockStorageProps extends Properties("BlockStorage") {
   property("put unordered") = forAll {
     for {
       ordered <- genNonEmptyBlockTree
-      unordered = Random.shuffle(ordered)
+      seed    <- arbitrary[Int]
+      unordered = new Random(seed).shuffle(ordered)
     } yield (ordered, unordered)
   } { case (ordered, unordered) =>
     val orderedStore   = TestKVStore.build(ordered)
