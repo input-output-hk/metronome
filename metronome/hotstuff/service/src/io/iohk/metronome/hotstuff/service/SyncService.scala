@@ -224,6 +224,11 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
         // blocks until we switch back.
         ().pure[F]
 
+      case SyncMode.Block(_, _, _, lastSyncedViewNumber)
+          if lastSyncedViewNumber > request.prepare.highQC.viewNumber =>
+        // We already have synced to a Commit Q.C. higher than this prepare. Must be an old message.
+        ().pure[F]
+
       case SyncMode.Block(blockSynchronizer, syncFiberMap, _, _) =>
         val sender  = request.sender
         val prepare = request.prepare
