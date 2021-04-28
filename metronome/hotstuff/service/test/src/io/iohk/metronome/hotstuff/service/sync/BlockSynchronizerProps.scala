@@ -11,7 +11,7 @@ import io.iohk.metronome.hotstuff.consensus.{
 import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.storage.BlockStorageProps
 import io.iohk.metronome.storage.InMemoryKVStore
-import org.scalacheck.{Properties, Arbitrary, Gen}, Arbitrary.arbitrary
+import org.scalacheck.{Properties, Arbitrary, Gen, Prop}, Arbitrary.arbitrary
 import org.scalacheck.Prop.{all, forAll, forAllNoShrink, propBoolean}
 import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
@@ -28,6 +28,10 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     genNonEmptyBlockTree
   }
 
+  case class Prob(value: Double) {
+    require(value >= 0 && value <= 1)
+  }
+
   // Insert the prefix three into "persistent" storage,
   // then start multiple concurrent download processes
   // from random federation members pointing at various
@@ -42,7 +46,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       descendantTree: List[TestBlock],
       requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])],
       federation: Federation[TestAgreement.PKey],
-      random: Random
+      random: Random,
+      probTimeout: Prob,
+      probCorrupt: Prob
   ) {
     val persistentRef = Ref.unsafe[Task, TestKVStore.Store] {
       TestKVStore.build(ancestorTree)
@@ -64,10 +70,10 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     ): Task[Option[TestAgreement.Block]] = {
       val timeout   = 5000
       val delay     = random.nextDouble() * 2900 + 100
-      val isLost    = random.nextDouble() < 0.2
-      val isCorrupt = random.nextDouble() < 0.2
+      val isTimeout = random.nextDouble() < probTimeout.value
+      val isCorrupt = random.nextDouble() < probCorrupt.value
 
-      if (isLost) {
+      if (isTimeout) {
         Task.pure(None).delayResult(timeout.millis)
       } else {
         val block  = blockMap(blockHash)
@@ -99,7 +105,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   }
   object TestFixture {
 
-    implicit val arb: Arbitrary[TestFixture] = Arbitrary {
+    implicit val arb: Arbitrary[TestFixture] = Arbitrary(gen())
+
+    def gen(probTimeout: Prob = Prob(0.2), probCorrupt: Prob = Prob(0.2)) =
       for {
         ancestorTree <- genNonEmptyBlockTree
         leaf = ancestorTree.last
@@ -133,14 +141,23 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         descendantTree,
         requests,
         federation,
-        random
+        random,
+        probTimeout,
+        probCorrupt
       )
-    }
+  }
+
+  def simulate(duration: FiniteDuration)(test: Task[Prop]): Prop = {
+    implicit val scheduler = TestScheduler()
+    // Schedule the execution, using a Future so we can check the value.
+    val testFuture = test.runToFuture
+    // Simulate a time.
+    scheduler.tick(duration)
+    // Get the completed results.
+    testFuture.value.get.get
   }
 
   property("sync - persist") = forAll { (fixture: TestFixture) =>
-    implicit val scheduler = TestScheduler()
-
     val test = for {
       fibers <- Task.traverse(fixture.requests) { case (publicKey, qc) =>
         fixture.synchronizer.sync(publicKey, qc).start
@@ -164,14 +181,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         }
       )
     }
-
-    // Schedule the execution, using a Future so we can check the value.
-    val testFuture = test.runToFuture
-
     // Simulate a long time, which should be enough for all downloads to finish.
-    scheduler.tick(1.day)
-
-    testFuture.value.get.get
+    simulate(1.day)(test)
   }
 
   property("sync - no forest") = forAll(
@@ -220,8 +231,6 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       qc = fixture.requests.last._2
     } yield (fixture, sources, qc)
   ) { case (fixture, sources, qc) =>
-    implicit val scheduler = TestScheduler()
-
     val test = for {
       block <- fixture.synchronizer.getBlockFromQuorumCertificate(
         sources = NonEmptyVector.fromVectorUnsafe(sources.toVector),
@@ -237,12 +246,31 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
           !persistent(Namespace.Blocks).contains(qc.blockHash)
       )
     }
-
-    val testFuture = test.runToFuture
-
     // Give it enough time to try multiple sources.
-    scheduler.tick(1.minute)
+    simulate(1.minute)(test)
+  }
 
-    testFuture.value.get.get
+  property("getBlockFromQuorumCertificate - timeout") = forAllNoShrink(
+    for {
+      fixture <- TestFixture.gen(probTimeout = Prob(1))
+      request = fixture.requests.last // Use one that isn't persisted yet.
+    } yield (fixture, request._1, request._2)
+  ) { case (fixture, source, qc) =>
+    val test = for {
+      result <- fixture.synchronizer
+        .getBlockFromQuorumCertificate(
+          sources = NonEmptyVector.one(source),
+          quorumCertificate = qc
+        )
+        .attempt
+    } yield "fail with the right exception" |: {
+      result match {
+        case Left(ex: BlockSynchronizer.DownloadFailedException[_]) =>
+          true
+        case _ =>
+          false
+      }
+    }
+    simulate(1.minute)(test)
   }
 }
