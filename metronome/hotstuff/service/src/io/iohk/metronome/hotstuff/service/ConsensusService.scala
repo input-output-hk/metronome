@@ -226,7 +226,6 @@ class ConsensusService[F[
           case e @ Event.NextView(viewNumber) =>
             for {
               counter <- counterRef.get
-              _       <- counterRef.set(MessageCounter.empty)
               _       <- tracers.timeout(viewNumber -> counter)
               _       <- maybeRequestStatusSync(viewNumber, counter)
               _       <- handleTransition(state.handleNextView(e))
@@ -296,7 +295,8 @@ class ConsensusService[F[
         f(next).whenA(prev != next)
       }
 
-      ifChanged(_.viewNumber)(updateViewNumber) >>
+      ifChanged(_.viewNumber)(_ => counterRef.set(MessageCounter.empty)) >>
+        ifChanged(_.viewNumber)(updateViewNumber) >>
         ifChanged(_.prepareQC)(updateQuorum) >>
         ifChanged(_.lockedQC)(updateQuorum) >>
         ifChanged(_.commitQC)(updateQuorum)
