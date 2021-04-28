@@ -313,7 +313,8 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
 
       all(
         statusProps,
-        "poll everyone in each round" |: responseCounter.values.toList.distinct.size == 1
+        "poll everyone in each round" |:
+          responseCounter.values.toList.distinct.size <= 2 // Some members can get an extra query, down to timing.
       )
     }
 
