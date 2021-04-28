@@ -47,6 +47,7 @@ import scala.reflect.ClassTag
 class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
+    applicationService: ApplicationService[F, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
     syncPipe: SyncPipe[F, A]#Right,
@@ -237,7 +238,7 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
             .submit(sender) {
               for {
                 _       <- blockSynchronizer.sync(sender, prepare.highQC)
-                isValid <- validateBlock(prepare.block)
+                isValid <- applicationService.validateBlock(prepare.block)
                 _       <- syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
               } yield ()
             }
@@ -286,11 +287,12 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
                 status.commitQC
               )
 
+              // Sync any application specific state, e.g. a ledger.
+              // Do this before we prune the existing blocks and set the new root.
+              _ <- applicationService.syncState(federationStatus.sources, block)
+
               // Prune the block store from earlier blocks that are no longer traversable.
               _ <- fastForwardStorage(status, block)
-
-              // Sync any application specific state, e.g. a ledger.
-              _ <- syncAppState(status.commitQC.blockHash)
 
               // Switch back to block sync mode
               _ <- syncModeRef.set(blockMode)
@@ -340,12 +342,6 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
 
     storeRunner.runReadWrite(query)
   }
-
-  // TODO (PM-3132, PM-3133): Block validation.
-  private def validateBlock(block: A#Block): F[Boolean] = true.pure[F]
-
-  // TODO (PM-3135): Tell the application to sync state of the block.
-  private def syncAppState(blockHash: A#Hash): F[Unit] = ().pure[F]
 }
 
 object SyncService {
@@ -360,6 +356,7 @@ object SyncService {
       publicKey: A#PKey,
       federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],
+      applicationService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Right,
@@ -378,6 +375,7 @@ object SyncService {
       service = new SyncService(
         publicKey,
         network,
+        applicationService,
         blockStorage,
         viewStateStorage,
         syncPipe,

@@ -47,8 +47,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])],
       federation: Federation[TestAgreement.PKey],
       random: Random,
-      probTimeout: Prob,
-      probCorrupt: Prob
+      timeoutProb: Prob,
+      corruptProb: Prob
   ) {
     val persistentRef = Ref.unsafe[Task, TestKVStore.Store] {
       TestKVStore.build(ancestorTree)
@@ -70,8 +70,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     ): Task[Option[TestAgreement.Block]] = {
       val timeout   = 5000
       val delay     = random.nextDouble() * 2900 + 100
-      val isTimeout = random.nextDouble() < probTimeout.value
-      val isCorrupt = random.nextDouble() < probCorrupt.value
+      val isTimeout = random.nextDouble() < timeoutProb.value
+      val isCorrupt = random.nextDouble() < corruptProb.value
 
       if (isTimeout) {
         Task.pure(None).delayResult(timeout.millis)
@@ -107,7 +107,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
     implicit val arb: Arbitrary[TestFixture] = Arbitrary(gen())
 
-    def gen(probTimeout: Prob = Prob(0.2), probCorrupt: Prob = Prob(0.2)) =
+    def gen(timeoutProb: Prob = Prob(0.2), corruptProb: Prob = Prob(0.2)) =
       for {
         ancestorTree <- genNonEmptyBlockTree
         leaf = ancestorTree.last
@@ -142,8 +142,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         requests,
         federation,
         random,
-        probTimeout,
-        probCorrupt
+        timeoutProb,
+        corruptProb
       )
   }
 
@@ -187,7 +187,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
   property("sync - no forest") = forAll(
     for {
-      fixture  <- arbitrary[TestFixture]
+      fixture  <- TestFixture.gen(timeoutProb = Prob(0))
       duration <- Gen.choose(1, fixture.requests.size).map(_ * 500.millis)
     } yield (fixture, duration)
   ) { case (fixture: TestFixture, duration: FiniteDuration) =>
@@ -252,7 +252,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
   property("getBlockFromQuorumCertificate - timeout") = forAllNoShrink(
     for {
-      fixture <- TestFixture.gen(probTimeout = Prob(1))
+      fixture <- TestFixture.gen(timeoutProb = Prob(1))
       request = fixture.requests.last // Use one that isn't persisted yet.
     } yield (fixture, request._1, request._2)
   ) { case (fixture, source, qc) =>
