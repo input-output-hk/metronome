@@ -44,12 +44,15 @@ class ConsensusService[F[
     viewStateStorage: ViewStateStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
+    counterRef: Ref[F, ConsensusService.MessageCounter],
     syncPipe: SyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
     fiberSet: FiberSet[F],
     maxEarlyViewNumberDiff: Int
 )(implicit tracers: ConsensusTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
+
+  import ConsensusService.MessageCounter
 
   /** Get the current protocol state, perhaps to respond to status requests. */
   def getState: F[ProtocolState[A]] =
@@ -91,18 +94,18 @@ class ConsensusService[F[
             .as(none)
 
         case Right(valid) if valid.message.viewNumber < state.viewNumber =>
-          // TODO (PM-3063): Also collect these for the round so we can realise if we're out of sync.
-          tracers.fromPast(valid).as(none)
+          tracers.fromPast(valid) >>
+            counterRef.update(_.incPast).as(none)
 
         case Right(valid)
             if valid.message.viewNumber > state.viewNumber + maxEarlyViewNumberDiff =>
-          // TODO (PM-3063): Also collect these for the round so we can realise if we're out of sync.
-          tracers.fromFuture(valid).as(none)
+          tracers.fromFuture(valid) >>
+            counterRef.update(_.incFuture).as(none)
 
         case Right(valid) =>
           // We know that the message is to/from the leader and it's properly signed,
           // althought it may not match our current state, which we'll see later.
-          validated(valid).some.pure[F]
+          counterRef.update(_.incPresent).as(validated(valid).some)
       }
     }
 
@@ -164,9 +167,7 @@ class ConsensusService[F[
       sender: A#PKey,
       prepare: Message.Prepare[A]
   ): F[Unit] =
-    syncPipe.send {
-      SyncPipe.PrepareRequest(sender, prepare)
-    }
+    syncPipe.send(SyncPipe.PrepareRequest(sender, prepare))
 
   /** Process the synchronization result queue. */
   private def processSyncPipe: F[Unit] =
@@ -197,9 +198,10 @@ class ConsensusService[F[
         commitQC = status.commitQC
       )
       // Trigger the next view, so we get proper tracing and effect execution.
-      handleTransition {
-        forward.handleNextView(Event.NextView(forward.viewNumber))
-      }
+      tracers.adoptView(status) >>
+        handleTransition(
+          forward.handleNextView(Event.NextView(status.viewNumber))
+        )
     }
   }
 
@@ -222,9 +224,13 @@ class ConsensusService[F[
             ().pure[F]
 
           case e @ Event.NextView(viewNumber) =>
-            // TODO (PM-3063): Check whether we have timed out because we are out of sync
-            tracers.timeout(viewNumber) >>
-              handleTransition(state.handleNextView(e))
+            for {
+              counter <- counterRef.get
+              _       <- counterRef.set(MessageCounter.empty)
+              _       <- tracers.timeout(viewNumber -> counter)
+              _       <- maybeRequestStatusSync(viewNumber, counter)
+              _       <- handleTransition(state.handleNextView(e))
+            } yield ()
 
           case e @ Event.MessageReceived(_, _) =>
             handleTransitionAttempt(
@@ -238,6 +244,26 @@ class ConsensusService[F[
         handle >> processEvents
       }
     }
+  }
+
+  /** Request view state synchronisation if we timed out and it looks like we're out of sync. */
+  private def maybeRequestStatusSync(
+      viewNumber: ViewNumber,
+      counter: MessageCounter
+  ): F[Unit] = {
+    // Only requesting a state sync if we haven't received any message that looks to be in sync
+    // but we have received some from the future. If we have received messages from the past,
+    // then by the virtue of timeouts they should catch up with us at some point.
+    val isOutOfSync = counter.present == 0 && counter.future > 0
+
+    // In the case that there were two groups being in sync within group members, but not with
+    // each other, than there should be rounds when none of them are leaders and they shouldn't
+    // receive valid present messages.
+    val requestSync =
+      tracers.viewSync(viewNumber) >>
+        syncPipe.send(SyncPipe.StatusRequest(viewNumber))
+
+    requestSync.whenA(isOutOfSync)
   }
 
   /** Handle successful state transition:
@@ -483,6 +509,22 @@ object ConsensusService {
     def empty[A <: Agreement] = MessageStash[A](Map.empty)
   }
 
+  /** Count the number of messages received from others in a round,
+    * to determine whether we're out of sync or not in case of a timeout.
+    */
+  case class MessageCounter(
+      past: Int,
+      present: Int,
+      future: Int
+  ) {
+    def incPast    = copy(past = past + 1)
+    def incPresent = copy(present = present + 1)
+    def incFuture  = copy(future = future + 1)
+  }
+  object MessageCounter {
+    val empty = MessageCounter(0, 0, 0)
+  }
+
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
@@ -545,6 +587,7 @@ object ConsensusService {
       stateRef   <- Ref[F].of(initState)
       stashRef   <- Ref[F].of(MessageStash.empty[A])
       fibersRef  <- Ref[F].of(Set.empty[Fiber[F, Unit]])
+      counterRef <- Ref[F].of(MessageCounter.empty)
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
       blockExecutionQueue <- ConcurrentQueue[F]
         .unbounded[Effect.ExecuteBlocks[A]](None)
@@ -556,6 +599,7 @@ object ConsensusService {
         viewStateStorage,
         stateRef,
         stashRef,
+        counterRef,
         syncPipe,
         eventQueue,
         blockExecutionQueue,

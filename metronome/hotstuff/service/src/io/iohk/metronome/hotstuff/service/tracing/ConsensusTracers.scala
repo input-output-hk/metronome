@@ -9,9 +9,13 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   ProtocolError,
   QuorumCertificate
 }
+import io.iohk.metronome.hotstuff.service.ConsensusService.MessageCounter
+import io.iohk.metronome.hotstuff.service.Status
 
 case class ConsensusTracers[F[_], A <: Agreement](
-    timeout: Tracer[F, ViewNumber],
+    timeout: Tracer[F, (ViewNumber, MessageCounter)],
+    viewSync: Tracer[F, ViewNumber],
+    adoptView: Tracer[F, Status[A]],
     newView: Tracer[F, ViewNumber],
     quorum: Tracer[F, QuorumCertificate[A]],
     fromPast: Tracer[F, Event.MessageReceived[A]],
@@ -28,7 +32,11 @@ object ConsensusTracers {
       tracer: Tracer[F, ConsensusEvent[A]]
   ): ConsensusTracers[F, A] =
     ConsensusTracers[F, A](
-      timeout = tracer.contramap[ViewNumber](Timeout(_)),
+      timeout = tracer.contramap[(ViewNumber, MessageCounter)](
+        (Timeout.apply _).tupled
+      ),
+      viewSync = tracer.contramap[ViewNumber](ViewSync(_)),
+      adoptView = tracer.contramap[Status[A]](AdoptView(_)),
       newView = tracer.contramap[ViewNumber](NewView(_)),
       quorum = tracer.contramap[QuorumCertificate[A]](Quorum(_)),
       fromPast = tracer.contramap[Event.MessageReceived[A]](FromPast(_)),
