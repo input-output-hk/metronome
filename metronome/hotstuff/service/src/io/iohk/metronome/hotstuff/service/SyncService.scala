@@ -281,7 +281,7 @@ class SyncService[F[_]: Concurrent, N, A <: Agreement: Block](
               blockMode <- syncModeFactory.block(status.viewNumber)
 
               // Download the block in the Commit Q.C.
-              block <- blockMode.synchronizer.downloadBlockInQC(
+              block <- blockMode.synchronizer.getBlockFromQuorumCertificate(
                 federationStatus.sources,
                 status.commitQC
               )

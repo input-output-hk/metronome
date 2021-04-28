@@ -1,19 +1,22 @@
 package io.iohk.metronome.hotstuff.service.sync
 
+import cats.data.NonEmptyVector
 import cats.effect.concurrent.{Ref, Semaphore}
 import io.iohk.metronome.crypto.GroupSignature
-import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import io.iohk.metronome.hotstuff.consensus.{
+  ViewNumber,
+  Federation,
+  LeaderSelection
+}
 import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.storage.BlockStorageProps
 import io.iohk.metronome.storage.InMemoryKVStore
 import org.scalacheck.{Properties, Arbitrary, Gen}, Arbitrary.arbitrary
-import org.scalacheck.Prop.{all, forAll, propBoolean}
+import org.scalacheck.Prop.{all, forAll, forAllNoShrink, propBoolean}
 import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
 import scala.util.Random
 import scala.concurrent.duration._
-import io.iohk.metronome.hotstuff.consensus.Federation
-import io.iohk.metronome.hotstuff.consensus.LeaderSelection
 
 object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   import BlockStorageProps.{
@@ -60,7 +63,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         blockHash: TestAgreement.Hash
     ): Task[Option[TestAgreement.Block]] = {
       val timeout   = 5000
-      val delay     = random.nextDouble() * 3000
+      val delay     = random.nextDouble() * 2900 + 100
       val isLost    = random.nextDouble() < 0.2
       val isCorrupt = random.nextDouble() < 0.2
 
@@ -135,7 +138,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     }
   }
 
-  property("persists") = forAll { (fixture: TestFixture) =>
+  property("sync - persist") = forAll { (fixture: TestFixture) =>
     implicit val scheduler = TestScheduler()
 
     val test = for {
@@ -148,7 +151,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       ephemeral  <- fixture.ephemeralRef.get
     } yield {
       all(
-        "ephermeral empty" |: ephemeral.isEmpty,
+        "ephemeral empty" |: ephemeral.isEmpty,
         "persistent contains all" |: fixture.requests.forall { case (_, qc) =>
           persistent(Namespace.Blocks).contains(qc.blockHash)
         },
@@ -171,7 +174,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     testFuture.value.get.get
   }
 
-  property("no forest") = forAll(
+  property("sync - no forest") = forAll(
     for {
       fixture  <- arbitrary[TestFixture]
       duration <- Gen.choose(1, fixture.requests.size).map(_ * 500.millis)
@@ -205,6 +208,40 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
     // Just simulate the immediate tasks.
     scheduler.tick()
+
+    testFuture.value.get.get
+  }
+
+  property("getBlockFromQuorumCertificate") = forAllNoShrink(
+    for {
+      fixture <- arbitrary[TestFixture]
+      sources <- Gen.atLeastOne(fixture.requests.map(_._1).distinct)
+      // The last request is definitely new.
+      qc = fixture.requests.last._2
+    } yield (fixture, sources, qc)
+  ) { case (fixture, sources, qc) =>
+    implicit val scheduler = TestScheduler()
+
+    val test = for {
+      block <- fixture.synchronizer.getBlockFromQuorumCertificate(
+        sources = NonEmptyVector.fromVectorUnsafe(sources.toVector),
+        quorumCertificate = qc
+      )
+      persistent <- fixture.persistentRef.get
+      ephemeral  <- fixture.ephemeralRef.get
+    } yield {
+      all(
+        "downloaded" |: block.id == qc.blockHash,
+        "not in ephemeral" |: ephemeral.isEmpty,
+        "not in persistent" |:
+          !persistent(Namespace.Blocks).contains(qc.blockHash)
+      )
+    }
+
+    val testFuture = test.runToFuture
+
+    // Give it enough time to try multiple sources.
+    scheduler.tick(1.minute)
 
     testFuture.value.get.get
   }

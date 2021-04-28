@@ -73,8 +73,16 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   /** Download the block in the Quorum Certificate without ancestors.
     *
     * Return it without being persisted.
+    *
+    * Unlike `sync`, which is expected to be canceled if consensus times out,
+    * or be satisfied by alternative downloads happening concurrently, this
+    * method raises and error if it cannot download the block after a certain
+    * number of attempts, from any of the sources. This is becuause its primary
+    * use is during state syncing where this is the only operation, and if for
+    * any reason the block would be gone from everyone honest members' storage,
+    * we have to try something else.
     */
-  def downloadBlockInQC(
+  def getBlockFromQuorumCertificate(
       sources: NonEmptyVector[A#PKey],
       quorumCertificate: QuorumCertificate[A]
   ): F[A#Block] = {
