@@ -1,16 +1,19 @@
 package io.iohk.metronome.config
 
 import com.typesafe.config.ConfigFactory
+import io.circe.Decoder
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableDrivenPropertyChecks
 import org.scalatest.Inside
+import scala.concurrent.duration._
 
 class ConfigParserSpec
     extends AnyFlatSpec
     with Matchers
     with TableDrivenPropertyChecks
     with Inside {
+
   "toJson" should "parse simple.conf to JSON" in {
     val conf = ConfigFactory.load("simple.conf")
     val json = ConfigParser.toJson(conf.getConfig("simple").root())
@@ -89,4 +92,64 @@ class ConfigParserSpec
     }
   }
 
+  "parse" should "decode into a configuration model" in {
+    import ConfigParserSpec.TestConfig
+
+    val config = ConfigParser.parse[TestConfig](
+      ConfigFactory.load("complex.conf").getConfig("metronome").root(),
+      prefix = "TEST",
+      env = Map("TEST_METRICS_ENABLED" -> "true")
+    )
+
+    inside(config) { case Right(Right(config)) =>
+      config shouldBe TestConfig(
+        TestConfig.Metrics(enabled = true),
+        TestConfig.Network(
+          bootstrap = List("localhost:40001"),
+          timeout = 5.seconds,
+          maxPacketSize = TestConfig.Size(512000)
+        ),
+        clientId = None
+      )
+    }
+  }
+}
+
+object ConfigParserSpec {
+  import io.circe._, io.circe.generic.semiauto._
+
+  case class TestConfig(
+      metrics: TestConfig.Metrics,
+      network: TestConfig.Network,
+      clientId: Option[String]
+  )
+  object TestConfig {
+    case class Metrics(enabled: Boolean)
+    object Metrics {
+      implicit val decoder: Decoder[Metrics] =
+        deriveDecoder
+    }
+
+    case class Network(
+        bootstrap: List[String],
+        timeout: FiniteDuration,
+        maxPacketSize: Size
+    )
+    object Network {
+      implicit val durationDecoder: Decoder[FiniteDuration] =
+        ConfigDecoders.durationDecoder
+
+      implicit val decoder: Decoder[Network] =
+        deriveDecoder
+    }
+
+    case class Size(bytes: Long)
+    object Size {
+      implicit val decoder: Decoder[Size] =
+        ConfigDecoders.bytesDecoder.map(Size(_))
+    }
+
+    implicit val decoder: Decoder[TestConfig] =
+      deriveDecoder
+  }
 }

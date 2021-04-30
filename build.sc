@@ -219,7 +219,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"io.circe::circe-parser:${VersionOf.circe}"
     )
 
-    object test extends TestModule
+    object test extends TestModule {
+      override def ivyDeps = super.ivyDeps() ++ Agg(
+        ivy"io.circe::circe-generic:${VersionOf.circe}"
+      )
+    }
   }
 
   /** Generic HotStuff BFT library. */

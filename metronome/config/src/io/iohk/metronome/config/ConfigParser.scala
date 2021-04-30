@@ -2,16 +2,39 @@ package io.iohk.metronome.config
 
 import cats.implicits._
 import com.typesafe.config.{ConfigObject, ConfigRenderOptions}
-import io.circe.{Json, JsonObject, ParsingFailure}
-import io.circe.parser.parse
+import io.circe.{Json, JsonObject, ParsingFailure, Decoder}
+import io.circe.parser.{parse => parseJson}
 
 object ConfigParser {
   type ParsingResult = Either[ParsingFailure, Json]
 
+  /** Parse configuration into a type using a JSON decoder, thus allowing
+    * validations to be applied to all configuraton values up front, rather
+    * than fail lazily when something is accessed or instantiated from
+    * the config factory.
+    *
+    * Accept overrides from the environment in PREFIX_PATH_TO_FIELD format.
+    */
+  def parse[T: Decoder](
+      conf: ConfigObject,
+      prefix: String = "",
+      env: Map[String, String] = sys.env
+  ): Either[ParsingFailure, Decoder.Result[T]] = {
+    // Render the whole config to JSON. Everything needs a default value,
+    // but it can be `null` and be replaced from the environment.
+    val orig = toJson(conf)
+    // Transform fields which use dash for segmenting into camelCase.
+    val withCamel = withCamelCase(orig)
+    // Apply overrides from env vars.
+    val withEnv = withEnvVarOverrides(withCamel, prefix, env)
+    // Map to the domain config model.
+    withEnv.map(Decoder[T].decodeJson(_))
+  }
+
   /** Render a TypeSafe Config section into JSON. */
-  def toJson(conf: ConfigObject): Json = {
+  protected[config] def toJson(conf: ConfigObject): Json = {
     val raw = conf.render(ConfigRenderOptions.concise)
-    parse(raw) match {
+    parseJson(raw) match {
       case Left(error: ParsingFailure) =>
         // This shouldn't happen with a well formed config file,
         // which would have already failed during parsing or projecting
@@ -24,7 +47,7 @@ object ConfigParser {
   }
 
   /** Transform a key in the HOCON config file to camelCase. */
-  def toCamelCase(key: String): String = {
+  protected[config] def toCamelCase(key: String): String = {
     def loop(cs: List[Char], acc: List[Char]): String =
       cs match {
         case ('_' | '-') :: cs =>
@@ -41,7 +64,7 @@ object ConfigParser {
   /** Turn `camelCaseKey` into `SNAKE_CASE_KEY`,
     * which is what it would look like as an env var.
     */
-  def toSnakeCase(camelCase: String): String = {
+  protected[config] def toSnakeCase(camelCase: String): String = {
     def loop(cs: List[Char], acc: List[Char]): String =
       cs match {
         case a :: b :: cs if a.isLower && b.isUpper =>
@@ -59,7 +82,7 @@ object ConfigParser {
   /** Transform all keys into camelCase form,
     * so they can be matched to case class fields.
     */
-  def withCamelCase(json: Json): Json = {
+  protected[config] def withCamelCase(json: Json): Json = {
     json
       .mapArray { arr =>
         arr.map(withCamelCase)
@@ -75,8 +98,16 @@ object ConfigParser {
     *
     * Only considers env var keys that start with prefix and are
     * in a PREFIX_SNAKE_CASE format.
+    *
+    * The operation can fail if a value in the environment is
+    * incompatible with the default in the config files.
+    *
+    * Default values in the config file are necessary, because
+    * the environment variable name in itself doesn't uniquely
+    * define a data structure (a single underscore matches both
+    * a '.' or a '-' in the path).
     */
-  def withEnvVarOverrides(
+  protected[config] def withEnvVarOverrides(
       json: Json,
       prefix: String,
       env: Map[String, String] = sys.env
@@ -93,7 +124,7 @@ object ConfigParser {
         env
           .get(path)
           .map { value =>
-            val maybeJson = parse(value) orElse parse(s""""$value"""")
+            val maybeJson = parseJson(value) orElse parseJson(s""""$value"""")
 
             maybeJson.flatMap { json =>
               if (validate(json)) {
