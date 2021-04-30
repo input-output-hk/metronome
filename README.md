@@ -21,6 +21,8 @@ The architecture also enables a convenient forensic monitoring module. By simply
 
 ![Architecture diagram](docs/architecture.png)
 
+![Component diagram](docs/components.png)
+
 ### BFT Algorithm
 
 The BFT service delegates checkpoint proposal and candidate validation to the Checkpointing Interpreter using 2-way communication to allow asynchronous responses as and when the data becomes available.
