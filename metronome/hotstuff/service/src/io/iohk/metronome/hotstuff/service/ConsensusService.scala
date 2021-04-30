@@ -40,6 +40,7 @@ class ConsensusService[F[
 ]: Timer: Concurrent, N, A <: Agreement: Block: Signing](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
+    appService: ApplicationService[F, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
@@ -419,8 +420,15 @@ class ConsensusService[F[
 
       case CreateBlock(viewNumber, highQC) =>
         // Ask the application to create a block for us.
-        // TODO (PM-3109): Create block.
-        ???
+        appService.createBlock(highQC).flatMap {
+          case None =>
+            ().pure[F]
+
+          case Some(block) =>
+            enqueueEvent(
+              validated(Event.BlockCreated(viewNumber, block, highQC))
+            )
+        }
 
       case SaveBlock(preparedBlock) =>
         storeRunner.runReadWrite {
@@ -537,6 +545,7 @@ object ConsensusService {
   ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block: Signing](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
@@ -552,6 +561,7 @@ object ConsensusService {
         build[F, N, A](
           publicKey,
           network,
+          appService,
           blockStorage,
           viewStateStorage,
           syncPipe,
@@ -573,6 +583,7 @@ object ConsensusService {
   ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block: Signing](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
@@ -595,6 +606,7 @@ object ConsensusService {
       service = new ConsensusService(
         publicKey,
         network,
+        appService,
         blockStorage,
         viewStateStorage,
         stateRef,

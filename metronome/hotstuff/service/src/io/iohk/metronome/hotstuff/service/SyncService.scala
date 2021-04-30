@@ -46,7 +46,7 @@ import scala.reflect.ClassTag
 class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, SyncMessage[A]],
-    applicationService: ApplicationService[F, A],
+    appService: ApplicationService[F, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
     syncPipe: SyncPipe[F, A]#Right,
@@ -241,7 +241,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
         .submit(sender) {
           for {
             _       <- blockSync.synchronizer.sync(sender, prepare.highQC)
-            isValid <- applicationService.validateBlock(prepare.block)
+            isValid <- appService.validateBlock(prepare.block)
             _       <- syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
           } yield ()
         }
@@ -295,7 +295,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
 
       // Sync any application specific state, e.g. a ledger.
       // Do this before we prune the existing blocks and set the new root.
-      _ <- applicationService.syncState(federationStatus.sources, block)
+      _ <- appService.syncState(federationStatus.sources, block)
 
       // Prune the block store from earlier blocks that are no longer traversable.
       _ <- fastForwardStorage(status, block)
@@ -349,7 +349,7 @@ object SyncService {
       publicKey: A#PKey,
       federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],
-      applicationService: ApplicationService[F, A],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Right,
@@ -368,7 +368,7 @@ object SyncService {
       service = new SyncService(
         publicKey,
         network,
-        applicationService,
+        appService,
         blockStorage,
         viewStateStorage,
         syncPipe,

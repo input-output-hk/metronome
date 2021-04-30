@@ -32,7 +32,7 @@ object HotStuffService {
       _
   ]: Concurrent: ContextShift: Timer: Parallel, N, A <: Agreement: Block: Signing](
       network: Network[F, A, HotStuffMessage[A]],
-      applicationService: ApplicationService[F, A],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       initState: ProtocolState[A]
@@ -61,6 +61,7 @@ object HotStuffService {
       consensusService <- ConsensusService(
         initState.publicKey,
         consensusNetwork,
+        appService,
         blockStorage,
         viewStateStorage,
         syncPipe.left,
@@ -71,7 +72,7 @@ object HotStuffService {
         initState.publicKey,
         initState.federation,
         syncNetwork,
-        applicationService,
+        appService,
         blockStorage,
         viewStateStorage,
         syncPipe.right,

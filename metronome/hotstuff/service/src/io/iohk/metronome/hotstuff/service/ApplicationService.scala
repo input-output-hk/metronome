@@ -2,11 +2,15 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.data.NonEmptyVector
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
+import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 
 /** Represents the "application" domain to the HotStuff module,
   * performing all delegations that HotStuff can't do on its own.
   */
 trait ApplicationService[F[_], A <: Agreement] {
+  // TODO (PM-3109): Create block.
+  def createBlock(highQC: QuorumCertificate[A]): F[Option[A#Block]]
+
   // TODO (PM-3132, PM-3133): Block validation.
   def validateBlock(block: A#Block): F[Boolean]
 
