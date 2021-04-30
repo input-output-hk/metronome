@@ -211,6 +211,17 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     }
   }
 
+  /** General configuration parser, to be used by application modules. */
+  object config extends SubModule {
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"com.typesafe:config:${VersionOf.config}",
+      ivy"io.circe::circe-core:${VersionOf.circe}",
+      ivy"io.circe::circe-parser:${VersionOf.circe}"
+    )
+
+    object test extends TestModule
+  }
+
   /** Generic HotStuff BFT library. */
   object hotstuff extends SubModule {
 
@@ -310,10 +321,16 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       */
     object app extends SubModule {
       override def moduleDeps: Seq[JavaModule] =
-        Seq(hotstuff.service, checkpointing.service, rocksdb, logging, metrics)
+        Seq(
+          hotstuff.service,
+          checkpointing.service,
+          rocksdb,
+          logging,
+          metrics,
+          config
+        )
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
-        ivy"com.typesafe:config:${VersionOf.config}",
         ivy"ch.qos.logback:logback-classic:${VersionOf.logback}",
         ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}",
         ivy"io.monix::monix:${VersionOf.monix}"
