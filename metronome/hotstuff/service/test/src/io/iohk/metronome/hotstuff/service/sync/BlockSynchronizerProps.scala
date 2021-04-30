@@ -225,7 +225,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
   property("getBlockFromQuorumCertificate") = forAllNoShrink(
     for {
-      fixture <- arbitrary[TestFixture]
+      fixture <- TestFixture.gen(timeoutProb = Prob(0))
       sources <- Gen.atLeastOne(fixture.requests.map(_._1).distinct)
       // The last request is definitely new.
       qc = fixture.requests.last._2
@@ -246,7 +246,6 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
           !persistent(Namespace.Blocks).contains(qc.blockHash)
       )
     }
-    // Give it enough time to try multiple sources.
     simulate(1.minute)(test)
   }
 
