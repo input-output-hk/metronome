@@ -53,7 +53,7 @@ object ConfigParser {
         case ('_' | '-') :: cs =>
           cs match {
             case c :: cs => c.toUpper :: loop(cs)
-            case cs      => loop(cs)
+            case Nil     => Nil
           }
         case c :: cs => c :: loop(cs)
         case Nil     => Nil
