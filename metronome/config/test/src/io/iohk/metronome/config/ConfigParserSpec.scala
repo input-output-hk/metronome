@@ -107,9 +107,10 @@ class ConfigParserSpec
         TestConfig.Network(
           bootstrap = List("localhost:40001"),
           timeout = 5.seconds,
-          maxPacketSize = TestConfig.Size(512000)
+          maxPacketSize = TestConfig.Size(512000),
+          clientId = None
         ),
-        clientId = None
+        chainId = Some("test-chain")
       )
     }
   }
@@ -121,7 +122,7 @@ object ConfigParserSpec {
   case class TestConfig(
       metrics: TestConfig.Metrics,
       network: TestConfig.Network,
-      clientId: Option[String]
+      chainId: Option[String]
   )
   object TestConfig {
     case class Metrics(enabled: Boolean)
@@ -133,7 +134,8 @@ object ConfigParserSpec {
     case class Network(
         bootstrap: List[String],
         timeout: FiniteDuration,
-        maxPacketSize: Size
+        maxPacketSize: Size,
+        clientId: Option[String]
     )
     object Network {
       implicit val durationDecoder: Decoder[FiniteDuration] =
