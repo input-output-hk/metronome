@@ -48,35 +48,37 @@ object ConfigParser {
 
   /** Transform a key in the HOCON config file to camelCase. */
   protected[config] def toCamelCase(key: String): String = {
-    def loop(cs: List[Char], acc: List[Char]): String =
+    def loop(cs: List[Char]): List[Char] =
       cs match {
         case ('_' | '-') :: cs =>
           cs match {
-            case c :: cs => loop(cs, c.toUpper :: acc)
-            case cs      => loop(cs, acc)
+            case c :: cs => c.toUpper :: loop(cs)
+            case cs      => loop(cs)
           }
-        case c :: cs => loop(cs, c :: acc)
-        case Nil     => acc.reverse.mkString
+        case c :: cs => c :: loop(cs)
+        case Nil     => Nil
       }
-    loop(key.toList, Nil)
+
+    loop(key.toList).mkString
   }
 
   /** Turn `camelCaseKey` into `SNAKE_CASE_KEY`,
     * which is what it would look like as an env var.
     */
   protected[config] def toSnakeCase(camelCase: String): String = {
-    def loop(cs: List[Char], acc: List[Char]): String =
+    def loop(cs: List[Char]): List[Char] =
       cs match {
         case a :: b :: cs if a.isLower && b.isUpper =>
-          loop(cs, b :: '_' :: a.toUpper :: acc)
+          a.toUpper :: '_' :: b :: loop(cs)
         case '-' :: cs =>
-          loop(cs, '_' :: acc)
+          '_' :: loop(cs)
         case a :: cs =>
-          loop(cs, a.toUpper :: acc)
+          a.toUpper :: loop(cs)
         case Nil =>
-          acc.reverse.mkString
+          Nil
       }
-    loop(camelCase.toList, Nil)
+
+    loop(camelCase.toList).mkString
   }
 
   /** Transform all keys into camelCase form,
