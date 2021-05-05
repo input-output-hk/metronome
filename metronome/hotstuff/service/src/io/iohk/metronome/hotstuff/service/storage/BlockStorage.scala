@@ -131,6 +131,37 @@ class BlockStorage[N, A <: Agreement: Block](
     loop(blockHash, Nil)
   }
 
+  /** Get the ancestor chain between two hashes in the chain, if there is one.
+    *
+    * If either of the blocks are not in the tree, or there's no path between them,
+    * return an empty list. This can happen if we have already pruned away the ancestry as well.
+    */
+  def getPathFromAncestor(
+      ancestorBlockHash: A#Hash,
+      descendantBlockHash: A#Hash
+  ): KVStoreRead[N, List[A#Hash]] = {
+    def loop(
+        blockHash: A#Hash,
+        acc: List[A#Hash]
+    ): KVStoreRead[N, List[A#Hash]] = {
+      if (blockHash == ancestorBlockHash) {
+        KVStoreRead[N].pure(blockHash :: acc)
+      } else {
+        childToParentColl.read(blockHash).flatMap {
+          case None                  => KVStoreRead[N].pure(Nil)
+          case Some(parentBlockHash) => loop(parentBlockHash, blockHash :: acc)
+        }
+      }
+    }
+
+    (contains(ancestorBlockHash), contains(descendantBlockHash))
+      .mapN((_, _))
+      .flatMap {
+        case (true, true) => loop(descendantBlockHash, Nil)
+        case _            => KVStoreRead[N].pure(Nil)
+      }
+  }
+
   /** Collect all descendants of a block,
     * including the block itself.
     *

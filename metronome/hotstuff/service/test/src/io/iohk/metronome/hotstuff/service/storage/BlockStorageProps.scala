@@ -82,6 +82,17 @@ object BlockStorageProps extends Properties("BlockStorage") {
         .compile(TestBlockStorage.getPathFromRoot(blockHash))
         .run(store)
 
+    def getPathFromAncestor(
+        ancestorBlockHash: Hash,
+        descendantBlockHash: Hash
+    ) =
+      TestKVStore
+        .compile(
+          TestBlockStorage
+            .getPathFromAncestor(ancestorBlockHash, descendantBlockHash)
+        )
+        .run(store)
+
     def getDescendants(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.getDescendants(blockHash))
@@ -236,6 +247,43 @@ object BlockStorageProps extends Properties("BlockStorage") {
   property("getPathFromRoot non-existing") = forAll(genNonExisting) {
     case (data, nonExisting) =>
       data.store.getPathFromRoot(nonExisting.id).isEmpty
+  }
+
+  property("getPathFromAncestor") = forAll(
+    for {
+      prefix <- genNonEmptyBlockTree
+      ancestor = prefix.last
+      postfix    <- genNonEmptyBlockTree(ancestor.id)
+      descendant <- Gen.oneOf(postfix)
+      data = TestData(prefix ++ postfix)
+      nonExisting <- genBlock
+    } yield (data, ancestor, descendant, nonExisting)
+  ) { case (data, ancestor, descendant, nonExisting) =>
+    def getPath(a: TestBlock, d: TestBlock) =
+      data.store.getPathFromAncestor(a.id, d.id)
+
+    def pathExists(a: TestBlock, d: TestBlock) = {
+      val path = getPath(a, d)
+      path.nonEmpty &&
+      path.distinct.size == path.size &&
+      path.head == a.id &&
+      path.last == d.id &&
+      (path.init zip path.tail).forall { case (parentHash, childHash) =>
+        data.store.getBlock(childHash).get.parentId == parentHash
+      }
+    }
+
+    def pathNotExists(a: TestBlock, d: TestBlock) =
+      getPath(a, d).isEmpty
+
+    all(
+      "fromAtoD" |: pathExists(ancestor, descendant),
+      "fromDtoA" |: pathNotExists(descendant, ancestor),
+      "fromAtoA" |: pathExists(ancestor, ancestor),
+      "fromDtoD" |: pathExists(descendant, descendant),
+      "fromAtoN" |: pathNotExists(ancestor, nonExisting),
+      "fromNtoD" |: pathNotExists(nonExisting, descendant)
+    )
   }
 
   property("getDescendants existing") = forAll(genSubTree) {
