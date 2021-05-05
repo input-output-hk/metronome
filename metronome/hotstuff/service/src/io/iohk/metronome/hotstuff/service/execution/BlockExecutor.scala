@@ -85,7 +85,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
       storeRunner
         .runReadOnly {
           blockStorage.getPathFromAncestor(
-            lastExecutedBlockHash,
+            ancestorBlockHash,
             commitQC.blockHash
           )
         }
