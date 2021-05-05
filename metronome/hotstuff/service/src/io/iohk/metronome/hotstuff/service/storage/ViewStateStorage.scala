@@ -47,7 +47,7 @@ class ViewStateStorage[N, A <: Agreement] private (
   def setRootBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
     put(Key.RootBlockHash, blockHash)
 
-  def getBundle: KVStoreRead[N, ViewStateStorage.Bundle[A]] =
+  val getBundle: KVStoreRead[N, ViewStateStorage.Bundle[A]] =
     (
       read(Key.ViewNumber),
       read(Key.PrepareQC),
@@ -57,6 +57,8 @@ class ViewStateStorage[N, A <: Agreement] private (
       read(Key.RootBlockHash)
     ).mapN(ViewStateStorage.Bundle.apply[A] _)
 
+  val getLastExecutedBlockHash: KVStoreRead[N, A#Hash] =
+    read(Key.LastExecutedBlockHash)
 }
 
 object ViewStateStorage {

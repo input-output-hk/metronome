@@ -70,7 +70,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     */
   private def getLastExecutedBlockHash: F[A#Hash] =
     storeRunner.runReadOnly {
-      viewStateStorage.getBundle.map(_.lastExecutedBlockHash)
+      viewStateStorage.getLastExecutedBlockHash
     }
 
   private def setLastExecutedBlockHash(blockHash: A#Hash): F[Unit] =
