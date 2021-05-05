@@ -26,7 +26,7 @@ import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
 import monix.execution.Scheduler
 import org.scalacheck.{Properties, Arbitrary, Gen}
-import org.scalacheck.Prop, Prop.{forAll, propBoolean}
+import org.scalacheck.Prop, Prop.{forAll, propBoolean, all}
 import scala.concurrent.duration._
 
 object BlockExecutorProps extends Properties("BlockExecutor") {
@@ -202,8 +202,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
             fixture.lastBatchCommitedBlockHash
           )
 
-          // The genesis was the only block we marked as executed.
-          pathFromRoot <- fixture.storeRunner.runReadOnly {
+          pathFromLast <- fixture.storeRunner.runReadOnly {
             TestBlockStorage.getPathFromAncestor(
               lastExecutedBlockHash,
               fixture.lastBatchCommitedBlockHash
@@ -211,7 +210,36 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
           }
 
         } yield {
-          "executes from the last" |: executedBlockHashes == pathFromRoot.tail
+          "executes from the last" |: executedBlockHashes == pathFromLast.tail
+        }
+      }
+    }
+  }
+
+  property("executeBlocks - from pruned") = forAll { (fixture: TestFixture) =>
+    run {
+      fixture.resources.use { case (blockSychronizer, viewStateStorage) =>
+        val lastBatch             = fixture.batches.last
+        val lastExecutedBlockHash = lastBatch.lastExecutedBlockHash
+        for {
+          _ <- fixture.storeRunner.runReadWrite {
+            TestBlockStorage.pruneNonDescendants(lastExecutedBlockHash)
+          }
+          _ <- blockSychronizer.enqueue(lastBatch)
+
+          executedBlockHashes <- fixture.awaitBlockExecution(
+            fixture.lastBatchCommitedBlockHash
+          )
+
+          // The last executed block should be the new root.
+          pathFromRoot <- fixture.storeRunner.runReadOnly {
+            TestBlockStorage.getPathFromRoot(fixture.lastBatchCommitedBlockHash)
+          }
+        } yield {
+          all(
+            "new root" |: pathFromRoot.head == lastExecutedBlockHash,
+            "executes from the last" |: executedBlockHashes == pathFromRoot.tail
+          )
         }
       }
     }
