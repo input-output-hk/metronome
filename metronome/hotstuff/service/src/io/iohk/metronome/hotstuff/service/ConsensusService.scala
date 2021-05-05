@@ -452,7 +452,7 @@ class ConsensusService[
     }
 
     process.handleErrorWith { case NonFatal(ex) =>
-      tracers.error(ex)
+      tracers.error(s"Error processing effect $effect", ex)
     }
   }
 
