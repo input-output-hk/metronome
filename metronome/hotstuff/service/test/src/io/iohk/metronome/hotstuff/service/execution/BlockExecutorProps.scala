@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service.execution
 import cats.implicits._
 import cats.effect.Resource
 import cats.effect.concurrent.Ref
-import cats.data.NonEmptyVector
+import cats.data.{NonEmptyVector, NonEmptyList}
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Effect,
@@ -73,7 +73,11 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
           block: TestBlock
       ): Task[Unit] = ???
 
-      def executeBlock(block: TestBlock): Task[Unit] =
+      def executeBlock(
+          block: TestBlock,
+          commitQC: QuorumCertificate[TestAgreement],
+          commitPath: NonEmptyList[TestAgreement.Hash]
+      ): Task[Unit] =
         for {
           fail <- failNextRef.modify(failNext => (false, failNext))
           _ <- Task

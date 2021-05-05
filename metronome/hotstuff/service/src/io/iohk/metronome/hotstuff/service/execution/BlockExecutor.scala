@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.service.execution
 
 import cats.implicits._
+import cats.data.NonEmptyList
 import cats.effect.{Sync, Concurrent, ContextShift, Resource}
 import io.iohk.metronome.hotstuff.service.ApplicationService
 import io.iohk.metronome.hotstuff.service.storage.{
@@ -55,8 +56,10 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
             commitQC
           )
           _ <- blockHashes match {
-            case _ :: newBlockHashes => tryExecuteBatch(newBlockHashes)
-            case Nil                 => ().pure[F]
+            case _ :: newBlockHashes =>
+              tryExecuteBatch(newBlockHashes, commitQC)
+            case Nil =>
+              ().pure[F]
           }
         } yield ()
       } >> executeBlocks
@@ -107,7 +110,8 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     * Return the last successfully executed hash, if any.
     */
   private def tryExecuteBatch(
-      newBlockHashes: List[A#Hash]
+      newBlockHashes: List[A#Hash],
+      commitQC: QuorumCertificate[A]
   ): F[Option[A#Hash]] = {
     def loop(
         newBlockHashes: List[A#Hash],
@@ -118,7 +122,11 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
           lastExecutedBlockHash.pure[F]
 
         case blockHash :: newBlockHashes =>
-          executeBlock(blockHash).attempt.flatMap {
+          executeBlock(
+            blockHash,
+            commitQC,
+            NonEmptyList(blockHash, newBlockHashes)
+          ).attempt.flatMap {
             case Left(ex) =>
               // If a block fails, return what we managed to do so far,
               // so we can re-attempt it next time if the block is still
@@ -139,7 +147,14 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     * Be prepared that it may not exist, if execution took so long that
     * the `SyncService` skipped ahead to the latest Commit Q.C.
     */
-  private def executeBlock(blockHash: A#Hash): F[Unit] = {
+  private def executeBlock(
+      blockHash: A#Hash,
+      commitQC: QuorumCertificate[A],
+      commitPath: NonEmptyList[A#Hash]
+  ): F[Unit] = {
+    assert(commitPath.head == blockHash)
+    assert(commitPath.last == commitQC.blockHash)
+
     storeRunner.runReadOnly {
       blockStorage.get(blockHash)
     } flatMap {
@@ -147,7 +162,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
         tracers.executionSkipped(blockHash)
 
       case Some(block) =>
-        appService.executeBlock(block) >>
+        appService.executeBlock(block, commitQC, commitPath) >>
           setLastExecutedBlockHash(blockHash) >>
           tracers.blockExecuted(blockHash)
     }
