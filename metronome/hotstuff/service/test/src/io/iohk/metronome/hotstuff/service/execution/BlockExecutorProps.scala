@@ -42,7 +42,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
   case class TestFixture(
       blocks: List[TestBlock],
-      batches: List[Effect.ExecuteBlocks[TestAgreement]]
+      batches: Vector[Effect.ExecuteBlocks[TestAgreement]]
   ) {
     val storeRef = Ref.unsafe[Task, TestKVStore.Store] {
       TestKVStore.build(blocks)
@@ -97,32 +97,66 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
           viewStateStorage
         )
       } yield (blockExecutor, viewStateStorage)
+
+    val executedBlockHashes =
+      eventsRef.get
+        .map { events =>
+          events.collect { case ConsensusEvent.BlockExecuted(blockHash) =>
+            blockHash
+          }
+        }
+
+    val lastBatchCommitedBlockHash =
+      batches.last.quorumCertificate.blockHash
+
+    def awaitBlockExecution(
+        blockHash: TestAgreement.Hash
+    ): Task[Vector[TestAgreement.Hash]] = {
+      executedBlockHashes
+        .restartUntil { blockHashes =>
+          blockHashes.lastOption.contains(blockHash)
+        }
+    }
   }
 
   object TestFixture {
     implicit val arb: Arbitrary[TestFixture] = Arbitrary {
+      def loop(
+          i: Int,
+          tree: List[TestBlock],
+          effects: Vector[Effect.ExecuteBlocks[TestAgreement]]
+      ): Gen[TestFixture] = {
+        if (i == 0) {
+          Gen.const(TestFixture(tree, effects))
+        } else {
+          val extension = for {
+            viewNumber <- Gen.posNum[Int].map(ViewNumber(_))
+            ancestor = tree.last
+            descendantTree <- genNonEmptyBlockTree(parentId = ancestor.id)
+            descendant = descendantTree.last
+            commitQC = QuorumCertificate[TestAgreement](
+              phase = Phase.Commit,
+              viewNumber = viewNumber,
+              blockHash = descendant.id,
+              signature = GroupSignature(())
+            )
+            effect = Effect.ExecuteBlocks[TestAgreement](
+              lastExecutedBlockHash = ancestor.id,
+              quorumCertificate = commitQC
+            )
+          } yield (tree ++ descendantTree, effects :+ effect)
+
+          extension.flatMap { case (tree, effects) =>
+            loop(i - 1, tree, effects)
+          }
+        }
+      }
+
       for {
-        ancestorTree <- genNonEmptyBlockTree
-        leaf = ancestorTree.last
-        descendantTree <- genNonEmptyBlockTree(parentId = leaf.id)
-
-        viewNumber <- Gen.posNum[Int].map(ViewNumber(_))
-        descendant <- Gen.oneOf(descendantTree)
-        commitQC = QuorumCertificate[TestAgreement](
-          phase = Phase.Commit,
-          viewNumber = viewNumber,
-          blockHash = descendant.id,
-          signature = GroupSignature(())
-        )
-        effect = Effect.ExecuteBlocks[TestAgreement](
-          lastExecutedBlockHash = leaf.id,
-          quorumCertificate = commitQC
-        )
-
-      } yield TestFixture(
-        ancestorTree ++ descendantTree,
-        List(effect)
-      )
+        prefixTree <- genNonEmptyBlockTree
+        i          <- Gen.choose(1, 5)
+        fixture    <- loop(i, prefixTree, Vector.empty)
+      } yield fixture
     }
   }
 
@@ -131,32 +165,23 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
     test.runSyncUnsafe(timeout = 5.seconds)
   }
 
-  property("executeBlocks") = forAll { (fixture: TestFixture) =>
+  property("executeBlocks - from root") = forAll { (fixture: TestFixture) =>
     run {
       fixture.resources.use { case (blockSychronizer, _) =>
         for {
           _ <- fixture.batches.traverse(blockSychronizer.enqueue)
 
-          committedBlockHash =
-            fixture.batches.last.quorumCertificate.blockHash
-
-          executedBlockHashes <- fixture.eventsRef.get
-            .map { events =>
-              events.collect { case ConsensusEvent.BlockExecuted(blockHash) =>
-                blockHash
-              }
-            }
-            .restartUntil { blockHashes =>
-              blockHashes.lastOption.contains(committedBlockHash)
-            }
+          executedBlockHashes <- fixture.awaitBlockExecution(
+            fixture.lastBatchCommitedBlockHash
+          )
 
           // The genesis was the only block we marked as executed.
           pathFromRoot <- fixture.storeRunner.runReadOnly {
-            TestBlockStorage.getPathFromRoot(committedBlockHash)
+            TestBlockStorage.getPathFromRoot(fixture.lastBatchCommitedBlockHash)
           }
 
         } yield {
-          "executes from root" |: executedBlockHashes == pathFromRoot.tail
+          "executes from the root" |: executedBlockHashes == pathFromRoot.tail
         }
       }
     }
