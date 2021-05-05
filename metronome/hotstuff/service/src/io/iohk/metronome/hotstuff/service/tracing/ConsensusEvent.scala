@@ -55,8 +55,19 @@ object ConsensusEvent {
       error: ProtocolError[A]
   ) extends ConsensusEvent[A]
 
+  /** A block has been removed from storage by the time it was to be executed. */
+  case class ExecutionSkipped[A <: Agreement](
+      blockHash: A#Hash
+  ) extends ConsensusEvent[A]
+
+  /** A block has been executed. */
+  case class BlockExecuted[A <: Agreement](
+      blockHash: A#Hash
+  ) extends ConsensusEvent[A]
+
   /** An unexpected error in one of the background tasks. */
   case class Error(
+      message: String,
       error: Throwable
   ) extends ConsensusEvent[Nothing]
 }
