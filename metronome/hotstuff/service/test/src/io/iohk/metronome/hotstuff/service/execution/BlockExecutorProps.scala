@@ -186,4 +186,34 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
       }
     }
   }
+
+  property("executeBlocks - from last") = forAll { (fixture: TestFixture) =>
+    run {
+      fixture.resources.use { case (blockSychronizer, viewStateStorage) =>
+        val lastBatch             = fixture.batches.last
+        val lastExecutedBlockHash = lastBatch.lastExecutedBlockHash
+        for {
+          _ <- fixture.storeRunner.runReadWrite {
+            viewStateStorage.setLastExecutedBlockHash(lastExecutedBlockHash)
+          }
+          _ <- blockSychronizer.enqueue(lastBatch)
+
+          executedBlockHashes <- fixture.awaitBlockExecution(
+            fixture.lastBatchCommitedBlockHash
+          )
+
+          // The genesis was the only block we marked as executed.
+          pathFromRoot <- fixture.storeRunner.runReadOnly {
+            TestBlockStorage.getPathFromAncestor(
+              lastExecutedBlockHash,
+              fixture.lastBatchCommitedBlockHash
+            )
+          }
+
+        } yield {
+          "executes from the last" |: executedBlockHashes == pathFromRoot.tail
+        }
+      }
+    }
+  }
 }

@@ -40,37 +40,40 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
 
   /** Execute blocks in order, updating pesistent storage along the way. */
   private def executeBlocks: F[Unit] = {
-    def loop(lastExecutedBlockHash: A#Hash): F[Unit] =
-      executionQueue.poll
-        .flatMap {
-          case Effect.ExecuteBlocks(lastCommittedBlockHash, commitQC) =>
-            // Retrieve the blocks from the storage from the last executed
-            // to the one in the Quorum Certificate and tell the application
-            // to execute them one by one. Update the persistent view state
-            // after reach execution to remember which blocks we have truly
-            // done.
-            getBlockPath(
-              lastExecutedBlockHash,
-              lastCommittedBlockHash,
-              commitQC
-            ).flatMap {
-              case _ :: newBlockHashes =>
-                tryExecuteBatch(newBlockHashes)
-
-              case Nil =>
-                none[A#Hash].pure[F]
-            }.map {
-              _ getOrElse lastExecutedBlockHash
-            }
-        }
-        .flatMap(loop)
-
-    storeRunner
-      .runReadOnly {
-        viewStateStorage.getBundle.map(_.lastExecutedBlockHash)
-      }
-      .flatMap(loop)
+    executionQueue.poll
+      .flatMap { case Effect.ExecuteBlocks(lastCommittedBlockHash, commitQC) =>
+        // Retrieve the blocks from the storage from the last executed
+        // to the one in the Quorum Certificate and tell the application
+        // to execute them one by one. Update the persistent view state
+        // after reach execution to remember which blocks we have truly
+        // done.
+        for {
+          lastExecutedBlockHash <- getLastExecutedBlockHash
+          blockHashes <- getBlockPath(
+            lastExecutedBlockHash,
+            lastCommittedBlockHash,
+            commitQC
+          )
+          _ <- blockHashes match {
+            case _ :: newBlockHashes => tryExecuteBatch(newBlockHashes)
+            case Nil                 => ().pure[F]
+          }
+        } yield ()
+      } >> executeBlocks
   }
+
+  /** Read whatever was the last executed block that we persisted,
+    * either here or by the fast-forward synchronizer.
+    */
+  private def getLastExecutedBlockHash: F[A#Hash] =
+    storeRunner.runReadOnly {
+      viewStateStorage.getBundle.map(_.lastExecutedBlockHash)
+    }
+
+  private def setLastExecutedBlockHash(blockHash: A#Hash): F[Unit] =
+    storeRunner.runReadWrite {
+      viewStateStorage.setLastExecutedBlockHash(blockHash)
+    }
 
   /** Get the more complete path. We may not have the last executed block any more.
     *
@@ -144,13 +147,9 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
         tracers.executionSkipped(blockHash)
 
       case Some(block) =>
-        for {
-          _ <- appService.executeBlock(block)
-          _ <- storeRunner.runReadWrite {
-            viewStateStorage.setLastExecutedBlockHash(blockHash)
-          }
-          _ <- tracers.blockExecuted(blockHash)
-        } yield ()
+        appService.executeBlock(block) >>
+          setLastExecutedBlockHash(blockHash) >>
+          tracers.blockExecuted(blockHash)
     }
   }
 }
