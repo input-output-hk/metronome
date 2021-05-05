@@ -76,7 +76,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     *
     * Unlike `sync`, which is expected to be canceled if consensus times out,
     * or be satisfied by alternative downloads happening concurrently, this
-    * method raises and error if it cannot download the block after a certain
+    * method returns and error if it cannot download the block after a certain
     * number of attempts, from any of the sources. This is becuause its primary
     * use is during state syncing where this is the only operation, and if for
     * any reason the block would be gone from everyone honest members' storage,
@@ -85,23 +85,26 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
   def getBlockFromQuorumCertificate(
       sources: NonEmptyVector[A#PKey],
       quorumCertificate: QuorumCertificate[A]
-  ): F[A#Block] = {
+  ): F[Either[DownloadFailedException[A], A#Block]] = {
     val otherSources = sources.filterNot(_ == publicKey).toList
 
-    def loop(alternatives: List[A#PKey]): F[A#Block] = {
+    def loop(
+        alternatives: List[A#PKey]
+    ): F[Either[DownloadFailedException[A], A#Block]] = {
       alternatives match {
         case Nil =>
-          Sync[F].raiseError {
-            new DownloadFailedException(
-              quorumCertificate.blockHash,
-              sources.toVector
-            )
-          }
+          new DownloadFailedException(
+            quorumCertificate.blockHash,
+            sources.toVector
+          ).asLeft[A#Block].pure[F]
+
         case source :: alternatives =>
           getAndValidateBlock(source, quorumCertificate.blockHash, otherSources)
             .flatMap {
-              case None        => loop(alternatives)
-              case Some(block) => block.pure[F]
+              case None =>
+                loop(alternatives)
+              case Some(block) =>
+                block.asRight[DownloadFailedException[A]].pure[F]
             }
       }
     }
@@ -111,10 +114,8 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
         blockStorage.get(quorumCertificate.blockHash)
       }
       .flatMap {
-        case None =>
-          loop(Random.shuffle(otherSources))
-        case Some(block) =>
-          block.pure[F]
+        case None        => loop(Random.shuffle(otherSources))
+        case Some(block) => block.asRight[DownloadFailedException[A]].pure[F]
       }
   }
 

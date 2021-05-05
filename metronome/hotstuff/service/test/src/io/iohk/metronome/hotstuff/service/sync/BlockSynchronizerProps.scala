@@ -1,5 +1,6 @@
 package io.iohk.metronome.hotstuff.service.sync
 
+import cats.implicits._
 import cats.data.NonEmptyVector
 import cats.effect.concurrent.{Ref, Semaphore}
 import io.iohk.metronome.crypto.GroupSignature
@@ -232,10 +233,12 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     } yield (fixture, sources, qc)
   ) { case (fixture, sources, qc) =>
     val test = for {
-      block <- fixture.synchronizer.getBlockFromQuorumCertificate(
-        sources = NonEmptyVector.fromVectorUnsafe(sources.toVector),
-        quorumCertificate = qc
-      )
+      block <- fixture.synchronizer
+        .getBlockFromQuorumCertificate(
+          sources = NonEmptyVector.fromVectorUnsafe(sources.toVector),
+          quorumCertificate = qc
+        )
+        .rethrow
       persistent <- fixture.persistentRef.get
       ephemeral  <- fixture.ephemeralRef.get
     } yield {
@@ -261,7 +264,6 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
           sources = NonEmptyVector.one(source),
           quorumCertificate = qc
         )
-        .attempt
     } yield "fail with the right exception" |: {
       result match {
         case Left(ex: BlockSynchronizer.DownloadFailedException[_]) =>

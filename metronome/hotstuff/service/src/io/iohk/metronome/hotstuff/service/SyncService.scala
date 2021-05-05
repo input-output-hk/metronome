@@ -288,10 +288,12 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
       status = federationStatus.status
 
       // Download the block in the Commit Q.C.
-      block <- blockSynchronizer.getBlockFromQuorumCertificate(
-        federationStatus.sources,
-        status.commitQC
-      )
+      block <- blockSynchronizer
+        .getBlockFromQuorumCertificate(
+          federationStatus.sources,
+          status.commitQC
+        )
+        .rethrow
 
       // Sync any application specific state, e.g. a ledger.
       // Do this before we prune the existing blocks and set the new root.
