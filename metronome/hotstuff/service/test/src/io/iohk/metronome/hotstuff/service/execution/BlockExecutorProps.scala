@@ -61,6 +61,8 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
     implicit val consensusTracers = ConsensusTracers(eventTracer)
 
+    val failNextRef = Ref.unsafe[Task, Boolean](false)
+
     val appService = new ApplicationService[Task, TestAgreement] {
       def createBlock(
           highQC: QuorumCertificate[TestAgreement]
@@ -69,8 +71,15 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
       def syncState(
           sources: NonEmptyVector[Int],
           block: TestBlock
-      ): Task[Unit]                                  = ???
-      def executeBlock(block: TestBlock): Task[Unit] = Task.unit
+      ): Task[Unit] = ???
+
+      def executeBlock(block: TestBlock): Task[Unit] =
+        for {
+          fail <- failNextRef.modify(failNext => (false, failNext))
+          _ <- Task
+            .raiseError(new RuntimeException("The application failed!"))
+            .whenA(fail)
+        } yield ()
     }
 
     val resources =
@@ -120,7 +129,12 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
   }
 
   object TestFixture {
-    implicit val arb: Arbitrary[TestFixture] = Arbitrary {
+    implicit val arb: Arbitrary[TestFixture] = Arbitrary(gen())
+
+    /** Create a random number of tree extensions, with each extension
+      * covered by a batch that goes from its root to one of its leaves.
+      */
+    def gen(minBatches: Int = 1, maxBatches: Int = 5): Gen[TestFixture] = {
       def loop(
           i: Int,
           tree: List[TestBlock],
@@ -154,7 +168,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
       for {
         prefixTree <- genNonEmptyBlockTree
-        i          <- Gen.choose(1, 5)
+        i          <- Gen.choose(minBatches, maxBatches)
         fixture    <- loop(i, prefixTree, Vector.empty)
       } yield fixture
     }
@@ -244,4 +258,24 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
       }
     }
   }
+
+  property("executeBlocks - from failed") =
+    // Only the next commit batch triggers re-execution, so we need at least 2.
+    forAll(TestFixture.gen(minBatches = 2)) { (fixture: TestFixture) =>
+      run {
+        fixture.resources.use { case (blockSychronizer, _) =>
+          for {
+            _      <- fixture.failNextRef.set(true)
+            _      <- fixture.batches.traverse(blockSychronizer.enqueue)
+            _      <- fixture.awaitBlockExecution(fixture.lastBatchCommitedBlockHash)
+            events <- fixture.eventsRef.get
+          } yield {
+            1 === events.count {
+              case _: ConsensusEvent.Error => true
+              case _                       => false
+            }
+          }
+        }
+      }
+    }
 }
