@@ -18,6 +18,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Signing,
   QuorumCertificate
 }
+import io.iohk.metronome.hotstuff.service.execution.BlockExecutor
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
@@ -30,6 +31,7 @@ import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
 import scala.collection.immutable.Queue
 import scala.util.control.NonFatal
+import io.iohk.metronome.hotstuff.service.execution.BlockExecutor
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
@@ -43,6 +45,7 @@ class ConsensusService[
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
     appService: ApplicationService[F, A],
+    blockExecutor: BlockExecutor[F, N, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
@@ -50,7 +53,6 @@ class ConsensusService[
     counterRef: Ref[F, ConsensusService.MessageCounter],
     syncPipe: SyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
-    blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
     fiberSet: FiberSet[F],
     maxEarlyViewNumberDiff: Int
 )(implicit tracers: ConsensusTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
@@ -437,13 +439,13 @@ class ConsensusService[
           blockStorage.put(preparedBlock)
         }
 
-      case effect @ ExecuteBlocks(_, commitQC) =>
+      case effect @ ExecuteBlocks(_, _) =>
         // Each node may be at a different point in the chain, so how
         // long the executions take can vary. We could execute it in
         // the forground here, but it may cause the node to lose its
         // sync with the other federation members, so the execution
         // should be offloaded to another queue.
-        blockExecutionQueue.offer(effect)
+        blockExecutor.enqueue(effect)
 
       case SendMessage(recipient, message) =>
         network.sendMessage(recipient, message)
@@ -452,21 +454,6 @@ class ConsensusService[
     process.handleErrorWith { case NonFatal(ex) =>
       tracers.error(ex)
     }
-  }
-
-  /** Execute blocks in order, updating pesistent storage along the way. */
-  private def executeBlocks: F[Unit] = {
-    blockExecutionQueue.poll.flatMap {
-      case Effect.ExecuteBlocks(lastExecutedBlockHash, commitQC) =>
-        // Retrieve the blocks from the storage from the last executed
-        // to the one in the Quorum Certificate and tell the application
-        // to execute them one by one. Update the persistent view state
-        // after reach execution to remember which blocks we have truly
-        // done.
-
-        // TODO (PM-3133): Execute block
-        ???
-    } >> executeBlocks
   }
 
   private def validated(event: Event[A]): Validated[Event[A]] =
@@ -561,11 +548,19 @@ object ConsensusService {
   ): Resource[F, ConsensusService[F, N, A]] =
     for {
       fiberSet <- FiberSet[F]
+
+      blockExecutor <- BlockExecutor[F, N, A](
+        appService,
+        blockStorage,
+        viewStateStorage
+      )
+
       service <- Resource.liftF(
         build[F, N, A](
           publicKey,
           network,
           appService,
+          blockExecutor,
           blockStorage,
           viewStateStorage,
           syncPipe,
@@ -574,10 +569,11 @@ object ConsensusService {
           fiberSet
         )
       )
+
       _ <- Concurrent[F].background(service.processNetworkMessages)
       _ <- Concurrent[F].background(service.processSyncPipe)
       _ <- Concurrent[F].background(service.processEvents)
-      _ <- Concurrent[F].background(service.executeBlocks)
+
       initEffects = ProtocolState.init(initState)
       _ <- Resource.liftF(service.scheduleEffects(initEffects))
     } yield service
@@ -590,6 +586,7 @@ object ConsensusService {
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       appService: ApplicationService[F, A],
+      blockExecutor: BlockExecutor[F, N, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
@@ -606,13 +603,12 @@ object ConsensusService {
       fibersRef  <- Ref[F].of(Set.empty[Fiber[F, Unit]])
       counterRef <- Ref[F].of(MessageCounter.empty)
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
-      blockExecutionQueue <- ConcurrentQueue[F]
-        .unbounded[Effect.ExecuteBlocks[A]](None)
 
       service = new ConsensusService(
         publicKey,
         network,
         appService,
+        blockExecutor,
         blockStorage,
         viewStateStorage,
         stateRef,
@@ -620,7 +616,6 @@ object ConsensusService {
         counterRef,
         syncPipe,
         eventQueue,
-        blockExecutionQueue,
         fiberSet,
         maxEarlyViewNumberDiff
       )
