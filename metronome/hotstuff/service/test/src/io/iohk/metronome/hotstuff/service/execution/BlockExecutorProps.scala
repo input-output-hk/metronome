@@ -127,7 +127,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
     ): Task[Vector[TestAgreement.Hash]] = {
       executedBlockHashes
         .restartUntil { blockHashes =>
-          blockHashes.lastOption.contains(blockHash)
+          blockHashes.contains(blockHash)
         }
     }
   }
