@@ -1,11 +1,7 @@
 package io.iohk.metronome.hotstuff.service
 
 import io.iohk.metronome.hotstuff.consensus.basic.Agreement
-import monix.eval.Task
-import monix.execution.Scheduler.Implicits.global
-import org.scalatest.compatible.Assertion
-import org.scalatest.flatspec.AsyncFlatSpec
-import scala.concurrent.duration._
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import io.iohk.metronome.hotstuff.consensus.basic.{
   ProtocolError,
@@ -17,14 +13,8 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.crypto.GroupSignature
 
-class MessageStashSpec extends AsyncFlatSpec with Matchers {
+class MessageStashSpec extends AnyFlatSpec with Matchers {
   import ConsensusService.MessageStash
-
-  def testT[T](t: Task[Assertion]) =
-    t.timeout(10.seconds).runToFuture
-
-  def test(t: => Assertion) =
-    testT(Task(t))
 
   object TestAgreement extends Agreement {
     override type Block = Nothing
@@ -58,7 +48,7 @@ class MessageStashSpec extends AsyncFlatSpec with Matchers {
     )
     val errorSlotKey = (error.expectedInViewNumber, error.expectedInPhase)
 
-    it should "stash errors" in test {
+    it should "stash errors" in {
       emptyStash.slots shouldBe empty
 
       val stash = emptyStash.stash(error)
@@ -68,7 +58,7 @@ class MessageStashSpec extends AsyncFlatSpec with Matchers {
       stash.slots(errorSlotKey)(error.event.sender) shouldBe error.event.message
     }
 
-    it should "stash only the last message from a sender" in test {
+    it should "stash only the last message from a sender" in {
       val error2 = error.copy(event =
         error.event.copy(message =
           Message.NewView(
@@ -89,7 +79,7 @@ class MessageStashSpec extends AsyncFlatSpec with Matchers {
       ) shouldBe error2.event.message
     }
 
-    it should "unstash due errors" in test {
+    it should "unstash due errors" in {
       val errors = List(
         error,
         error.copy(
