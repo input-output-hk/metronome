@@ -63,7 +63,7 @@ class FiberSetSpec extends AsyncFlatSpec with Matchers with Inside {
       val maxRunning = AtomicInt(0)
 
       for {
-        handles <- Task.traverse(List.fill(10)(())) { _ =>
+        handles <- Task.traverse(1 to 10) { _ =>
           val task = for {
             r <- Task(running.incrementAndGet())
             _ <- Task(maxRunning.getAndTransform(m => math.max(m, r)))

@@ -17,7 +17,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.crypto.GroupSignature
 
-class ConsensusServiceSpec extends AsyncFlatSpec with Matchers {
+class MessageStashSpec extends AsyncFlatSpec with Matchers {
   import ConsensusService.MessageStash
 
   def testT[T](t: Task[Assertion]) =
