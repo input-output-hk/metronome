@@ -16,6 +16,7 @@ import shapeless.tag, tag.@@
 trait Tagger[U] {
   trait Tag
   type Tagged = U @@ Tag
+
   def apply(underlying: U): Tagged =
     tag[Tag][U](underlying)
 }
