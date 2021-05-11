@@ -158,6 +158,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"com.chuusai::shapeless:${VersionOf.shapeless}",
       ivy"io.monix::monix:${VersionOf.monix}"
     )
+
+    object test extends TestModule
   }
 
   /** Storage abstractions, e.g. a generic key-value store. */
