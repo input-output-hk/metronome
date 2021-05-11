@@ -404,4 +404,18 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
     }
   }
+
+  /** Demo applications over example agreements. */
+  object examples extends SubModule {
+    override def moduleDeps: Seq[JavaModule] =
+      Seq(
+        hotstuff.service,
+        config,
+        logging,
+        networking,
+        rocksdb
+      )
+
+    object test extends TestModule
+  }
 }
