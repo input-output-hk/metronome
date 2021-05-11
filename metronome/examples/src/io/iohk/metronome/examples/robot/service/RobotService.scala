@@ -16,6 +16,8 @@ import io.iohk.metronome.hotstuff.service.storage.{
   ViewStateStorage
 }
 import io.iohk.metronome.storage.{KVStoreRunner, KVRingBuffer}
+import io.iohk.metronome.storage.KVStoreRead
+import scala.util.Random
 
 class RobotService[F[_]: Sync, N](
     maxRow: Int,
@@ -27,20 +29,85 @@ class RobotService[F[_]: Sync, N](
 )(implicit storeRunner: KVStoreRunner[F, N])
     extends ApplicationService[F, RobotAgreement] {
 
-  def createBlock(
+  override def createBlock(
       highQC: QuorumCertificate[RobotAgreement]
   ): F[Option[RobotBlock]] = {
     // Retrieve the blocks that we need to build on.
-          val query = for {
-            lastExecutedBlockHash <- viewStateStorage.getLastExecutedBlockHash
-            pendingBlockPath <- blockStorage.getPathFromAncestor(lastExecutedBlockHash, highQC.blockHash)
-            lastExecutedState <- stateStorage.get()
+    val query: KVStoreRead[N, (Option[Robot.State], List[RobotBlock])] = for {
+      lastExecutedBlockHash <- viewStateStorage.getLastExecutedBlockHash
+      blockPath <- blockStorage.getPathFromAncestor(
+        lastExecutedBlockHash,
+        highQC.blockHash
+      )
+      blocks <- blockPath.traverse(blockStorage.get).map(_.flatten)
+      pendingBlocks = if (blocks.nonEmpty) blocks.tail else Nil
+      maybeLastExecutedState <-
+        pendingBlocks.headOption match {
+          case Some(lastExecutedBlock)
+              if lastExecutedBlock.hash == lastExecutedBlockHash =>
+            stateStorage.get(lastExecutedBlock.postStateHash)
+
+          case _ =>
+            // Shouldn't happen.
+            KVStoreRead.instance[N].pure(None)
+        }
+    } yield (maybeLastExecutedState, pendingBlocks)
+
+    storeRunner.runReadOnly(query).flatMap {
+      case (None, _) =>
+        Sync[F].raiseError(
+          new IllegalStateException(
+            "Cannot find state corresponding to the last executed block."
+          )
+        )
+
+      case (Some(lastExecutedState), blocks) =>
+        val preState = blocks
+          .foldLeft(lastExecutedState) { case (state, block) =>
+            state.update(block.command)
           }
+
+        // Make a valid move; we're not validating our own blocks.
+        advance(preState).map { case (command, postState) =>
+          RobotBlock(
+            parentHash = highQC.blockHash,
+            postStateHash = postState.hash,
+            command = command
+          ).some
+        }
+    }
   }
 
-  def validateBlock(block: RobotBlock): F[Boolean] = ???
+  private def advance(
+      preState: Robot.State
+  ): F[(Robot.Command, Robot.State)] = {
+    import Robot.Command._
+    Sync[F]
+      .delay(Random.nextDouble())
+      .map {
+        case d if d <= 0.65 => MoveForward
+        case d if d <= 0.80 => TurnLeft
+        case d if d <= 0.95 => TurnRight
+        case _              => Rest
+      }
+      .flatMap { command =>
+        preState.update(command) match {
+          case postState if isValid(postState) =>
+            (command, postState).pure[F]
+          case _ => advance(preState)
+        }
+      }
+  }
 
-  def executeBlock(
+  private def isValid(state: Robot.State): Boolean =
+    state.position.row >= 0 &&
+      state.position.col >= 0 &&
+      state.position.row <= maxRow &&
+      state.position.col <= maxCol
+
+  override def validateBlock(block: RobotBlock): F[Boolean] = ???
+
+  override def executeBlock(
       block: RobotBlock,
       commitQC: QuorumCertificate[RobotAgreement],
       commitPath: NonEmptyList[RobotAgreement.Hash]

@@ -3,7 +3,7 @@ package io.iohk.metronome.examples.robot.models
 import io.iohk.metronome.crypto.hash.Hash
 
 object Robot {
-  sealed trait Command
+  sealed trait Command extends Product with Serializable
   object Command {
     case object Rest        extends Command
     case object MoveForward extends Command
