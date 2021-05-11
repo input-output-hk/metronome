@@ -1,15 +1,16 @@
 package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
-import cats.effect.{Sync, Resource, Concurrent}
+import cats.effect.{Sync, Resource, Concurrent, ContextShift}
 import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolState}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
-import cats.effect.ContextShift
+import scala.util.control.NonFatal
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -23,12 +24,11 @@ import cats.effect.ContextShift
   */
 class SyncService[F[_]: Sync, N, A <: Agreement](
     network: Network[F, A, SyncMessage[A]],
-    storeRunner: KVStoreRunner[F, N],
     blockStorage: BlockStorage[N, A],
     blockSyncPipe: BlockSyncPipe[F, A]#Right,
     getState: F[ProtocolState[A]],
     fiberMap: FiberMap[F, A#PKey]
-) {
+)(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
 
   /** Request a block from a peer.
     *
@@ -42,61 +42,74 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
     */
   def getStatus(from: A#PKey): F[Option[Status[A]]] = ???
 
-  /** Process incoming network messages */
+  /** Process incoming network messages. */
   private def processNetworkMessages: F[Unit] = {
-    import SyncMessage._
     // TODO (PM-3186): Rate limiting per source.
     network.incomingMessages
       .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
-        val handler: F[Unit] =
-          message match {
-            case GetStatusRequest(requestId) =>
-              getState.flatMap { state =>
-                val status =
-                  Status(state.viewNumber, state.prepareQC, state.commitQC)
-
-                network.sendMessage(
-                  from,
-                  GetStatusResponse(requestId, status)
-                )
-              }
-
-            case GetBlockRequest(requestId, blockHash) =>
-              storeRunner
-                .runReadOnly {
-                  blockStorage.get(blockHash)
-                }
-                .flatMap {
-                  case None =>
-                    ().pure[F]
-                  case Some(block) =>
-                    network.sendMessage(
-                      from,
-                      GetBlockResponse(requestId, block)
-                    )
-                }
-
-            case GetStatusResponse(requestId, status) =>
-              // TODO (PM-3063): Hand over to view synchronisation.
-              ???
-
-            case GetBlockResponse(requestId, block) =>
-              // TODO (PM-3134): Hand over to block synchronisation.
-              ???
-          }
-
-        // TODO: Catch and trace errors.
-
         // Handle on a fiber dedicated to the source.
         fiberMap
-          .submit(from)(handler)
+          .submit(from) {
+            processNetworkMessage(from, message)
+          }
           .attemptNarrow[FiberMap.QueueFullException]
           .flatMap {
             case Right(_) => ().pure[F]
-            case Left(ex) => ().pure[F] // TODO: Trace submission error.
+            case Left(_)  => tracers.queueFull(from)
           }
       }
       .completedL
+  }
+
+  /** Process one incoming network message.
+    *
+    * It's going to be executed on a fiber.
+    */
+  private def processNetworkMessage(
+      from: A#PKey,
+      message: SyncMessage[A]
+  ): F[Unit] = {
+    import SyncMessage._
+
+    val process = message match {
+      case GetStatusRequest(requestId) =>
+        getState.flatMap { state =>
+          val status =
+            Status(state.viewNumber, state.prepareQC, state.commitQC)
+
+          network.sendMessage(
+            from,
+            GetStatusResponse(requestId, status)
+          )
+        }
+
+      case GetBlockRequest(requestId, blockHash) =>
+        storeRunner
+          .runReadOnly {
+            blockStorage.get(blockHash)
+          }
+          .flatMap {
+            case None =>
+              ().pure[F]
+            case Some(block) =>
+              network.sendMessage(
+                from,
+                GetBlockResponse(requestId, block)
+              )
+          }
+
+      case GetStatusResponse(requestId, status) =>
+        // TODO (PM-3063): Hand over to view synchronisation.
+        ???
+
+      case GetBlockResponse(requestId, block) =>
+        // TODO (PM-3134): Hand over to block synchronisation.
+        ???
+    }
+
+    process.handleErrorWith { case NonFatal(ex) =>
+      tracers.error(ex)
+    }
   }
 
   /** Read Requests from the BlockSyncPipe and send Responses. */
@@ -132,18 +145,18 @@ object SyncService {
     */
   def apply[F[_]: Concurrent: ContextShift, N, A <: Agreement](
       network: Network[F, A, SyncMessage[A]],
-      storeRunner: KVStoreRunner[F, N],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Right,
       getState: F[ProtocolState[A]]
+  )(implicit
+      tracers: SyncTracers[F, A],
+      storeRunner: KVStoreRunner[F, N]
   ): Resource[F, SyncService[F, N, A]] =
-    // TODO (PM-3187): Add Tracing
     // TODO (PM-3186): Add capacity as part of rate limiting.
     for {
       fiberMap <- FiberMap[F, A#PKey]()
       service = new SyncService(
         network,
-        storeRunner,
         blockStorage,
         blockSyncPipe,
         getState,
