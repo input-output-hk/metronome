@@ -168,15 +168,12 @@ class BlockStorage[N, A <: Agreement: Block](
           }
       }
     }
-    loop(Queue(blockHash), Nil).flatMap { result =>
-      if (result.size == 1) {
-        contains(blockHash).map {
-          case true  => result
-          case false => Nil
-        }
-      } else {
+
+    loop(Queue(blockHash), Nil).flatMap {
+      case result @ List(`blockHash`) =>
+        result.filterA(contains)
+      case result =>
         KVStoreRead[N].pure(result)
-      }
     }
   }
 
