@@ -32,6 +32,10 @@ class KVCollection[N, K: Codec, V: Codec](namespace: N) {
     KVStore[N].delete(namespace, key)
 
   /** Update a key by getting the value and applying a function on it, if the value exists. */
-  def update(key: K, f: V => V): KVStore[N, Unit] =
-    KVStore[N].update(namespace, key, f)
+  def update(key: K)(f: V => V): KVStore[N, Unit] =
+    KVStore[N].update(namespace, key)(f)
+
+  /** Insert, update or delete a value, depending on whether it exists. */
+  def alter(key: K)(f: Option[V] => Option[V]): KVStore[N, Unit] =
+    KVStore[N].alter(namespace, key)(f)
 }
