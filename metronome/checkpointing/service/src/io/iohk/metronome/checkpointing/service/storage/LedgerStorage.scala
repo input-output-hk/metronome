@@ -1,9 +1,8 @@
 package io.iohk.metronome.checkpointing.service.storage
 
-import cats.implicits._
 import io.iohk.metronome.checkpointing.models.Ledger
-import io.iohk.metronome.storage.{KVCollection, KVStore, KVStoreRead}
-import scodec.{Decoder, Encoder, Codec}
+import io.iohk.metronome.storage.{KVRingBuffer, KVCollection, KVStore}
+import scodec.Codec
 
 /** Storing the committed and executed checkpoint ledger.
   *
@@ -26,23 +25,12 @@ class LedgerStorage[N](
     ledgerColl: KVCollection[N, Ledger.Hash, Ledger],
     ledgerMetaNamespace: N,
     maxHistorySize: Int
-)(implicit codecH: Codec[Ledger.Hash]) {
-  require(maxHistorySize > 0, "Has to store at least one ledger.")
-
-  import LedgerStorage._
-  import scodec.codecs.implicits.implicitIntCodec
-
-  private implicit val kvn = KVStore.instance[N]
-
-  private def getMetaData[V: Decoder](key: MetaKey[V]) =
-    KVStore[N].get[MetaKey[V], V](ledgerMetaNamespace, key)
-
-  private def putMetaData[V: Encoder](key: MetaKey[V], value: V) =
-    KVStore[N].put(ledgerMetaNamespace, key, value)
-
-  /** Return the index of the next bucket to write the data into. */
-  private def nextIndex(maybeIndex: Option[Int]): Int =
-    maybeIndex.fold(0)(index => (index + 1) % maxHistorySize)
+)(implicit codecH: Codec[Ledger.Hash])
+    extends KVRingBuffer[N, Ledger.Hash, Ledger](
+      ledgerColl,
+      ledgerMetaNamespace,
+      maxHistorySize
+    ) {
 
   /** Save a new ledger and remove the oldest one, if we reached
     * the maximum history size. Since we only store committed
@@ -50,46 +38,5 @@ class LedgerStorage[N](
     * by going through a block pointing at them directly.
     */
   def put(ledger: Ledger): KVStore[N, Unit] =
-    for {
-      index <- getMetaData(BucketIndex).map(nextIndex)
-      ledgerHash = ledger.hash
-      maybeOldestHash <- getMetaData(Bucket(index))
-      _ <- maybeOldestHash match {
-        case Some(oldestHash) if oldestHash == ledgerHash =>
-          KVStore[N].unit
-
-        case Some(oldestHash) =>
-          ledgerColl.put(ledgerHash, ledger) >>
-            ledgerColl.delete(oldestHash)
-
-        case None =>
-          ledgerColl.put(ledgerHash, ledger)
-      }
-      _ <- putMetaData(Bucket(index), ledgerHash)
-      _ <- putMetaData(BucketIndex, index)
-    } yield ()
-
-  /** Retrieve a ledger by state hash, if we still have it. */
-  def get(ledgerHash: Ledger.Hash): KVStoreRead[N, Option[Ledger]] =
-    ledgerColl.read(ledgerHash)
-}
-
-object LedgerStorage {
-
-  /** Keys for different pieces of meta-data stored under a single namespace. */
-  sealed trait MetaKey[V]
-
-  /** Key under which the last written index of the ring buffer is stored. */
-  case object BucketIndex extends MetaKey[Int]
-
-  /** Contents of a ring buffer bucket by index. */
-  case class Bucket(index: Int) extends MetaKey[Ledger.Hash] {
-    assert(index >= 0)
-  }
-
-  implicit val metaKeyEncoder: Encoder[MetaKey[_]] =
-    scodec.codecs.implicits.implicitIntCodec.asEncoder.contramap {
-      case BucketIndex   => -1
-      case Bucket(index) => index
-    }
+    put(ledger.hash, ledger)
 }
