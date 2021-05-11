@@ -66,13 +66,12 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     }
 
   /** Request a block from a peer. */
-  private def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
+  private def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] =
     for {
       requestId <- RequestId[F]
       request = GetBlockRequest(requestId, blockHash)
       maybeResponse <- sendRequest(from, request)
     } yield maybeResponse.map(_.block)
-  }
 
   /** Request the status of a peer. */
   private def getStatus(from: A#PKey): F[Option[Status[A]]] =
