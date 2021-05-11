@@ -17,10 +17,27 @@ object Codecs {
 
   implicit val commandCodec: Codec[Robot.Command] = {
     import Robot.Command._
-    mappedEnum(uint8, MoveForward -> 1, TurnLeft -> 2, TurnRight -> 3)
+    mappedEnum(
+      uint8,
+      Rest        -> 1,
+      MoveForward -> 2,
+      TurnLeft    -> 3,
+      TurnRight   -> 4
+    )
   }
 
   implicit val robotBlockCodec: Codec[RobotBlock] =
+    Codec.deriveLabelledGeneric
+
+  implicit val robotPositionCodec: Codec[Robot.Position] =
+    Codec.deriveLabelledGeneric
+
+  implicit val robotOrientationCodec: Codec[Robot.Orientation] = {
+    import Robot.Orientation._
+    mappedEnum(uint8, North -> 1, East -> 2, South -> 3, West -> 4)
+  }
+
+  implicit val robotStateCodec: Codec[Robot.State] =
     Codec.deriveLabelledGeneric
 
   implicit val phaseCodec: Codec[VotingPhase] = {
@@ -33,4 +50,5 @@ object Codecs {
 
   implicit val contentCodec: Codec[(VotingPhase, ViewNumber, Hash)] =
     phaseCodec ~~ viewNumberCodec ~~ hashCodec
+
 }
