@@ -61,17 +61,16 @@ object ViewStateStorage {
     * because they get written independently.
     */
   trait Keys[A <: Agreement] {
-    sealed trait Key[V]
+    sealed abstract class Key[V](private val code: Int)
     object Key {
-      case object ViewNumber            extends Key[ViewNumber]
-      case object PrepareQC             extends Key[QuorumCertificate[A]]
-      case object LockedQC              extends Key[QuorumCertificate[A]]
-      case object CommitQC              extends Key[QuorumCertificate[A]]
-      case object LastExecutedBlockHash extends Key[A#Hash]
+      case object ViewNumber            extends Key[ViewNumber](0)
+      case object PrepareQC             extends Key[QuorumCertificate[A]](1)
+      case object LockedQC              extends Key[QuorumCertificate[A]](2)
+      case object CommitQC              extends Key[QuorumCertificate[A]](3)
+      case object LastExecutedBlockHash extends Key[A#Hash](4)
 
       implicit def encoder[V]: Encoder[Key[V]] =
-        scodec.codecs.implicits.implicitStringCodec
-          .contramap[Key[V]](_.toString)
+        scodec.codecs.uint8.contramap[Key[V]](_.code)
     }
   }
 
