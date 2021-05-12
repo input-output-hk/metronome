@@ -101,7 +101,7 @@ class ConfigParserSpec
       env = Map("TEST_METRICS_ENABLED" -> "true")
     )
 
-    inside(config) { case Right(Right(config)) =>
+    inside(config) { case Right(config) =>
       config shouldBe TestConfig(
         TestConfig.Metrics(enabled = true),
         TestConfig.Network(

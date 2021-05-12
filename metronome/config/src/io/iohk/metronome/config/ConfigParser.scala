@@ -2,11 +2,13 @@ package io.iohk.metronome.config
 
 import cats.implicits._
 import com.typesafe.config.{ConfigObject, ConfigRenderOptions}
-import io.circe.{Json, JsonObject, ParsingFailure, Decoder}
+import io.circe.{Json, JsonObject, ParsingFailure, Decoder, DecodingFailure}
 import io.circe.parser.{parse => parseJson}
 
 object ConfigParser {
-  type ParsingResult = Either[ParsingFailure, Json]
+  protected[config] type ParsingResult = Either[ParsingFailure, Json]
+
+  type Result[T] = Either[Either[ParsingFailure, DecodingFailure], T]
 
   /** Parse configuration into a type using a JSON decoder, thus allowing
     * validations to be applied to all configuraton values up front, rather
@@ -19,7 +21,7 @@ object ConfigParser {
       conf: ConfigObject,
       prefix: String = "",
       env: Map[String, String] = sys.env
-  ): Either[ParsingFailure, Decoder.Result[T]] = {
+  ): Result[T] = {
     // Render the whole config to JSON. Everything needs a default value,
     // but it can be `null` and be replaced from the environment.
     val orig = toJson(conf)
@@ -28,7 +30,14 @@ object ConfigParser {
     // Apply overrides from env vars.
     val withEnv = withEnvVarOverrides(withCamel, prefix, env)
     // Map to the domain config model.
-    withEnv.map(Decoder[T].decodeJson(_))
+    withEnv match {
+      case Left(error) => Left(Left(error))
+      case Right(json) =>
+        Decoder[T].decodeJson(json) match {
+          case Left(error)  => Left(Right(error))
+          case Right(value) => Right(value)
+        }
+    }
   }
 
   /** Render a TypeSafe Config section into JSON. */
