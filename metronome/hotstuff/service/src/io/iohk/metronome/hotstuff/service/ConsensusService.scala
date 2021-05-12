@@ -385,8 +385,6 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
         // the forground here, but it may cause the node to lose its
         // sync with the other federation members, so the execution
         // should be offloaded to another queue.
-        //
-        // Save the Commit Quorum Certificate to the view state.
         blockExecutionQueue.offer(effect)
 
       case SendMessage(recipient, message) =>
