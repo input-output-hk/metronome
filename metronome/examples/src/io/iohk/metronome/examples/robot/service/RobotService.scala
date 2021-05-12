@@ -142,6 +142,7 @@ class RobotService[F[_]: Sync: Timer, N](
         storeRunner.runReadWrite {
           val postState = preState.update(block.command)
           stateStorage.put(postState.hash, postState)
+          // TODO: Display robot on the console.
         }
     }
 

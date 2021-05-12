@@ -28,9 +28,10 @@ object VersionOf {
   val slf4j                = "1.7.30"
   val `scodec-core`        = "1.11.7"
   val `scodec-bits`        = "1.1.12"
+  val scopt                = "4.0.1"
 }
 
-// Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
+// Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deprecation
 // warnings that come up in 2.13 but are too awkward to work around.
 object metronome extends Cross[MetronomeModule]("2.12.13", "2.13.4")
 
@@ -227,14 +228,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override def ivyDeps = super.ivyDeps() ++ Agg(
       ivy"com.typesafe:config:${VersionOf.config}",
       ivy"io.circe::circe-core:${VersionOf.circe}",
-      ivy"io.circe::circe-parser:${VersionOf.circe}"
+      ivy"io.circe::circe-parser:${VersionOf.circe}",
+      ivy"io.circe::circe-generic:${VersionOf.circe}"
     )
 
-    object test extends TestModule {
-      override def ivyDeps = super.ivyDeps() ++ Agg(
-        ivy"io.circe::circe-generic:${VersionOf.circe}"
-      )
-    }
+    object test extends TestModule
   }
 
   /** Generic HotStuff BFT library. */
@@ -415,6 +413,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         networking,
         rocksdb
       )
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"com.github.scopt::scopt:${VersionOf.scopt}"
+    )
 
     object test extends TestModule
   }
