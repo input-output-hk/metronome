@@ -13,7 +13,7 @@ object RobotApp extends TaskApp {
       nodeIndex: Int = 0
   )
 
-  val oparser = {
+  def oparser(config: RobotConfig) = {
     val builder = OParser.builder[CommandLineOptions]
     import builder._
 
@@ -23,19 +23,25 @@ object RobotApp extends TaskApp {
         .action((i, opts) => opts.copy(nodeIndex = i))
         .text("index of example node to run")
         .required()
+        .validate(i =>
+          Either.cond(
+            0 <= i && i < config.nodes.length,
+            (),
+            s"Must be between 0 and ${config.nodes.length - 1}"
+          )
+        )
     )
   }
 
   override def run(args: List[String]): Task[ExitCode] = {
-    OParser.parse(oparser, args, CommandLineOptions()) match {
-      case None =>
-        Task.pure(ExitCode.Error)
-
-      case Some(opts) =>
-        RobotConfigParser.parse match {
-          case Left(error) =>
-            Task.delay(println(error)).as(ExitCode.Error)
-          case Right(config) =>
+    RobotConfigParser.parse match {
+      case Left(error) =>
+        Task.delay(println(error)).as(ExitCode.Error)
+      case Right(config) =>
+        OParser.parse(oparser(config), args, CommandLineOptions()) match {
+          case None =>
+            Task.pure(ExitCode.Error)
+          case Some(opts) =>
             run(opts, config)
         }
     }
