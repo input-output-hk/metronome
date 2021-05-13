@@ -34,6 +34,7 @@ object RobotConfig {
   )
 
   case class Database(
-      path: Path
+      path: Path,
+      stateHistorySize: Int
   )
 }

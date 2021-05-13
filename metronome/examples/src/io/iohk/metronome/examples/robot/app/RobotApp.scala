@@ -2,9 +2,14 @@ package io.iohk.metronome.examples.robot.app
 
 import cats.effect.{ExitCode, Resource}
 import monix.eval.{Task, TaskApp}
-import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey}
+import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey, GroupSignature}
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.hotstuff.consensus.{Federation, LeaderSelection}
+import io.iohk.metronome.hotstuff.consensus.{
+  Federation,
+  LeaderSelection,
+  ViewNumber
+}
+import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.Network
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
@@ -14,10 +19,13 @@ import io.iohk.metronome.networking.{
   ScalanetConnectionProvider,
   RemoteConnectionManager
 }
-import io.iohk.metronome.hotstuff.service.storage.{BlockStorage}
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
+}
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.codecs.RobotCodecs
-import io.iohk.metronome.examples.robot.models.RobotBlock
+import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot, RobotSigning}
 import io.iohk.metronome.examples.robot.service.RobotService
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.examples.robot.app.config.{
@@ -26,16 +34,22 @@ import io.iohk.metronome.examples.robot.app.config.{
 }
 import io.iohk.metronome.examples.robot.app.tracing.RobotNetworkTracers
 import io.iohk.metronome.rocksdb.RocksDBStore
-import io.iohk.metronome.storage.{KVStoreRunner, KVStoreRead, KVStore}
+import io.iohk.metronome.storage.{
+  KVStoreRunner,
+  KVStoreRead,
+  KVStore,
+  KVCollection,
+  KVRingBuffer
+}
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
-import io.iohk.metronome.storage.KVCollection
 import java.security.SecureRandom
 import scopt.OParser
 import scodec.Codec
 
 object RobotApp extends TaskApp {
   type NetworkMessage = DuplexMessage[RobotAgreement, RobotMessage]
-  type Namespace      = RocksDBStore.Namespace
+
+  type NS = RocksDBStore.Namespace
 
   case class CommandLineOptions(
       nodeIndex: Int = 0
@@ -110,6 +124,21 @@ object RobotApp extends TaskApp {
     )
     val retryConfig = RemoteConnectionManager.RetryConfig.default
 
+    val genesis = RobotBlock.genesis(
+      row = config.model.maxRow / 2,
+      col = config.model.maxCol / 2,
+      orientation = Robot.Orientation.North
+    )
+
+    val genesisQC = QuorumCertificate[RobotAgreement](
+      phase = Phase.Prepare,
+      viewNumber = ViewNumber(0),
+      blockHash = genesis.hash,
+      signature = GroupSignature(Nil)
+    )
+
+    implicit val signing = new RobotSigning(genesis.hash)
+
     for {
       connectionProvider <- ScalanetConnectionProvider[
         Task,
@@ -137,13 +166,13 @@ object RobotApp extends TaskApp {
 
       rocksDbStore <- RocksDBStore[Task](dbConfig, RobotNamespaces.all)
 
-      implicit0(storeRunner: KVStoreRunner[Task, Namespace]) =
-        new KVStoreRunner[Task, Namespace] {
+      implicit0(storeRunner: KVStoreRunner[Task, NS]) =
+        new KVStoreRunner[Task, NS] {
           override def runReadOnly[A](
-              query: KVStoreRead[Namespace, A]
+              query: KVStoreRead[NS, A]
           ): Task[A] = rocksDbStore.runReadOnly(query)
 
-          override def runReadWrite[A](query: KVStore[Namespace, A]): Task[A] =
+          override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
             rocksDbStore.runWithBatching(query)
         }
 
@@ -152,7 +181,7 @@ object RobotApp extends TaskApp {
           connectionManager
         )
 
-      hotstuffAndApplicationNetworks <- Network.splitter[
+      (hotstuffNetwork, applicationNetwork) <- Network.splitter[
         Task,
         RobotAgreement,
         NetworkMessage,
@@ -169,25 +198,46 @@ object RobotApp extends TaskApp {
         }
       )
 
-      blockStorage = new BlockStorage[Namespace, RobotAgreement](
+      blockStorage = new BlockStorage[NS, RobotAgreement](
         blockColl =
-          new KVCollection[Namespace, Hash, RobotBlock](RobotNamespaces.Block),
-        childToParentColl = new KVCollection[Namespace, Hash, Hash](
-          RobotNamespaces.BlockToParent
-        ),
-        parentToChildrenColl = new KVCollection[Namespace, Hash, Set[Hash]](
-          RobotNamespaces.BlockToChildren
-        )
+          new KVCollection[NS, Hash, RobotBlock](RobotNamespaces.Block),
+        childToParentColl =
+          new KVCollection[NS, Hash, Hash](RobotNamespaces.BlockToParent),
+        parentToChildrenColl =
+          new KVCollection[NS, Hash, Set[Hash]](RobotNamespaces.BlockToChildren)
+      )
+
+      // (Re)insert genesis. It's okay if it has been pruned before,
+      // but if the application is just starting it will need it.
+      _ <- Resource.liftF {
+        storeRunner.runReadWrite {
+          blockStorage.put(genesis)
+        }
+      }
+
+      viewStateStorage <- Resource.liftF {
+        storeRunner.runReadWrite {
+          ViewStateStorage[NS, RobotAgreement](
+            RobotNamespaces.ViewState,
+            genesis = ViewStateStorage.Bundle.fromGenesisQC(genesisQC)
+          )
+        }
+      }
+
+      stateStorage = new KVRingBuffer[NS, Hash, Robot.State](
+        coll = new KVCollection[NS, Hash, Robot.State](RobotNamespaces.State),
+        metaNamespace = RobotNamespaces.StateMeta,
+        maxHistorySize = config.db.stateHistorySize
       )
 
       applicationService <- Resource.liftF {
-        RobotService[Task, Namespace](
+        RobotService[Task, NS](
           maxRow = config.model.maxRow,
           maxCol = config.model.maxCol,
-          network = hotstuffAndApplicationNetworks._2,
+          network = applicationNetwork,
           blockStorage = blockStorage,
-          viewStateStorage = ???,
-          stateStorage = ???,
+          viewStateStorage = viewStateStorage,
+          stateStorage = stateStorage,
           simulatedDecisionTime = config.model.simulatedDecisionTime,
           timeout = config.network.timeout
         )

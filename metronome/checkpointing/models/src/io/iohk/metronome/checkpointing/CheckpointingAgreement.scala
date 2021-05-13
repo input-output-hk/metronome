@@ -1,13 +1,10 @@
 package io.iohk.metronome.checkpointing
 
-import io.iohk.metronome.crypto
 import io.iohk.metronome.hotstuff.consensus
-import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Secp256k1Agreement,
-  Signing,
-  VotingPhase
+  Signing
 }
 import scodec.bits.ByteVector
 import io.iohk.ethereum.rlp

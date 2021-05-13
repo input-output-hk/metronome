@@ -17,5 +17,8 @@ object RobotNamespaces {
   val Block           = register("block")
   val BlockToParent   = register("block-to-parent")
   val BlockToChildren = register("block-to-children")
+  val ViewState       = register("view-state")
+  val State           = register("state")
+  val StateMeta       = register("state-meta")
 
 }
