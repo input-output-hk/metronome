@@ -4,6 +4,7 @@ import cats.implicits._
 import com.typesafe.config.{ConfigObject, ConfigRenderOptions}
 import io.circe.{Json, JsonObject, ParsingFailure, Decoder, DecodingFailure}
 import io.circe.parser.{parse => parseJson}
+import scala.util.{Try, Success, Failure}
 
 object ConfigParser {
   protected[config] type ParsingResult = Either[ParsingFailure, Json]
@@ -18,27 +19,33 @@ object ConfigParser {
     * Accept overrides from the environment in PREFIX_PATH_TO_FIELD format.
     */
   def parse[T: Decoder](
-      conf: ConfigObject,
+      conf: => ConfigObject,
       prefix: String = "",
       env: Map[String, String] = sys.env
-  ): Result[T] = {
-    // Render the whole config to JSON. Everything needs a default value,
-    // but it can be `null` and be replaced from the environment.
-    val orig = toJson(conf)
-    // Transform fields which use dash for segmenting into camelCase.
-    val withCamel = withCamelCase(orig)
-    // Apply overrides from env vars.
-    val withEnv = withEnvVarOverrides(withCamel, prefix, env)
-    // Map to the domain config model.
-    withEnv match {
-      case Left(error) => Left(Left(error))
-      case Right(json) =>
-        Decoder[T].decodeJson(json) match {
-          case Left(error)  => Left(Right(error))
-          case Right(value) => Right(value)
+  ): Result[T] =
+    Try(conf) match {
+      case Success(conf) =>
+        // Render the whole config to JSON. Everything needs a default value,
+        // but it can be `null` and be replaced from the environment.
+        val orig = toJson(conf)
+        // Transform fields which use dash for segmenting into camelCase.
+        val withCamel = withCamelCase(orig)
+        // Apply overrides from env vars.
+        val withEnv = withEnvVarOverrides(withCamel, prefix, env)
+        // Map to the domain config model.
+        withEnv match {
+          case Left(error) => Left(Left(error))
+          case Right(json) =>
+            Decoder[T].decodeJson(json) match {
+              case Left(error)  => Left(Right(error))
+              case Right(value) => Right(value)
+            }
         }
+
+      case Failure(ex) =>
+        val msg = s"Could not load the config: ${ex.getMessage}"
+        Left(Left(io.circe.ParsingFailure(msg, ex)))
     }
-  }
 
   /** Render a TypeSafe Config section into JSON. */
   protected[config] def toJson(conf: ConfigObject): Json = {
