@@ -5,7 +5,10 @@ import monix.eval.{Task, TaskApp}
 import io.iohk.metronome.crypto.ECKeyPair
 import io.iohk.metronome.hotstuff.consensus.{Federation, LeaderSelection}
 import io.iohk.metronome.hotstuff.service.messages.DuplexMessage
-import io.iohk.metronome.networking.ScalanetConnectionProvider
+import io.iohk.metronome.networking.{
+  ScalanetConnectionProvider,
+  RemoteConnectionManager
+}
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
@@ -13,12 +16,14 @@ import io.iohk.metronome.examples.robot.app.config.{
   RobotConfigParser,
   RobotConfig
 }
+import io.iohk.metronome.examples.robot.app.tracing.RobotNetworkTracers
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
-import java.net.InetSocketAddress
 import java.security.SecureRandom
 import scopt.OParser
 
 object RobotApp extends TaskApp {
+  type NetworkMessage = DuplexMessage[RobotAgreement, RobotMessage]
+
   case class CommandLineOptions(
       nodeIndex: Int = 0
   )
@@ -65,18 +70,27 @@ object RobotApp extends TaskApp {
       config: RobotConfig
   ): Resource[Task, Unit] = {
     import RobotCodecs.duplexMessageCodec
+    import RobotNetworkTracers.networkTracers
     implicit val scheduler       = this.scheduler
     implicit val leaderSelection = LeaderSelection.Hashing
-    val federation               = Federation(config.nodes.map(_.publicKey).toVector)
-    val localNode                = config.nodes(opts.nodeIndex)
+
+    val federation = Federation(config.nodes.map(_.publicKey).toVector)
+    val localNode  = config.nodes(opts.nodeIndex)
+
+    val retryConfig = RemoteConnectionManager.RetryConfig.default
+    val clusterConfig = RemoteConnectionManager.ClusterConfig(
+      clusterNodes = config.nodes.map { node =>
+        node.publicKey -> node.address
+      }.toSet
+    )
 
     for {
       connectionProvider <- ScalanetConnectionProvider[
         Task,
         RobotAgreement.PKey,
-        DuplexMessage[RobotAgreement, RobotMessage]
+        NetworkMessage
       ](
-        bindAddress = new InetSocketAddress(localNode.host, localNode.port),
+        bindAddress = localNode.address,
         nodeKeyPair = ECKeyPair(localNode.privateKey, localNode.publicKey),
         new SecureRandom(),
         useNativeTlsImplementation = true,
@@ -88,6 +102,12 @@ object RobotApp extends TaskApp {
           .fold(e => sys.error(e.description), identity),
         maxIncomingQueueSizePerPeer = 100
       )
+
+      connectionManager <- RemoteConnectionManager[
+        Task,
+        RobotAgreement.PKey,
+        NetworkMessage
+      ](connectionProvider, clusterConfig, retryConfig)
     } yield ()
   }
 
