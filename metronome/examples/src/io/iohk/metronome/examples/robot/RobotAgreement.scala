@@ -18,7 +18,7 @@ object RobotAgreement extends Secp256k1Agreement {
 
   implicit val signing: Signing[RobotAgreement] =
     Signing.secp256k1((phase, viewNumber, hash) =>
-      models.Codecs.contentCodec
+      codecs.RobotCodecs.contentCodec
         .encode((phase, viewNumber, hash))
         .require
         .toByteVector

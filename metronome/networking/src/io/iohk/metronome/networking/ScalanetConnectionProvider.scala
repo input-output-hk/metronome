@@ -101,8 +101,8 @@ object ScalanetConnectionProvider {
 
   }
 
-  // Codec constraint for K is necessary as scalanet require peer key to be in BitVector format
-  def scalanetProvider[F[_]: Sync: TaskLift, K: Codec, M: Codec](
+  // Codec constraint for K is necessary as scalanet requires peer key to be in BitVector format.
+  def apply[F[_]: Sync: TaskLift, K: Codec, M: Codec](
       bindAddress: InetSocketAddress,
       nodeKeyPair: ECKeyPair,
       secureRandom: SecureRandom,

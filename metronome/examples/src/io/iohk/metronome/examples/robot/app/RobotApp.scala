@@ -1,12 +1,22 @@
 package io.iohk.metronome.examples.robot.app
 
-import cats.effect.ExitCode
+import cats.effect.{ExitCode, Resource}
 import monix.eval.{Task, TaskApp}
-import scopt.OParser
+import io.iohk.metronome.crypto.ECKeyPair
+import io.iohk.metronome.hotstuff.consensus.{Federation, LeaderSelection}
+import io.iohk.metronome.hotstuff.service.messages.DuplexMessage
+import io.iohk.metronome.networking.ScalanetConnectionProvider
+import io.iohk.metronome.examples.robot.RobotAgreement
+import io.iohk.metronome.examples.robot.codecs.RobotCodecs
+import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.examples.robot.app.config.{
   RobotConfigParser,
   RobotConfig
 }
+import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
+import java.net.InetSocketAddress
+import java.security.SecureRandom
+import scopt.OParser
 
 object RobotApp extends TaskApp {
   case class CommandLineOptions(
@@ -47,6 +57,38 @@ object RobotApp extends TaskApp {
     }
   }
 
-  def run(opts: CommandLineOptions, config: RobotConfig): Task[ExitCode] = ???
+  def run(opts: CommandLineOptions, config: RobotConfig): Task[ExitCode] =
+    compose(opts, config).use(_ => Task.never.as(ExitCode.Success))
+
+  def compose(
+      opts: CommandLineOptions,
+      config: RobotConfig
+  ): Resource[Task, Unit] = {
+    import RobotCodecs.duplexMessageCodec
+    implicit val scheduler       = this.scheduler
+    implicit val leaderSelection = LeaderSelection.Hashing
+    val federation               = Federation(config.nodes.map(_.publicKey).toVector)
+    val localNode                = config.nodes(opts.nodeIndex)
+
+    for {
+      connectionProvider <- ScalanetConnectionProvider[
+        Task,
+        RobotAgreement.PKey,
+        DuplexMessage[RobotAgreement, RobotMessage]
+      ](
+        bindAddress = new InetSocketAddress(localNode.host, localNode.port),
+        nodeKeyPair = ECKeyPair(localNode.privateKey, localNode.publicKey),
+        new SecureRandom(),
+        useNativeTlsImplementation = true,
+        framingConfig = DynamicTLSPeerGroup.FramingConfig
+          .buildStandardFrameConfig(
+            maxFrameLength = 1024 * 1024,
+            lengthFieldLength = 8
+          )
+          .fold(e => sys.error(e.description), identity),
+        maxIncomingQueueSizePerPeer = 100
+      )
+    } yield ()
+  }
 
 }

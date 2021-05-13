@@ -1,5 +1,8 @@
 package io.iohk.metronome.hotstuff.consensus.basic
 
+import io.iohk.metronome.crypto
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
+
 /** Capture all the generic types in the BFT agreement,
   * so we don't have to commit to any particular set of content.
   */
@@ -24,4 +27,18 @@ trait Agreement {
 
   /** The secret key used for signing partial messages. */
   type SKey
+
+  // Convenience alias for groups signatures appearing in Quorum Certificates..
+  type GroupSignature = crypto.GroupSignature[
+    PKey,
+    (VotingPhase, ViewNumber, Hash),
+    GSig
+  ]
+
+  // Convenience alias for groups signatures appearing in Votes.
+  type PartialSignature = crypto.PartialSignature[
+    PKey,
+    (VotingPhase, ViewNumber, Hash),
+    PSig
+  ]
 }

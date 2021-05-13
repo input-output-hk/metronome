@@ -1,6 +1,7 @@
 package io.iohk.metronome.examples.robot.models
 
 import io.iohk.metronome.crypto.hash.Hash
+import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 
 object Robot {
   sealed trait Command extends Product with Serializable
@@ -17,8 +18,7 @@ object Robot {
   ) {
     import Command._
 
-    lazy val hash: Hash =
-      codecHash(this)(Codecs.robotStateCodec)
+    lazy val hash: Hash = codecHash(this)(RobotCodecs.robotStateCodec)
 
     def update(command: Command): State =
       command match {
