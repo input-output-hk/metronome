@@ -63,10 +63,11 @@ class RPCTrackerSpec extends AsyncFlatSpec with Matchers {
 
   it should "complete responses with None if the wrong type of response arrives" in test {
     tracker =>
-      val req = FooRequest(RequestId())
-      val res = BarResponse(RequestId(), "one")
       for {
-        join <- tracker.register(req, timeout = 50.millis)
+        rid <- RequestId[Task]
+        req = FooRequest(rid)
+        res = BarResponse(rid, "one")
+        join <- tracker.register(req)
         ok   <- tracker.complete(res)
         got  <- join
       } yield {

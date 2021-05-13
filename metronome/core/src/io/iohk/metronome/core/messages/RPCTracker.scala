@@ -8,9 +8,19 @@ import scala.concurrent.duration.FiniteDuration
 import scala.reflect.ClassTag
 
 /** `RPCTracker` can be used to register outgoing requests and later
-  * match them up with incoming responses, thus turning the two independent
-  * messages into a `Kleisli[F, Request, Option[Response]]`, where a `None`
-  * result means the request timed out.
+  * match them up with incoming responses, thus it facilitates turning
+  * the two independent messages into a `Kleisli[F, Request, Option[Response]]`,
+  * by a component that has access to the network, where a `None` result means
+  * the operation timed out before a response was received.
+  *
+  * The workflow is:
+  * 0. Receive some request parameters in a method.
+  * 1. Create a request ID.
+  * 2. Create a request with the ID.
+  * 3. Register the request with the tracker, hold on to the handle.
+  * 4. Send the request over the network.
+  * 5. Wait on the handle, eventually returning the optional result to the caller.
+  * 6. Pass every response received from the network to the tracker (on the network handler fiber).
   */
 class RPCTracker[F[_]: Timer: Concurrent, M](
     deferredMapRef: Ref[F, Map[UUID, RPCTracker.Entry[F, _]]],
@@ -27,6 +37,8 @@ class RPCTracker[F[_]: Timer: Concurrent, M](
   )(implicit
       ev1: Req <:< M,
       ev2: RPCPair.Aux[Req, Res],
+      // Used by `RPCTracker.Entry.complete` to make sure only the
+      // expected response type can complete a request.
       ct: ClassTag[Res]
   ): F[F[Option[Res]]] = {
     val requestId = request.requestId
@@ -73,9 +85,10 @@ object RPCTracker {
         case expected: Res =>
           deferred.complete(Some(expected)).attempt.map(_.isRight)
         case _ =>
+          // Wrong type, as evidenced by `ct` not maching `Res`.
           // Not returning an error because if the message arrived after
           // the timeout we wouldn't know anyway what it was meant to complete.
-          false.pure[F]
+          deferred.complete(None).attempt.as(false)
       }
     }
   }
