@@ -35,7 +35,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
   type Hash          = TestAgreement.Hash
 
   implicit def `Codec[Set[T]]`[T: Codec] =
-    implicitly[Codec[List[T]]].xmap[Set[T]](_.toSet, _.toList)
+    Codec[List[T]].xmap[Set[T]](_.toSet, _.toList)
 
   type Namespace = String
   object Namespace {

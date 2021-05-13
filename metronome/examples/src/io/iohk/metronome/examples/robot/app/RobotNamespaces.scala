@@ -5,12 +5,17 @@ import io.iohk.metronome.rocksdb.RocksDBStore
 object RobotNamespaces {
   private var registry: Vector[RocksDBStore.Namespace] = Vector.empty
 
-  private def register(ns: RocksDBStore.Namespace): RocksDBStore.Namespace = {
+  private def register(key: String): RocksDBStore.Namespace = {
+    val ns = key.map(_.toByte)
     require(!registry.contains(ns))
     registry = registry :+ ns
     ns
   }
 
   def all: Seq[RocksDBStore.Namespace] = registry
+
+  val Block           = register("block")
+  val BlockToParent   = register("block-to-parent")
+  val BlockToChildren = register("block-to-children")
 
 }
