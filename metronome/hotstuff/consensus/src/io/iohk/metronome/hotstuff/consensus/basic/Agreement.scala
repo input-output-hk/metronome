@@ -27,18 +27,20 @@ trait Agreement {
 
   /** The secret key used for signing partial messages. */
   type SKey
+}
 
+object Agreement {
   // Convenience alias for groups signatures appearing in Quorum Certificates..
-  type GroupSignature = crypto.GroupSignature[
-    PKey,
-    (VotingPhase, ViewNumber, Hash),
-    GSig
+  type GroupSignature[A <: Agreement] = crypto.GroupSignature[
+    A#PKey,
+    (VotingPhase, ViewNumber, A#Hash),
+    A#GSig
   ]
 
   // Convenience alias for groups signatures appearing in Votes.
-  type PartialSignature = crypto.PartialSignature[
-    PKey,
-    (VotingPhase, ViewNumber, Hash),
-    PSig
+  type PartialSignature[A <: Agreement] = crypto.PartialSignature[
+    A#PKey,
+    (VotingPhase, ViewNumber, A#Hash),
+    A#PSig
   ]
 }

@@ -8,5 +8,5 @@ case class RobotBlock(
     postStateHash: Hash,
     command: Robot.Command
 ) {
-  lazy val hash: Hash = codecHash(this)(RobotCodecs.robotBlockCodec)
+  lazy val hash: Hash = codecHash(this)(RobotCodecs.blockCodec)
 }

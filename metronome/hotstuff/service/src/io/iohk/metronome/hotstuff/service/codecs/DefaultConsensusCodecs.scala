@@ -1,17 +1,18 @@
-package io.iohk.metronome.examples.robot.codecs
+package io.iohk.metronome.hotstuff.service.codecs
 
 import scodec.Codec
 import scodec.codecs._
-import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.hotstuff.consensus.basic.{Phase, VotingPhase}
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
-import scodec.bits.ByteVector
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Phase,
+  VotingPhase,
+  Agreement
+}
 
-trait RobotConsensusCodecs {
+trait DefaultConsensusCodecs[A <: Agreement] {
   import scodec.codecs.implicits._
 
-  implicit val hashCodec: Codec[Hash] =
-    Codec[ByteVector].xmap(Hash(_), identity)
+  implicit def hashCodec: Codec[A#Hash]
 
   implicit val phaseCodec: Codec[VotingPhase] = {
     import Phase._
@@ -21,6 +22,6 @@ trait RobotConsensusCodecs {
   implicit val viewNumberCodec: Codec[ViewNumber] =
     Codec[Long].xmap(ViewNumber(_), identity)
 
-  implicit val contentCodec: Codec[(VotingPhase, ViewNumber, Hash)] =
+  implicit val contentCodec: Codec[(VotingPhase, ViewNumber, A#Hash)] =
     phaseCodec ~~ viewNumberCodec ~~ hashCodec
 }

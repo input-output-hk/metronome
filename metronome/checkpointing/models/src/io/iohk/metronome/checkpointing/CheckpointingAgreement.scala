@@ -4,6 +4,7 @@ import io.iohk.metronome.crypto
 import io.iohk.metronome.hotstuff.consensus
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
+  Agreement,
   Secp256k1Agreement,
   Signing,
   VotingPhase
@@ -35,4 +36,6 @@ object CheckpointingAgreement extends Secp256k1Agreement {
         rlp.encode(phase) ++ rlp.encode(viewNumber) ++ rlp.encode(hash)
       )
     )
+
+  type GroupSignature = Agreement.GroupSignature[CheckpointingAgreement]
 }
