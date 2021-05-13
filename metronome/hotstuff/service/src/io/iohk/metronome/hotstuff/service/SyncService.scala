@@ -47,14 +47,20 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
 
   /** Request a block from a peer. */
   private def getBlock(from: A#PKey, blockHash: A#Hash): F[Option[A#Block]] = {
-    val request = GetBlockRequest(RequestId(), blockHash)
-    sendRequest(from, request) map (_.map(_.block))
+    for {
+      requestId <- RequestId[F]
+      request = GetBlockRequest(requestId, blockHash)
+      maybeResponse <- sendRequest(from, request)
+    } yield maybeResponse.map(_.block)
   }
 
   /** Request the status of a peer. */
   private def getStatus(from: A#PKey): F[Option[Status[A]]] = {
-    val request = GetStatusRequest[A](RequestId())
-    sendRequest(from, request) map (_.map(_.status))
+    for {
+      requestId <- RequestId[F]
+      request = GetStatusRequest[A](requestId)
+      maybeResponse <- sendRequest(from, request)
+    } yield maybeResponse.map(_.status)
   }
 
   /** Send a request to the peer and track the response.
