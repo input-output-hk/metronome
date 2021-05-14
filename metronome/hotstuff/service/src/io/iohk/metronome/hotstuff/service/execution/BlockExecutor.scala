@@ -57,7 +57,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
           )
           _ <- blockHashes match {
             case _ :: newBlockHashes =>
-              tryExecuteBatch(newBlockHashes, commitQC)
+              tryExecuteBatch(newBlockHashes, commitQC, lastExecutedBlockHash)
             case Nil =>
               ().pure[F]
           }
@@ -73,9 +73,21 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
       viewStateStorage.getLastExecutedBlockHash
     }
 
-  private def setLastExecutedBlockHash(blockHash: A#Hash): F[Unit] =
+  /** Update the last executed block hash, unless the jump synchronizer did so
+    * while we were executing blocks. NOTE: Would be good to stop executions
+    * if that's happening, currently we expect that some blocks will just be
+    * missing and the next batch will jump ahead. This is to avoid a race condition.
+    */
+  private def setLastExecutedBlockHash(
+      blockHash: A#Hash,
+      lastExecutedBlockHash: A#Hash
+  ): F[Boolean] =
     storeRunner.runReadWrite {
-      viewStateStorage.setLastExecutedBlockHash(blockHash)
+      viewStateStorage
+        .compareAndSetLastExecutedBlockHash(
+          blockHash,
+          lastExecutedBlockHash
+        )
     }
 
   /** Get the more complete path. We may not have the last executed block any more.
@@ -111,12 +123,13 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     */
   private def tryExecuteBatch(
       newBlockHashes: List[A#Hash],
-      commitQC: QuorumCertificate[A]
-  ): F[Option[A#Hash]] = {
+      commitQC: QuorumCertificate[A],
+      lastExecutedBlockHash: A#Hash
+  ): F[A#Hash] = {
     def loop(
         newBlockHashes: List[A#Hash],
-        lastExecutedBlockHash: Option[A#Hash]
-    ): F[Option[A#Hash]] =
+        lastExecutedBlockHash: A#Hash
+    ): F[A#Hash] =
       newBlockHashes match {
         case Nil =>
           lastExecutedBlockHash.pure[F]
@@ -125,22 +138,23 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
           executeBlock(
             blockHash,
             commitQC,
-            NonEmptyList(blockHash, newBlockHashes)
+            NonEmptyList(blockHash, newBlockHashes),
+            lastExecutedBlockHash
           ).attempt.flatMap {
             case Left(ex) =>
               // If a block fails, return what we managed to do so far,
               // so we can re-attempt it next time if the block is still
               // available in the storage.
               tracers
-                .error(s"Error executiong block $blockHash", ex)
+                .error(s"Error executing block $blockHash", ex)
                 .as(lastExecutedBlockHash)
 
             case Right(()) =>
-              loop(newBlockHashes, blockHash.some)
+              loop(newBlockHashes, blockHash)
           }
       }
 
-    loop(newBlockHashes, none)
+    loop(newBlockHashes, lastExecutedBlockHash)
   }
 
   /** Execute the next block in line and update the view state.
@@ -150,7 +164,8 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
   private def executeBlock(
       blockHash: A#Hash,
       commitQC: QuorumCertificate[A],
-      commitPath: NonEmptyList[A#Hash]
+      commitPath: NonEmptyList[A#Hash],
+      lastExecutedBlockHash: A#Hash
   ): F[Unit] = {
     assert(commitPath.head == blockHash)
     assert(commitPath.last == commitQC.blockHash)
@@ -163,7 +178,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
 
       case Some(block) =>
         appService.executeBlock(block, commitQC, commitPath) >>
-          setLastExecutedBlockHash(blockHash) >>
+          setLastExecutedBlockHash(blockHash, lastExecutedBlockHash) >>
           tracers.blockExecuted(blockHash)
     }
   }
