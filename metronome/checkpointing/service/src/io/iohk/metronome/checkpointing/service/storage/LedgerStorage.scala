@@ -1,5 +1,6 @@
 package io.iohk.metronome.checkpointing.service.storage
 
+import cats.implicits._
 import io.iohk.metronome.checkpointing.models.Ledger
 import io.iohk.metronome.storage.{KVRingBuffer, KVCollection, KVStore}
 import scodec.Codec
@@ -38,5 +39,5 @@ class LedgerStorage[N](
     * by going through a block pointing at them directly.
     */
   def put(ledger: Ledger): KVStore[N, Unit] =
-    put(ledger.hash, ledger)
+    put(ledger.hash, ledger).void
 }
