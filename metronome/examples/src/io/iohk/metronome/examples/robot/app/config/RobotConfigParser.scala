@@ -44,10 +44,11 @@ object RobotConfigParser {
   implicit val finiteDurationDecoder: Decoder[FiniteDuration] =
     ConfigDecoders.durationDecoder
 
-  implicit val nodeDecoder: Decoder[RobotConfig.Node]         = deriveDecoder
-  implicit val networkDecoder: Decoder[RobotConfig.Network]   = deriveDecoder
-  implicit val databaseDecoder: Decoder[RobotConfig.Database] = deriveDecoder
-  implicit val modelDecoder: Decoder[RobotConfig.Model]       = deriveDecoder
-  implicit val configDecoder: Decoder[RobotConfig]            = deriveDecoder
+  implicit val nodeDecoder: Decoder[RobotConfig.Node]           = deriveDecoder
+  implicit val networkDecoder: Decoder[RobotConfig.Network]     = deriveDecoder
+  implicit val databaseDecoder: Decoder[RobotConfig.Database]   = deriveDecoder
+  implicit val modelDecoder: Decoder[RobotConfig.Model]         = deriveDecoder
+  implicit val consensusDecoder: Decoder[RobotConfig.Consensus] = deriveDecoder
+  implicit val configDecoder: Decoder[RobotConfig]              = deriveDecoder
 
 }

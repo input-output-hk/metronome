@@ -8,7 +8,8 @@ import java.nio.file.Path
 case class RobotConfig(
     network: RobotConfig.Network,
     model: RobotConfig.Model,
-    db: RobotConfig.Database
+    db: RobotConfig.Database,
+    consensus: RobotConfig.Consensus
 )
 object RobotConfig {
   case class Network(
@@ -36,5 +37,9 @@ object RobotConfig {
   case class Database(
       path: Path,
       stateHistorySize: Int
+  )
+
+  case class Consensus(
+      timeout: FiniteDuration
   )
 }

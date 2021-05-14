@@ -10,8 +10,12 @@ import io.iohk.metronome.hotstuff.consensus.{
   LeaderSelection,
   ViewNumber
 }
-import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
-import io.iohk.metronome.hotstuff.service.Network
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  QuorumCertificate,
+  Phase,
+  ProtocolState
+}
+import io.iohk.metronome.hotstuff.service.{Network, HotStuffService}
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
@@ -106,40 +110,42 @@ object RobotApp extends TaskApp {
       config: RobotConfig
   ): Resource[Task, Unit] = {
 
-    val federation =
-      Federation(config.network.nodes.map(_.publicKey).toVector)(
-        LeaderSelection.Hashing
-      )
-
     val genesis = RobotBlock.genesis(
       row = config.model.maxRow / 2,
       col = config.model.maxCol / 2,
       orientation = Robot.Orientation.North
     )
 
-    implicit val signing = new RobotSigning(genesis.hash)
-
     for {
       connectionProvider <- makeConnectionProvider(config, opts)
-
-      connectionManager <- makeConnectionManager(config, connectionProvider)
-
-      implicit0(storeRunner: KVStoreRunner[Task, NS]) <-
-        makeKVStoreRunner(config, opts)
+      connectionManager  <- makeConnectionManager(config, connectionProvider)
 
       (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
+
+      db <- makeRocksDBStore(config, opts)
+      implicit0(storeRunner: KVStoreRunner[Task, NS]) = makeKVStoreRunner(db)
 
       blockStorage     <- makeBlockStorage(genesis)
       viewStateStorage <- makeViewStateStorage(genesis)
       stateStorage = makeStateStorage(config)
 
-      applicationService <- makeApplicationService(
+      appService <- makeApplicationService(
         config,
         applicationNetwork,
         blockStorage,
         viewStateStorage,
         stateStorage
       )
+      _ <- makeHotstuffService(
+        config,
+        opts,
+        genesis,
+        hotstuffNetwork,
+        appService,
+        blockStorage,
+        viewStateStorage
+      )
+
     } yield ()
   }
 
@@ -194,23 +200,26 @@ object RobotApp extends TaskApp {
     ](connectionProvider, clusterConfig, retryConfig)
   }
 
-  private def makeKVStoreRunner(
+  private def makeRocksDBStore(
       config: RobotConfig,
       opts: CommandLineOptions
   ) = {
     val dbConfig = RocksDBStore.Config.default(
       config.db.path.resolve(opts.nodeIndex.toString)
     )
+    RocksDBStore[Task](dbConfig, RobotNamespaces.all)
+  }
 
-    RocksDBStore[Task](dbConfig, RobotNamespaces.all).map { db =>
-      new KVStoreRunner[Task, NS] {
-        override def runReadOnly[A](
-            query: KVStoreRead[NS, A]
-        ): Task[A] = db.runReadOnly(query)
+  private def makeKVStoreRunner(
+      db: RocksDBStore[Task]
+  ) = {
+    new KVStoreRunner[Task, NS] {
+      override def runReadOnly[A](
+          query: KVStoreRead[NS, A]
+      ): Task[A] = db.runReadOnly(query)
 
-        override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
-          db.runWithBatching(query)
-      }
+      override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
+        db.runWithBatching(query)
     }
   }
 
@@ -314,5 +323,66 @@ object RobotApp extends TaskApp {
         timeout = config.network.timeout
       )
     }
+  }
+
+  private def makeHotstuffService(
+      config: RobotConfig,
+      opts: CommandLineOptions,
+      genesis: RobotBlock,
+      hotstuffNetwork: Network[
+        Task,
+        RobotAgreement,
+        HotStuffMessage[RobotAgreement]
+      ],
+      appService: RobotService[Task, NS],
+      blockStorage: BlockStorage[NS, RobotAgreement],
+      viewStateStorage: ViewStateStorage[NS, RobotAgreement]
+  )(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = {
+    implicit val leaderSelection = LeaderSelection.Hashing
+
+    implicit val signing = new RobotSigning(genesis.hash)
+
+    val localNode = config.network.nodes(opts.nodeIndex)
+
+    for {
+      federation <- Resource.liftF {
+        Task.fromEither((e: String) => new IllegalArgumentException(e))(
+          Federation(config.network.nodes.map(_.publicKey).toVector)
+        )
+      }
+      (viewState, preparedBlock) <- Resource.liftF {
+        storeRunner.runReadOnly {
+          for {
+            bundle   <- viewStateStorage.getBundle
+            prepared <- blockStorage.get(bundle.prepareQC.blockHash)
+          } yield (bundle, prepared.get)
+        }
+      }
+      protocolState = ProtocolState[RobotAgreement](
+        viewNumber = viewState.viewNumber,
+        phase = Phase.Prepare,
+        publicKey = localNode.publicKey,
+        signingKey = localNode.privateKey,
+        federation = federation,
+        prepareQC = viewState.prepareQC,
+        lockedQC = viewState.lockedQC,
+        commitQC = viewState.commitQC,
+        preparedBlock = preparedBlock,
+        timeout = config.consensus.timeout,
+        votes = Set.empty,
+        newViews = Map.empty
+      )
+      _ <- HotStuffService[Task, NS, RobotAgreement](
+        publicKey = localNode.publicKey,
+        federation,
+        hotstuffNetwork,
+        appService,
+        blockStorage,
+        viewStateStorage,
+        protocolState
+      )
+    } yield ()
   }
 }
