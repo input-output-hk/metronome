@@ -1,7 +1,7 @@
 package io.iohk.metronome.examples.robot.app
 
 import cats.implicits._
-import cats.effect.{ExitCode, Resource}
+import cats.effect.{ExitCode, Resource, Concurrent}
 import monix.eval.{Task, TaskApp}
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey, GroupSignature}
 import io.iohk.metronome.crypto.hash.Hash
@@ -140,6 +140,7 @@ object RobotApp extends TaskApp {
         viewStateStorage,
         stateStorage
       )
+
       _ <- makeHotstuffService(
         config,
         opts,
@@ -149,6 +150,8 @@ object RobotApp extends TaskApp {
         blockStorage,
         viewStateStorage
       )
+
+      _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
 
     } yield ()
   }
@@ -359,6 +362,7 @@ object RobotApp extends TaskApp {
           Federation(config.network.nodes.map(_.publicKey).toVector)
         )
       }
+
       (viewState, preparedBlock) <- Resource.liftF {
         storeRunner.runReadOnly {
           for {
@@ -367,6 +371,7 @@ object RobotApp extends TaskApp {
           } yield (bundle, prepared.get)
         }
       }
+
       protocolState = ProtocolState[RobotAgreement](
         viewNumber = viewState.viewNumber,
         phase = Phase.Prepare,
@@ -381,6 +386,7 @@ object RobotApp extends TaskApp {
         votes = Set.empty,
         newViews = Map.empty
       )
+
       _ <- HotStuffService[Task, NS, RobotAgreement](
         publicKey = localNode.publicKey,
         federation,
@@ -392,4 +398,34 @@ object RobotApp extends TaskApp {
       )
     } yield ()
   }
+
+  def makeBlockPruner(
+      config: RobotConfig,
+      blockStorage: BlockStorage[NS, RobotAgreement],
+      viewStateStorage: ViewStateStorage[NS, RobotAgreement]
+  )(implicit storeRunner: KVStoreRunner[Task, NS]) =
+    Concurrent[Task].background {
+      val query: KVStore[NS, Unit] = for {
+        lastExecutedBlock <- viewStateStorage.getLastExecutedBlockHash.lift
+        pathFromRoot      <- blockStorage.getPathFromRoot(lastExecutedBlock).lift
+
+        pruneable = pathFromRoot.reverse
+          .drop(config.db.blockHistorySize)
+          .reverse
+
+        _ <- pruneable.headOption match {
+          case Some(newRoot) =>
+            blockStorage.pruneNonDescendants(newRoot) >>
+              viewStateStorage.setRootBlockHash(newRoot)
+
+          case None =>
+            KVStore.instance[NS].unit
+        }
+      } yield ()
+
+      storeRunner
+        .runReadWrite(query)
+        .delayResult(config.db.pruneInterval)
+        .foreverM
+    }
 }

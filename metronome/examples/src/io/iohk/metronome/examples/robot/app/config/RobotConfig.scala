@@ -36,7 +36,9 @@ object RobotConfig {
 
   case class Database(
       path: Path,
-      stateHistorySize: Int
+      stateHistorySize: Int,
+      blockHistorySize: Int,
+      pruneInterval: FiniteDuration
   )
 
   case class Consensus(
