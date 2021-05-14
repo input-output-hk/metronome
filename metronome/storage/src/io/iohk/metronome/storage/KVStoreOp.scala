@@ -1,6 +1,6 @@
 package io.iohk.metronome.storage
 
-import scodec.Codec
+import scodec.{Encoder, Decoder}
 
 /** Representing key-value storage operations as a Free Monad,
   * so that we can pick an execution strategy that best fits
@@ -20,15 +20,16 @@ sealed trait KVStoreWriteOp[N, A] extends KVStoreOp[N, A]
 
 object KVStoreOp {
   case class Put[N, K, V](namespace: N, key: K, value: V)(implicit
-      val keyCodec: Codec[K],
-      val valueCodec: Codec[V]
+      val keyEncoder: Encoder[K],
+      val valueEncoder: Encoder[V]
   ) extends KVStoreWriteOp[N, Unit]
 
   case class Get[N, K, V](namespace: N, key: K)(implicit
-      val keyCodec: Codec[K],
-      val valueCodec: Codec[V]
+      val keyEncoder: Encoder[K],
+      val valueDecoder: Decoder[V]
   ) extends KVStoreReadOp[N, Option[V]]
 
-  case class Delete[N, K](namespace: N, key: K)(implicit val keyCodec: Codec[K])
-      extends KVStoreWriteOp[N, Unit]
+  case class Delete[N, K](namespace: N, key: K)(implicit
+      val keyEncoder: Encoder[K]
+  ) extends KVStoreWriteOp[N, Unit]
 }

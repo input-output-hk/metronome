@@ -18,7 +18,10 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   QuorumCertificate
 }
 import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
-import io.iohk.metronome.hotstuff.service.storage.BlockStorage
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
+}
 import io.iohk.metronome.hotstuff.service.tracing.ConsensusTracers
 import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.KVStoreRunner
@@ -35,6 +38,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
     blockStorage: BlockStorage[N, A],
+    viewStateStorage: ViewStateStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
     blockSyncPipe: BlockSyncPipe[F, A]#Left,
@@ -229,10 +233,39 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       applySyncEffects(state, effects)
 
     // Unstash messages before we change state.
-    unstash(nextState) >>
+    captureChanges(nextState) >>
+      unstash(nextState) >>
       stateRef.set(nextState) >>
       scheduleEffects(nextEffects)
   }
+
+  /** Update the view state with and trace changes when they happen. */
+  private def captureChanges(nextState: ProtocolState[A]): F[Unit] = {
+    stateRef.get.flatMap { state =>
+      def ifChanged[T](get: ProtocolState[A] => T)(f: T => F[Unit]) = {
+        val prev = get(state)
+        val next = get(nextState)
+        f(next).whenA(prev != next)
+      }
+
+      ifChanged(_.viewNumber)(updateViewNumber) >>
+        ifChanged(_.prepareQC)(updateQuorum) >>
+        ifChanged(_.lockedQC)(updateQuorum) >>
+        ifChanged(_.commitQC)(updateQuorum)
+    }
+  }
+
+  private def updateViewNumber(viewNumber: ViewNumber): F[Unit] =
+    tracers.newView(viewNumber) >>
+      storeRunner.runReadWrite {
+        viewStateStorage.setViewNumber(viewNumber)
+      }
+
+  private def updateQuorum(quorumCertificate: QuorumCertificate[A]): F[Unit] =
+    tracers.quorum(quorumCertificate) >>
+      storeRunner.runReadWrite {
+        viewStateStorage.setQuorumCertificate(quorumCertificate)
+      }
 
   /** Requeue messages which arrived too early, but are now due becuase
     * the state caught up with them.
@@ -248,10 +281,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
 
       requeue.whenA(
         nextState.viewNumber != state.viewNumber || nextState.phase != state.phase
-      ) >>
-        tracers
-          .newView(nextState.viewNumber)
-          .whenA(nextState.viewNumber != state.viewNumber)
+      )
     }
 
   /** Carry out local effects before anything else,
@@ -355,10 +385,7 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
         // the forground here, but it may cause the node to lose its
         // sync with the other federation members, so the execution
         // should be offloaded to another queue.
-        //
-        // Save the Commit Quorum Certificate to the view state.
-        saveCommitQC(commitQC) >>
-          blockExecutionQueue.offer(effect)
+        blockExecutionQueue.offer(effect)
 
       case SendMessage(recipient, message) =>
         network.sendMessage(recipient, message)
@@ -367,14 +394,6 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
     process.handleErrorWith { case NonFatal(ex) =>
       tracers.error(ex)
     }
-  }
-
-  /** Update the view state with the last Commit Quorum Certificate. */
-  private def saveCommitQC(qc: QuorumCertificate[A]): F[Unit] = {
-    assert(qc.phase == Phase.Commit)
-    tracers.quorum(qc)
-    // TODO (PM-3112): Persist View State.
-    ???
   }
 
   /** Execute blocks in order, updating pesistent storage along the way. */
@@ -453,6 +472,7 @@ object ConsensusService {
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       blockStorage: BlockStorage[N, A],
+      viewStateStorage: ViewStateStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
@@ -467,6 +487,7 @@ object ConsensusService {
           publicKey,
           network,
           blockStorage,
+          viewStateStorage,
           blockSyncPipe,
           initState,
           maxEarlyViewNumberDiff,
@@ -487,6 +508,7 @@ object ConsensusService {
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       blockStorage: BlockStorage[N, A],
+      viewStateStorage: ViewStateStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int,
@@ -507,6 +529,7 @@ object ConsensusService {
         publicKey,
         network,
         blockStorage,
+        viewStateStorage,
         stateRef,
         stashRef,
         blockSyncPipe,
