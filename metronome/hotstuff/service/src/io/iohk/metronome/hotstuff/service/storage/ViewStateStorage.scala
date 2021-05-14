@@ -44,6 +44,19 @@ class ViewStateStorage[N, A <: Agreement] private (
   def setLastExecutedBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
     put(Key.LastExecutedBlockHash, blockHash)
 
+  /** Set `LastExecutedBlockHash` to `blockHash` if it's still what it was before. */
+  def compareAndSetLastExecutedBlockHash(
+      blockHash: A#Hash,
+      lastExecutedBlockHash: A#Hash
+  ): KVStore[N, Boolean] =
+    read(Key.LastExecutedBlockHash).lift.flatMap { current =>
+      if (current == lastExecutedBlockHash) {
+        setLastExecutedBlockHash(blockHash).as(true)
+      } else {
+        KVStore[N].pure(false)
+      }
+    }
+
   def setRootBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
     put(Key.RootBlockHash, blockHash)
 
