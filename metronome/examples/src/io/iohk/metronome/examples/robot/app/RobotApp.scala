@@ -1,5 +1,6 @@
 package io.iohk.metronome.examples.robot.app
 
+import cats.implicits._
 import cats.effect.{ExitCode, Resource}
 import monix.eval.{Task, TaskApp}
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey, GroupSignature}
@@ -16,6 +17,7 @@ import io.iohk.metronome.hotstuff.service.messages.{
   HotStuffMessage
 }
 import io.iohk.metronome.networking.{
+  EncryptedConnectionProvider,
   ScalanetConnectionProvider,
   RemoteConnectionManager
 }
@@ -47,6 +49,8 @@ import scopt.OParser
 import scodec.Codec
 
 object RobotApp extends TaskApp {
+  import RobotCodecs._
+
   type NetworkMessage = DuplexMessage[RobotAgreement, RobotMessage]
 
   type NS = RocksDBStore.Namespace
@@ -101,21 +105,80 @@ object RobotApp extends TaskApp {
       opts: CommandLineOptions,
       config: RobotConfig
   ): Resource[Task, Unit] = {
-    import RobotCodecs._
-    import RobotNetworkTracers.networkTracers
-    implicit val scheduler = this.scheduler
 
     val federation =
       Federation(config.network.nodes.map(_.publicKey).toVector)(
         LeaderSelection.Hashing
       )
 
+    val genesis = RobotBlock.genesis(
+      row = config.model.maxRow / 2,
+      col = config.model.maxCol / 2,
+      orientation = Robot.Orientation.North
+    )
+
+    implicit val signing = new RobotSigning(genesis.hash)
+
+    for {
+      connectionProvider <- makeConnectionProvider(config, opts)
+
+      connectionManager <- makeConnectionManager(config, connectionProvider)
+
+      implicit0(storeRunner: KVStoreRunner[Task, NS]) <-
+        makeKVStoreRunner(config, opts)
+
+      (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
+
+      blockStorage     <- makeBlockStorage(genesis)
+      viewStateStorage <- makeViewStateStorage(genesis)
+      stateStorage = makeStateStorage(config)
+
+      applicationService <- makeApplicationService(
+        config,
+        applicationNetwork,
+        blockStorage,
+        viewStateStorage,
+        stateStorage
+      )
+    } yield ()
+  }
+
+  private def makeConnectionProvider(
+      config: RobotConfig,
+      opts: CommandLineOptions
+  ) = {
+    implicit val scheduler = this.scheduler
+
     val localNode = config.network.nodes(opts.nodeIndex)
 
-    val dbConfig =
-      RocksDBStore.Config.default(
-        config.db.path.resolve(opts.nodeIndex.toString)
-      )
+    ScalanetConnectionProvider[
+      Task,
+      ECPublicKey,
+      NetworkMessage
+    ](
+      bindAddress = localNode.address,
+      nodeKeyPair = ECKeyPair(localNode.privateKey, localNode.publicKey),
+      new SecureRandom(),
+      useNativeTlsImplementation = true,
+      framingConfig = DynamicTLSPeerGroup.FramingConfig
+        .buildStandardFrameConfig(
+          maxFrameLength = 1024 * 1024,
+          lengthFieldLength = 8
+        )
+        .fold(e => sys.error(e.description), identity),
+      maxIncomingQueueSizePerPeer = 100
+    )
+  }
+
+  private def makeConnectionManager(
+      config: RobotConfig,
+      connectionProvider: EncryptedConnectionProvider[
+        Task,
+        ECPublicKey,
+        NetworkMessage
+      ]
+  ) = {
+    import RobotNetworkTracers.networkTracers
 
     val clusterConfig = RemoteConnectionManager.ClusterConfig(
       clusterNodes = config.network.nodes.map { node =>
@@ -124,63 +187,46 @@ object RobotApp extends TaskApp {
     )
     val retryConfig = RemoteConnectionManager.RetryConfig.default
 
-    val genesis = RobotBlock.genesis(
-      row = config.model.maxRow / 2,
-      col = config.model.maxCol / 2,
-      orientation = Robot.Orientation.North
+    RemoteConnectionManager[
+      Task,
+      ECPublicKey,
+      NetworkMessage
+    ](connectionProvider, clusterConfig, retryConfig)
+  }
+
+  private def makeKVStoreRunner(
+      config: RobotConfig,
+      opts: CommandLineOptions
+  ) = {
+    val dbConfig = RocksDBStore.Config.default(
+      config.db.path.resolve(opts.nodeIndex.toString)
     )
 
-    val genesisQC = QuorumCertificate[RobotAgreement](
-      phase = Phase.Prepare,
-      viewNumber = ViewNumber(0),
-      blockHash = genesis.hash,
-      signature = GroupSignature(Nil)
-    )
+    RocksDBStore[Task](dbConfig, RobotNamespaces.all).map { db =>
+      new KVStoreRunner[Task, NS] {
+        override def runReadOnly[A](
+            query: KVStoreRead[NS, A]
+        ): Task[A] = db.runReadOnly(query)
 
-    implicit val signing = new RobotSigning(genesis.hash)
+        override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
+          db.runWithBatching(query)
+      }
+    }
+  }
 
-    for {
-      connectionProvider <- ScalanetConnectionProvider[
+  private def makeNetworks(
+      connectionManager: RemoteConnectionManager[
         Task,
         ECPublicKey,
         NetworkMessage
-      ](
-        bindAddress = localNode.address,
-        nodeKeyPair = ECKeyPair(localNode.privateKey, localNode.publicKey),
-        new SecureRandom(),
-        useNativeTlsImplementation = true,
-        framingConfig = DynamicTLSPeerGroup.FramingConfig
-          .buildStandardFrameConfig(
-            maxFrameLength = 1024 * 1024,
-            lengthFieldLength = 8
-          )
-          .fold(e => sys.error(e.description), identity),
-        maxIncomingQueueSizePerPeer = 100
+      ]
+  ) = {
+    val network = Network
+      .fromRemoteConnnectionManager[Task, RobotAgreement, NetworkMessage](
+        connectionManager
       )
 
-      connectionManager <- RemoteConnectionManager[
-        Task,
-        ECPublicKey,
-        NetworkMessage
-      ](connectionProvider, clusterConfig, retryConfig)
-
-      rocksDbStore <- RocksDBStore[Task](dbConfig, RobotNamespaces.all)
-
-      implicit0(storeRunner: KVStoreRunner[Task, NS]) =
-        new KVStoreRunner[Task, NS] {
-          override def runReadOnly[A](
-              query: KVStoreRead[NS, A]
-          ): Task[A] = rocksDbStore.runReadOnly(query)
-
-          override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
-            rocksDbStore.runWithBatching(query)
-        }
-
-      network = Network
-        .fromRemoteConnnectionManager[Task, RobotAgreement, NetworkMessage](
-          connectionManager
-        )
-
+    for {
       (hotstuffNetwork, applicationNetwork) <- Network.splitter[
         Task,
         RobotAgreement,
@@ -197,51 +243,76 @@ object RobotApp extends TaskApp {
           case Right(m) => DuplexMessage.ApplicationMessage(m)
         }
       )
+    } yield (hotstuffNetwork, applicationNetwork)
+  }
 
-      blockStorage = new BlockStorage[NS, RobotAgreement](
-        blockColl =
-          new KVCollection[NS, Hash, RobotBlock](RobotNamespaces.Block),
-        childToParentColl =
-          new KVCollection[NS, Hash, Hash](RobotNamespaces.BlockToParent),
-        parentToChildrenColl =
-          new KVCollection[NS, Hash, Set[Hash]](RobotNamespaces.BlockToChildren)
-      )
+  private def makeBlockStorage(genesis: RobotBlock)(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = {
+    val blockStorage = new BlockStorage[NS, RobotAgreement](
+      blockColl = new KVCollection[NS, Hash, RobotBlock](RobotNamespaces.Block),
+      childToParentColl =
+        new KVCollection[NS, Hash, Hash](RobotNamespaces.BlockToParent),
+      parentToChildrenColl =
+        new KVCollection[NS, Hash, Set[Hash]](RobotNamespaces.BlockToChildren)
+    )
 
-      // (Re)insert genesis. It's okay if it has been pruned before,
-      // but if the application is just starting it will need it.
-      _ <- Resource.liftF {
+    // (Re)insert genesis. It's okay if it has been pruned before,
+    // but if the application is just starting it will need it.
+    Resource
+      .liftF {
         storeRunner.runReadWrite {
           blockStorage.put(genesis)
         }
       }
+      .as(blockStorage)
+  }
 
-      viewStateStorage <- Resource.liftF {
-        storeRunner.runReadWrite {
-          ViewStateStorage[NS, RobotAgreement](
-            RobotNamespaces.ViewState,
-            genesis = ViewStateStorage.Bundle.fromGenesisQC(genesisQC)
-          )
-        }
-      }
-
-      stateStorage = new KVRingBuffer[NS, Hash, Robot.State](
-        coll = new KVCollection[NS, Hash, Robot.State](RobotNamespaces.State),
-        metaNamespace = RobotNamespaces.StateMeta,
-        maxHistorySize = config.db.stateHistorySize
+  private def makeViewStateStorage(genesis: RobotBlock)(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = Resource.liftF {
+    val genesisQC = QuorumCertificate[RobotAgreement](
+      phase = Phase.Prepare,
+      viewNumber = ViewNumber(0),
+      blockHash = genesis.hash,
+      signature = GroupSignature(Nil)
+    )
+    storeRunner.runReadWrite {
+      ViewStateStorage[NS, RobotAgreement](
+        RobotNamespaces.ViewState,
+        genesis = ViewStateStorage.Bundle.fromGenesisQC(genesisQC)
       )
+    }
+  }
 
-      applicationService <- Resource.liftF {
-        RobotService[Task, NS](
-          maxRow = config.model.maxRow,
-          maxCol = config.model.maxCol,
-          network = applicationNetwork,
-          blockStorage = blockStorage,
-          viewStateStorage = viewStateStorage,
-          stateStorage = stateStorage,
-          simulatedDecisionTime = config.model.simulatedDecisionTime,
-          timeout = config.network.timeout
-        )
-      }
-    } yield ()
+  private def makeStateStorage(config: RobotConfig) = {
+    new KVRingBuffer[NS, Hash, Robot.State](
+      coll = new KVCollection[NS, Hash, Robot.State](RobotNamespaces.State),
+      metaNamespace = RobotNamespaces.StateMeta,
+      maxHistorySize = config.db.stateHistorySize
+    )
+  }
+
+  private def makeApplicationService(
+      config: RobotConfig,
+      applicationNetwork: Network[Task, RobotAgreement, RobotMessage],
+      blockStorage: BlockStorage[NS, RobotAgreement],
+      viewStateStorage: ViewStateStorage[NS, RobotAgreement],
+      stateStorage: KVRingBuffer[NS, Hash, Robot.State]
+  )(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = {
+    Resource.liftF {
+      RobotService[Task, NS](
+        maxRow = config.model.maxRow,
+        maxCol = config.model.maxCol,
+        network = applicationNetwork,
+        blockStorage = blockStorage,
+        viewStateStorage = viewStateStorage,
+        stateStorage = stateStorage,
+        simulatedDecisionTime = config.model.simulatedDecisionTime,
+        timeout = config.network.timeout
+      )
+    }
   }
 }
