@@ -4,8 +4,11 @@ import cats.data.NonEmptyList
 import io.iohk.ethereum.crypto.ECDSASignature
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.hotstuff.consensus.basic.Phase
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Phase,
+  QuorumCertificate,
+  VotingPhase
+}
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
@@ -95,6 +98,22 @@ object ArbitraryInstances
           ECDSASignature.negativePointSign
         )
       } yield ECDSASignature(r, s, v)
+    }
+
+  implicit val arbQuorumCertificate
+      : Arbitrary[QuorumCertificate[CheckpointingAgreement]] =
+    Arbitrary {
+      for {
+        phase      <- arbitrary[VotingPhase]
+        viewNumber <- arbitrary[ViewNumber]
+        blockHash  <- arbitrary[Block.Header.Hash]
+        signature  <- arbitrary[CheckpointingAgreement.GSig]
+      } yield QuorumCertificate[CheckpointingAgreement](
+        phase,
+        viewNumber,
+        blockHash,
+        GroupSignature(signature)
+      )
     }
 
   implicit val arbCheckpointCertificate: Arbitrary[CheckpointCertificate] =
