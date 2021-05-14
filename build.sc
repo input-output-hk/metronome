@@ -415,7 +415,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
-      ivy"com.github.scopt::scopt:${VersionOf.scopt}"
+      ivy"com.github.scopt::scopt:${VersionOf.scopt}",
+      ivy"ch.qos.logback:logback-classic:${VersionOf.logback}"
     )
 
     object test extends TestModule
