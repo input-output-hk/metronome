@@ -38,7 +38,11 @@ import io.iohk.metronome.examples.robot.app.config.{
   RobotConfigParser,
   RobotConfig
 }
-import io.iohk.metronome.examples.robot.app.tracing.RobotNetworkTracers
+import io.iohk.metronome.examples.robot.app.tracing.{
+  RobotNetworkTracers,
+  RobotConsensusTracers,
+  RobotSyncTracers
+}
 import io.iohk.metronome.rocksdb.RocksDBStore
 import io.iohk.metronome.storage.{
   KVStoreRunner,
@@ -340,6 +344,9 @@ object RobotApp extends TaskApp {
   )(implicit
       storeRunner: KVStoreRunner[Task, NS]
   ) = {
+    import RobotConsensusTracers._
+    import RobotSyncTracers._
+
     implicit val leaderSelection = LeaderSelection.Hashing
 
     implicit val signing = new RobotSigning(genesis.hash)

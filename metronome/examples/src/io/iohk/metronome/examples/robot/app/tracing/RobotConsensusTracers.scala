@@ -2,7 +2,6 @@ package io.iohk.metronome.examples.robot.app.tracing
 
 import monix.eval.Task
 import io.iohk.metronome.examples.robot.RobotAgreement
-import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.hotstuff.service.tracing.{
   ConsensusEvent,
   ConsensusTracers
@@ -10,7 +9,10 @@ import io.iohk.metronome.hotstuff.service.tracing.{
 import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.circe.{Encoder, JsonObject}
+import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
+import io.iohk.metronome.crypto.ECPublicKey
 
 object RobotConsensusTracers {
 
@@ -21,29 +23,91 @@ object RobotConsensusTracers {
     import ConsensusEvent._
     import io.circe.syntax._
 
-    implicit val viewNumber: Encoder[ViewNumber] =
+    implicit val viewNumberEncoder: Encoder[ViewNumber] =
       Encoder[Long].contramap[ViewNumber](identity)
 
-    // implicit val keyEncoder: Encoder[RobotAgreement.PKey] =
-    //   Encoder[String].contramap[RobotAgreement.PKey](_.bytes.toHex)
+    implicit val hashEncoder: Encoder[Hash] =
+      Encoder[String].contramap[Hash](_.toHex)
 
-    // implicit val peerEncoder: Encoder.AsObject[Peer[RobotAgreement.PKey]] =
-    //   Encoder.AsObject.instance { case Peer(key, address) =>
-    //     JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
-    //   }
+    implicit val phaseEncoder: Encoder[VotingPhase] =
+      Encoder[String].contramap[VotingPhase](_.toString)
+
+    implicit val publicKeyEncoder: Encoder[ECPublicKey] =
+      Encoder[String].contramap[ECPublicKey](_.bytes.toHex)
 
     HybridLog.instance[RobotConsensusEvent](
-      level = _ => HybridLogObject.Level.Debug,
+      level = {
+        case _: Error        => HybridLogObject.Level.Error
+        case _: Timeout      => HybridLogObject.Level.Warn
+        case _: Rejected[_]  => HybridLogObject.Level.Warn
+        case _: ViewSync     => HybridLogObject.Level.Info
+        case _: AdoptView[_] => HybridLogObject.Level.Info
+        case _               => HybridLogObject.Level.Debug
+      },
       message = _.getClass.getSimpleName,
       event = {
         case e: Timeout =>
           JsonObject("viewNumber" -> e.viewNumber.asJson)
+
         case e: ViewSync =>
           JsonObject("viewNumber" -> e.viewNumber.asJson)
+
         case e: AdoptView[_] =>
           JsonObject(
             "viewNumber" -> e.status.viewNumber.asJson,
             "blockHash"  -> e.status.commitQC.blockHash.asJson
+          )
+
+        case e: NewView =>
+          JsonObject("viewNumber" -> e.viewNumber.asJson)
+
+        case e: Quorum[_] =>
+          JsonObject(
+            "viewNumber" -> e.quorumCertificate.viewNumber.asJson,
+            "phase"      -> e.quorumCertificate.phase.asJson,
+            "blockHash"  -> e.quorumCertificate.blockHash.asJson
+          )
+
+        case e: FromPast[_] =>
+          JsonObject(
+            "viewNumber"  -> e.message.message.viewNumber.asJson,
+            "messageType" -> e.message.message.getClass.getSimpleName.asJson,
+            "sender"      -> e.message.sender.asJson
+          )
+
+        case e: FromFuture[_] =>
+          JsonObject(
+            "viewNumber"  -> e.message.message.viewNumber.asJson,
+            "messageType" -> e.message.message.getClass.getSimpleName.asJson,
+            "sender"      -> e.message.sender.asJson
+          )
+
+        case e: Stashed[_] =>
+          JsonObject(
+            "viewNumber"  -> e.error.event.message.viewNumber.asJson,
+            "messageType" -> e.error.event.message.getClass.getSimpleName.asJson,
+            "sender"      -> e.error.event.sender.asJson
+          )
+
+        case e: Rejected[_] =>
+          JsonObject(
+            "errorType" -> e.error.getClass.getSimpleName.asJson
+          )
+
+        case e: ExecutionSkipped[_] =>
+          JsonObject(
+            "blockHash" -> e.blockHash.asJson
+          )
+
+        case e: BlockExecuted[_] =>
+          JsonObject(
+            "blockHash" -> e.blockHash.asJson
+          )
+
+        case e: Error =>
+          JsonObject(
+            "message" -> e.message.asJson,
+            "error"   -> e.error.getMessage.asJson
           )
       }
     )
@@ -52,7 +116,6 @@ object RobotConsensusTracers {
   implicit val consensusEventTracer: Tracer[Task, RobotConsensusEvent] =
     LogTracer.hybrid[Task, RobotConsensusEvent]
 
-  implicit val networkTracers
-      : NetworkTracers[Task, RobotAgreement.PKey, RobotNetworkMessage] =
-    NetworkTracers(networkEventTracer)
+  implicit val consensusTracers: ConsensusTracers[Task, RobotAgreement] =
+    ConsensusTracers(consensusEventTracer)
 }
