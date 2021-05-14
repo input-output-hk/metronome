@@ -16,7 +16,7 @@ trait DefaultConsensusCodecs[A <: Agreement] {
 
   implicit val phaseCodec: Codec[VotingPhase] = {
     import Phase._
-    mappedEnum(uint4, Prepare -> 1, PreCommit -> 2, Commit -> 3)
+    mappedEnum(uint2, Prepare -> 1, PreCommit -> 2, Commit -> 3)
   }
 
   implicit val viewNumberCodec: Codec[ViewNumber] =

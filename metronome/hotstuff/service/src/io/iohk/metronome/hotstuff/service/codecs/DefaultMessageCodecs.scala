@@ -26,7 +26,7 @@ trait DefaultMessageCodecs[A <: Agreement] {
 
   implicit val syncMessageCodec: Codec[SyncMessage[A]] =
     discriminated[SyncMessage[A]]
-      .by(uint4)
+      .by(uint2)
       .typecase(0, getStatusRequestCodec)
       .typecase(1, getStatusResponseCodec)
       .typecase(2, getBlockRequestCodec)
@@ -41,7 +41,7 @@ trait DefaultMessageCodecs[A <: Agreement] {
 
   implicit val hotstuffMessageCodec: Codec[HotStuffMessage[A]] =
     discriminated[HotStuffMessage[A]]
-      .by(uint4)
+      .by(uint2)
       .typecase(0, hotstuffConsensusMessageCodec)
       .typecase(1, hotstuffSyncMessageCodec)
 }

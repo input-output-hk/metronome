@@ -37,7 +37,7 @@ object Agreement {
     A#GSig
   ]
 
-  // Convenience alias for groups signatures appearing in Votes.
+  // Convenience alias for partial signatures appearing in Votes.
   type PartialSignature[A <: Agreement] = crypto.PartialSignature[
     A#PKey,
     (VotingPhase, ViewNumber, A#Hash),

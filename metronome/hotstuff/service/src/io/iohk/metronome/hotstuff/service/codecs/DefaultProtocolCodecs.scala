@@ -63,7 +63,7 @@ trait DefaultProtocolCodecs[A <: Agreement] { self: DefaultConsensusCodecs[A] =>
 
   implicit val protocolMessageCodec: Codec[Message[A]] =
     discriminated[Message[A]]
-      .by(uint8)
+      .by(uint2)
       .typecase(0, prepareCodec)
       .typecase(1, voteCodec)
       .typecase(2, quorumCodec)

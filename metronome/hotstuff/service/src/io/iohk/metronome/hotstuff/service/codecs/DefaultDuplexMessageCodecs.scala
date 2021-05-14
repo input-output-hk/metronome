@@ -20,7 +20,7 @@ trait DefaultDuplexMessageCodecs[A <: Agreement, M] {
 
   implicit val duplexMessageCodec: Codec[DuplexMessage[A, M]] =
     discriminated[DuplexMessage[A, M]]
-      .by(uint4)
+      .by(uint2)
       .typecase(0, duplexAgreementMessageCodec)
       .typecase(1, duplexApplicationMessageCodec)
 }
