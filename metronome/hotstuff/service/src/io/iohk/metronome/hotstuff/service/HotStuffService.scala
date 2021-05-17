@@ -2,7 +2,6 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.Parallel
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
-import io.iohk.metronome.hotstuff.consensus.Federation
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,

@@ -43,9 +43,7 @@ object SyncTracers {
       statusPoll = tracer
         .contramap[Statuses[A]](StatusPoll(_)),
       invalidStatus =
-        tracer.contramap[StatusError[A]] { case (status, error, hint) =>
-          InvalidStatus(status, error, hint)
-        },
+        tracer.contramap[StatusError[A]]((InvalidStatus.apply[A] _).tupled),
       error = tracer.contramap[Throwable](Error(_))
     )
 }
