@@ -19,7 +19,7 @@ object SyncTracers {
     (A#PKey, SyncMessage[A] with SyncMessage.Request)
 
   type Response[A <: Agreement] =
-    (A#PKey, SyncMessage[A] with SyncMessage.Response)
+    (A#PKey, SyncMessage[A] with SyncMessage.Response, Option[Throwable])
 
   def apply[F[_], A <: Agreement](
       tracer: Tracer[F, SyncEvent[A]]
@@ -27,13 +27,9 @@ object SyncTracers {
     SyncTracers[F, A](
       queueFull = tracer.contramap[A#PKey](QueueFull(_)),
       requestTimeout = tracer
-        .contramap[Request[A]] { case (recipient, request) =>
-          RequestTimeout(recipient, request)
-        },
+        .contramap[Request[A]]((RequestTimeout.apply[A] _).tupled),
       responseIgnored = tracer
-        .contramap[Response[A]] { case (sender, response) =>
-          ResponseIgnored(sender, response)
-        },
+        .contramap[Response[A]]((ResponseIgnored.apply[A] _).tupled),
       error = tracer.contramap[Throwable](Error(_))
     )
 }

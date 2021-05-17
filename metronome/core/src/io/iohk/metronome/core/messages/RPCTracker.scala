@@ -52,11 +52,18 @@ class RPCTracker[F[_]: Timer: Concurrent, M](
     } yield d.get
   }
 
+  /** Try to complete an outstanding request with a response.
+    *
+    * Returns `true` if the response was expected, `false` if
+    * it wasn't, or already timed out. An error is returned
+    * if the response was expected but the there was a type
+    * mismatch.
+    */
   def complete[Res <: RPCMessageCompanion#Response](
       response: Res
-  )(implicit ev: Res <:< M): F[Boolean] = {
+  )(implicit ev: Res <:< M): F[Either[Throwable, Boolean]] = {
     remove(response.requestId).flatMap {
-      case None    => false.pure[F]
+      case None    => false.asRight[Throwable].pure[F]
       case Some(e) => e.complete(response)
     }
   }
@@ -80,15 +87,23 @@ object RPCTracker {
     def timeout: F[Unit] =
       deferred.complete(None).attempt.void
 
-    def complete[M](response: M): F[Boolean] = {
+    def complete[M](response: M): F[Either[Throwable, Boolean]] = {
       response match {
         case expected: Res =>
-          deferred.complete(Some(expected)).attempt.map(_.isRight)
+          deferred
+            .complete(Some(expected))
+            .attempt
+            .map(_.isRight.asRight[Throwable])
         case _ =>
           // Wrong type, as evidenced by `ct` not maching `Res`.
-          // Not returning an error because if the message arrived after
-          // the timeout we wouldn't know anyway what it was meant to complete.
-          deferred.complete(None).attempt.as(false)
+          // Returning an error so that this kind of programming error
+          // can be highlighted as soon as possible. Note though that
+          // if the request already timed out we can't tell if this
+          // error would have happened if the response arrived earlier.
+          val error = new IllegalArgumentException(
+            s"Invalid response type ${response.getClass.getName}; expected ${ct.runtimeClass.getName}"
+          )
+          deferred.complete(None).attempt.as(error.asLeft[Boolean])
       }
     }
   }

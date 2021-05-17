@@ -5,10 +5,11 @@ import monix.execution.Scheduler.Implicits.global
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.compatible.Assertion
+import org.scalatest.Inside
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-class RPCTrackerSpec extends AsyncFlatSpec with Matchers {
+class RPCTrackerSpec extends AsyncFlatSpec with Matchers with Inside {
 
   sealed trait TestMessage extends RPCMessage
   object TestMessage extends RPCMessageCompanion {
@@ -44,7 +45,7 @@ class RPCTrackerSpec extends AsyncFlatSpec with Matchers {
       ok   <- tracker.complete(res)
       got  <- join
     } yield {
-      ok shouldBe true
+      ok shouldBe Right(true)
       got shouldBe Some(res)
     }
   }
@@ -52,11 +53,14 @@ class RPCTrackerSpec extends AsyncFlatSpec with Matchers {
   it should "complete responses with None after the timeout" in test {
     tracker =>
       val req = FooRequest(RequestId())
+      val res = FooResponse(req.requestId, 1)
       for {
         join <- tracker.register(req, timeout = 50.millis)
         _    <- Task.sleep(100.millis)
+        ok   <- tracker.complete(res)
         got  <- join
       } yield {
+        ok shouldBe Right(false)
         got shouldBe empty
       }
   }
@@ -71,7 +75,9 @@ class RPCTrackerSpec extends AsyncFlatSpec with Matchers {
         ok   <- tracker.complete(res)
         got  <- join
       } yield {
-        ok shouldBe false
+        inside(ok) { case Left(error) =>
+          error.getMessage should include("Invalid response type")
+        }
         got shouldBe empty
       }
   }

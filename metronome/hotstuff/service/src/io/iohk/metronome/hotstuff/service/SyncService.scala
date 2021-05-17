@@ -138,8 +138,11 @@ class SyncService[F[_]: Sync, N, A <: Agreement](
           }
 
       case response: SyncMessage.Response =>
-        rpcTracker.complete(response).flatMap { ok =>
-          tracers.responseIgnored(from -> response).whenA(!ok)
+        rpcTracker.complete(response).flatMap {
+          case Right(ok) =>
+            tracers.responseIgnored((from, response, None)).whenA(!ok)
+          case Left(ex) =>
+            tracers.responseIgnored((from, response, Some(ex)))
         }
     }
 

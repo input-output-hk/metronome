@@ -23,7 +23,8 @@ object SyncEvent {
     */
   case class ResponseIgnored[A <: Agreement](
       sender: A#PKey,
-      response: SyncMessage[A] with SyncMessage.Response
+      response: SyncMessage[A] with SyncMessage.Response,
+      maybeError: Option[Throwable]
   ) extends SyncEvent[A]
 
   /** An unexpected error in one of the background tasks. */
