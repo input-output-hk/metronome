@@ -55,6 +55,7 @@ import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
 import java.security.SecureRandom
 import scopt.OParser
 import scodec.Codec
+import scodec.bits.ByteVector
 import java.nio.file.Files
 
 object RobotApp extends TaskApp {
@@ -123,10 +124,19 @@ object RobotApp extends TaskApp {
       config: RobotConfig
   ): Resource[Task, Unit] = {
 
-    val genesis = RobotBlock.genesis(
-      row = config.model.maxRow / 2,
-      col = config.model.maxCol / 2,
-      orientation = Robot.Orientation.North
+    val genesisState = Robot
+      .State(
+        position = Robot.Position(
+          row = config.model.maxRow / 2,
+          col = config.model.maxCol / 2
+        ),
+        orientation = Robot.Orientation.North
+      )
+
+    val genesis = RobotBlock(
+      parentHash = Hash(ByteVector.empty),
+      postStateHash = genesisState.hash,
+      command = Robot.Command.Rest
     )
 
     for {
@@ -140,7 +150,7 @@ object RobotApp extends TaskApp {
 
       blockStorage     <- makeBlockStorage(genesis)
       viewStateStorage <- makeViewStateStorage(genesis)
-      stateStorage = makeStateStorage(config)
+      stateStorage     <- makeStateStorage(config, genesisState)
 
       appService <- makeApplicationService(
         config,
@@ -316,12 +326,26 @@ object RobotApp extends TaskApp {
     }
   }
 
-  private def makeStateStorage(config: RobotConfig) = {
-    new KVRingBuffer[NS, Hash, Robot.State](
-      coll = new KVCollection[NS, Hash, Robot.State](RobotNamespaces.State),
-      metaNamespace = RobotNamespaces.StateMeta,
-      maxHistorySize = config.db.stateHistorySize
-    )
+  private def makeStateStorage(config: RobotConfig, genesisState: Robot.State)(
+      implicit storeRunner: KVStoreRunner[Task, NS]
+  ) = Resource.liftF {
+    for {
+      coll <- Task.pure {
+        new KVCollection[NS, Hash, Robot.State](RobotNamespaces.State)
+      }
+      // Insert the genesis state straight into the underlying collection,
+      // not the ringbuffer, so it doesn't get evicted if we restart the
+      // app a few times.
+      _ <- storeRunner.runReadWrite {
+        coll.put(genesisState.hash, genesisState)
+      }
+      stateStorage =
+        new KVRingBuffer[NS, Hash, Robot.State](
+          coll,
+          metaNamespace = RobotNamespaces.StateMeta,
+          maxHistorySize = config.db.stateHistorySize
+        )
+    } yield stateStorage
   }
 
   private def makeApplicationService(

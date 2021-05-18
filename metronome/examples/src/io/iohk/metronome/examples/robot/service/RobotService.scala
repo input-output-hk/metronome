@@ -147,7 +147,7 @@ class RobotService[F[_]: Sync: Timer, N](
           }
           .flatMap { state =>
             // TODO: Display robot on the console.
-            Sync[F].delay(System.out.println(state.toString))
+            Sync[F].delay(System.out.println(s"""<<< ${state} >>>"""))
           }
     }
 
@@ -176,6 +176,17 @@ class RobotService[F[_]: Sync: Timer, N](
       }
     }
 
+    storeRunner
+      .runReadOnly {
+        stateStorage.get(block.postStateHash)
+      }
+      .flatMap {
+        case None =>
+          loop(sources.toList.filterNot(_ == publicKey))
+        case Some(state) =>
+          ().pure[F]
+      }
+
     loop(sources.toList)
   }
 
@@ -183,19 +194,13 @@ class RobotService[F[_]: Sync: Timer, N](
       from: RobotAgreement.PKey,
       stateHash: Hash
   ): F[Option[Robot.State]] = {
-    if (from == publicKey) {
-      storeRunner.runReadOnly {
-        stateStorage.get(stateHash)
-      }
-    } else {
-      for {
-        requestId <- RobotMessage.RequestId[F]
-        request = RobotMessage.GetStateRequest(requestId, stateHash)
-        join          <- rpcTracker.register(request)
-        _             <- network.sendMessage(from, request)
-        maybeResponse <- join
-      } yield maybeResponse.map(_.state).filter(_.hash == stateHash)
-    }
+    for {
+      requestId <- RobotMessage.RequestId[F]
+      request = RobotMessage.GetStateRequest(requestId, stateHash)
+      join          <- rpcTracker.register(request)
+      _             <- network.sendMessage(from, request)
+      maybeResponse <- join
+    } yield maybeResponse.map(_.state).filter(_.hash == stateHash)
   }
 
   private def processNetworkMessages: F[Unit] = {
