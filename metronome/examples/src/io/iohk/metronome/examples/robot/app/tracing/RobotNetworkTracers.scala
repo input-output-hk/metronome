@@ -42,8 +42,12 @@ object RobotNetworkTracers {
           e.peer.asJsonObject.add("error", e.error.toString.asJson)
         case e: ConnectionReceiveError[_] =>
           e.peer.asJsonObject.add("error", e.error.toString.asJson)
-        case e: NetworkEvent.MessageReceived[_, _] => e.peer.asJsonObject
-        case e: NetworkEvent.MessageSent[_, _]     => e.peer.asJsonObject
+        case e: NetworkEvent.MessageReceived[_, _] =>
+          e.peer.asJsonObject
+            .add("messageType", e.message.getClass.getSimpleName.asJson)
+        case e: NetworkEvent.MessageSent[_, _] =>
+          e.peer.asJsonObject
+            .add("messageType", e.message.getClass.getSimpleName.asJson)
       }
     )
   }

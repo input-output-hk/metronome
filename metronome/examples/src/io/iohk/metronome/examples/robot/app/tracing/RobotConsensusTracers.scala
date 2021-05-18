@@ -37,6 +37,8 @@ object RobotConsensusTracers {
 
     HybridLog.instance[RobotConsensusEvent](
       level = {
+        case e: Error if e.message.contains("SendMessage") =>
+          HybridLogObject.Level.Debug
         case _: Error        => HybridLogObject.Level.Error
         case _: Timeout      => HybridLogObject.Level.Warn
         case _: Rejected[_]  => HybridLogObject.Level.Warn
@@ -91,7 +93,8 @@ object RobotConsensusTracers {
 
         case e: Rejected[_] =>
           JsonObject(
-            "errorType" -> e.error.getClass.getSimpleName.asJson
+            "errorType" -> e.error.getClass.getSimpleName.asJson,
+            "error"     -> e.error.toString.asJson
           )
 
         case e: ExecutionSkipped[_] =>
