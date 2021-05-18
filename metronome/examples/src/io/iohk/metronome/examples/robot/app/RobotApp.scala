@@ -16,7 +16,11 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Phase,
   ProtocolState
 }
-import io.iohk.metronome.hotstuff.service.{Network, HotStuffService}
+import io.iohk.metronome.hotstuff.service.{
+  Network,
+  HotStuffService,
+  ConsensusService
+}
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
@@ -69,8 +73,6 @@ object RobotApp extends TaskApp {
   case class CommandLineOptions(
       nodeIndex: Int = 0
   )
-
-  override protected val scheduler = Scheduler.io("robots")
 
   def oparser(config: RobotConfig) = {
     val builder = OParser.builder[CommandLineOptions]
@@ -183,7 +185,7 @@ object RobotApp extends TaskApp {
       config: RobotConfig,
       opts: CommandLineOptions
   ) = {
-    implicit val scheduler = this.scheduler
+    implicit val scheduler = Scheduler.io("scalanet")
 
     val localNode = config.network.nodes(opts.nodeIndex)
 
@@ -423,19 +425,25 @@ object RobotApp extends TaskApp {
         lockedQC = viewState.lockedQC,
         commitQC = viewState.commitQC,
         preparedBlock = preparedBlock,
-        timeout = config.consensus.timeout,
+        timeout = config.consensus.minTimeout,
         votes = Set.empty,
         newViews = Map.empty
       )
 
       _ <- HotStuffService[Task, NS, RobotAgreement](
         publicKey = localNode.publicKey,
-        federation,
         hotstuffNetwork,
         appService,
         blockStorage,
         viewStateStorage,
-        protocolState
+        protocolState,
+        consensusConfig = ConsensusService.Config(
+          timeoutPolicy = ConsensusService.TimeoutPolicy.exponential(
+            factor = config.consensus.timeoutFactor,
+            minTimeout = config.consensus.minTimeout,
+            maxTimeout = config.consensus.maxTimeout
+          )
+        )
       )
     } yield ()
   }

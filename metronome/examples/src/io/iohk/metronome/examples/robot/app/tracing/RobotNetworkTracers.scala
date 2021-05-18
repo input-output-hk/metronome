@@ -30,7 +30,11 @@ object RobotNetworkTracers {
       }
 
     HybridLog.instance[RobotNetworkEvent](
-      level = _ => HybridLogObject.Level.Debug,
+      level = {
+        case e: ConnectionRegistered[_]   => HybridLogObject.Level.Info
+        case e: ConnectionDeregistered[_] => HybridLogObject.Level.Info
+        case _                            => HybridLogObject.Level.Debug
+      },
       message = _.getClass.getSimpleName,
       event = {
         case e: ConnectionUnknown[_]      => e.peer.asJsonObject
@@ -44,10 +48,10 @@ object RobotNetworkTracers {
           e.peer.asJsonObject.add("error", e.error.toString.asJson)
         case e: NetworkEvent.MessageReceived[_, _] =>
           e.peer.asJsonObject
-            .add("messageType", e.message.getClass.getSimpleName.asJson)
+            .add("message", e.message.toString.asJson)
         case e: NetworkEvent.MessageSent[_, _] =>
           e.peer.asJsonObject
-            .add("messageType", e.message.getClass.getSimpleName.asJson)
+            .add("message", e.message.toString.asJson)
       }
     )
   }

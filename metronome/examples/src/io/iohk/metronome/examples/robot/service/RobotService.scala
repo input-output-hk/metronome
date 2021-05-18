@@ -49,6 +49,8 @@ class RobotService[F[_]: Sync: Timer, N](
         // blocks as fast as it can.
         Timer[F].sleep(simulatedDecisionTime) >>
           advanceState(preState).map { case (command, postState) =>
+            // TODO: Robot app tracing.
+            System.out.println(s"<<< PROPOSING COMMAND: $command >>>")
             RobotBlock(
               parentHash = highQC.blockHash,
               postStateHash = postState.hash,
@@ -147,7 +149,7 @@ class RobotService[F[_]: Sync: Timer, N](
           }
           .flatMap { state =>
             // TODO: Display robot on the console.
-            Sync[F].delay(System.out.println(s"\n<<< ${state} >>>\n"))
+            Sync[F].delay(System.out.println(s"\n<<< ROBOT: ${state} >>>\n"))
           }
     }
 

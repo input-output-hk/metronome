@@ -38,7 +38,8 @@ object HotStuffService {
       appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
-      initState: ProtocolState[A]
+      initState: ProtocolState[A],
+      consensusConfig: ConsensusService.Config
   )(implicit
       consensusTracers: ConsensusTracers[F, A],
       syncTracers: SyncTracers[F, A],
@@ -75,7 +76,8 @@ object HotStuffService {
         blockStorage,
         viewStateStorage,
         syncPipe.left,
-        initState
+        initState,
+        consensusConfig
       )
 
       syncService <- SyncService(

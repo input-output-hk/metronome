@@ -42,6 +42,8 @@ object RobotConfig {
   )
 
   case class Consensus(
-      timeout: FiniteDuration
+      minTimeout: FiniteDuration,
+      maxTimeout: FiniteDuration,
+      timeoutFactor: Double
   )
 }
