@@ -17,10 +17,10 @@ object RobotCodecs
     with DefaultDuplexMessageCodecs[RobotAgreement, RobotMessage] {
   import scodec.codecs.implicits._
 
-  override implicit val hashCodec: Codec[Hash] =
+  override implicit lazy val hashCodec: Codec[Hash] =
     Codec[ByteVector].xmap(Hash(_), identity)
 
-  implicit val commandCodec: Codec[Robot.Command] = {
+  implicit lazy val commandCodec: Codec[Robot.Command] = {
     import Robot.Command._
     mappedEnum(
       uint4,
@@ -30,27 +30,28 @@ object RobotCodecs
       TurnRight   -> 4
     )
   }
-  implicit val robotPositionCodec: Codec[Robot.Position] =
+  implicit lazy val robotPositionCodec: Codec[Robot.Position] =
     Codec.deriveLabelledGeneric
 
-  implicit val robotOrientationCodec: Codec[Robot.Orientation] = {
+  implicit lazy val robotOrientationCodec: Codec[Robot.Orientation] = {
     import Robot.Orientation._
     mappedEnum(uint4, North -> 1, East -> 2, South -> 3, West -> 4)
   }
 
-  implicit val robotStateCodec: Codec[Robot.State] =
+  implicit lazy val robotStateCodec: Codec[Robot.State] =
     Codec.deriveLabelledGeneric
 
-  override implicit val blockCodec: Codec[RobotBlock] =
+  override implicit lazy val blockCodec: Codec[RobotBlock] =
     Codec.deriveLabelledGeneric
 
-  implicit val getStateRequestCodec: Codec[RobotMessage.GetStateRequest] =
+  implicit lazy val getStateRequestCodec: Codec[RobotMessage.GetStateRequest] =
     Codec.deriveLabelledGeneric
 
-  implicit val getStateResponseCodec: Codec[RobotMessage.GetStateResponse] =
+  implicit lazy val getStateResponseCodec
+      : Codec[RobotMessage.GetStateResponse] =
     Codec.deriveLabelledGeneric
 
-  override implicit val applicationMessageCodec: Codec[RobotMessage] =
+  override implicit lazy val applicationMessageCodec: Codec[RobotMessage] =
     discriminated[RobotMessage]
       .by(uint4)
       .typecase(0, getStateRequestCodec)

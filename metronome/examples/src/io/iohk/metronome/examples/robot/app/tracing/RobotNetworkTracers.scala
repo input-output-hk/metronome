@@ -23,7 +23,10 @@ object RobotNetworkTracers {
 
     implicit val peerEncoder: Encoder.AsObject[Peer[RobotAgreement.PKey]] =
       Encoder.AsObject.instance { case Peer(key, address) =>
-        JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
+        JsonObject(
+          "publicKey" -> key.asJson,
+          "address"   -> address.toString.asJson
+        )
       }
 
     HybridLog.instance[RobotNetworkEvent](

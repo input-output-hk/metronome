@@ -139,11 +139,15 @@ class RobotService[F[_]: Sync: Timer, N](
       case None =>
         Sync[F].raiseError(new IllegalStateException("Can't find pre-state."))
       case Some(preState) =>
-        storeRunner.runReadWrite {
-          val postState = preState.update(block.command)
-          stateStorage.put(postState.hash, postState)
-          // TODO: Display robot on the console.
-        }
+        storeRunner
+          .runReadWrite {
+            val postState = preState.update(block.command)
+            stateStorage.put(postState.hash, postState).as(postState)
+          }
+          .flatMap { state =>
+            // TODO: Display robot on the console.
+            Sync[F].delay(System.out.println(state.toString))
+          }
     }
 
   def syncState(

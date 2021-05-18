@@ -419,6 +419,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"ch.qos.logback:logback-classic:${VersionOf.logback}"
     )
 
+    /** Entry point for the robot example. */
+    def robot(args: String*) = T.command {
+      super.runMain("io.iohk.metronome.examples.robot.app.RobotApp", args: _*)
+    }
+
     object test extends TestModule
   }
 }

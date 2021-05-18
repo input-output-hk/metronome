@@ -84,3 +84,29 @@ echo -n "0.1.0-SNAPSHOT" > versionFile/version
 Builds on `develop` will publish the snapshot version to Sonatype, which can be overwritten if the version number is not updated.
 
 During [publishing](https://com-lihaoyi.github.io/mill/page/common-project-layouts.html#publishing) on `master` we will use `mill versionFile.setReleaseVersion` to remove the `-SNAPSHOT` postfix and make a release. After that the version number should be bumped on `develop`, e.g. `mill versionFile.setNextVersion --bump minor`.
+
+## Example Applications
+
+The [examples](./examples) module contains applications that demonstrate the software at work with simplified consensus use cases.
+
+### Robot
+
+The [robot example](./examples/src/io/iohk/metronome/examples/robot) is about the federation moving around a fictional robot on the screen.
+Each leader proposes the next command to be carried out by the robot, once consensus is reached. The setup assumes 4 nodes, with at most
+1 Byzantine member.
+
+To test it, start 4 consoles and run commands like the following, with `--node-index` going from 0 to 3.
+
+```shell
+mill metronome[2.12.13].examples.robot --node-index 0
+```
+
+The logs should be in `~/.metronome/examples/robot/logs/node-$i.log`, e.g.:
+
+```console
+$ tail -f ~/.metronome/examples/robot/logs/node-0.log
+14:03:03.607 ERROR i.i.m.h.s.tracing.ConsensusEvent Error {"message":"Error processing effect SendMessage(ECPublicKey(ByteVector(64 bytes, 0xcb020251d396614a35038dd2ff88fd2f1a5fd74c8bcad4b353fa605405c8b1b8c80ee12d2a10b1fca59424b16890c8115fbc94a68026369acc3c2603595e6387)),NewView(5,QuorumCertificate(Prepare,0,ByteVector(32 bytes, 0xb978b34fc4e905a727065b3e18d941a44a8349d8251514debbee5d6ddb94d430),GroupSignature(List()))))","error":"Connection with node ECPublicKey(ByteVector(64 bytes, 0xcb020251d396614a35038dd2ff88fd2f1a5fd74c8bcad4b353fa605405c8b1b8c80ee12d2a10b1fca59424b16890c8115fbc94a68026369acc3c2603595e6387)), has already closed"}
+14:03:04.736 DEBUG i.i.m.networking.NetworkEvent ConnectionFailed {"key":"23fcab42e8f1078880b27aab4849092489bfa8d3e3b0faa54c9db89e89223c783ec7a3b2f8e6461b27778f78cea261a2272abe31c5601173b2964ef14af897dc","address":"localhost/127.0.0.1:40003","error":"io.iohk.scalanet.peergroup.PeerGroup$ChannelSetupException: Error establishing channel to PeerInfo(BitVector(512 bits, 0x23fcab42e8f1078880b27aab4849092489bfa8d3e3b0faa54c9db89e89223c783ec7a3b2f8e6461b27778f78cea261a2272abe31c5601173b2964ef14af897dc),localhost/127.0.0.1:40003)."}
+```
+
+To clear out everything before a restart, just run `rm -rf ~/.metronome/examples/robot`.

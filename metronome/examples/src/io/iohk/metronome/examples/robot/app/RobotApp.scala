@@ -55,6 +55,7 @@ import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
 import java.security.SecureRandom
 import scopt.OParser
 import scodec.Codec
+import java.nio.file.Files
 
 object RobotApp extends TaskApp {
   import RobotCodecs._
@@ -96,7 +97,8 @@ object RobotApp extends TaskApp {
           case None =>
             Task.pure(ExitCode.Error)
           case Some(opts) =>
-            run(opts, config)
+            setLogProperties(opts) >>
+              run(opts, config)
         }
     }
   }
@@ -108,6 +110,13 @@ object RobotApp extends TaskApp {
     import scodec.codecs.implicits._
     Codec[List[T]].xmap[Set[T]](_.toSet, _.toList)
   }
+
+  def setLogProperties(opts: CommandLineOptions): Task[Unit] = Task {
+    // Separate log file for each node.
+    System.setProperty("log.file.name", s"robot/logs/node-${opts.nodeIndex}")
+    // Not logging to the console so we can display robot position.
+    System.setProperty("log.console.level", s"DEBUG")
+  }.void
 
   def compose(
       opts: CommandLineOptions,
@@ -214,7 +223,12 @@ object RobotApp extends TaskApp {
     val dbConfig = RocksDBStore.Config.default(
       config.db.path.resolve(opts.nodeIndex.toString)
     )
-    RocksDBStore[Task](dbConfig, RobotNamespaces.all)
+    Resource.liftF {
+      Task {
+        Files.createDirectories(dbConfig.path)
+      }
+    } >>
+      RocksDBStore[Task](dbConfig, RobotNamespaces.all)
   }
 
   private def makeKVStoreRunner(
