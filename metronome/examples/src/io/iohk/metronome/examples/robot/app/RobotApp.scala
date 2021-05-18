@@ -116,7 +116,7 @@ object RobotApp extends TaskApp {
     // Separate log file for each node.
     System.setProperty("log.file.name", s"robot/logs/node-${opts.nodeIndex}")
     // Not logging to the console so we can display robot position.
-    System.setProperty("log.console.level", s"DEBUG")
+    System.setProperty("log.console.level", s"INFO")
   }.void
 
   def compose(

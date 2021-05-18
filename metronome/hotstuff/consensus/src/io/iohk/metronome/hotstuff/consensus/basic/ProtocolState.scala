@@ -203,6 +203,12 @@ case class ProtocolState[A <: Agreement: Block: Signing](
             } else {
               Left(UnsafeExtension(e.sender, m))
             }
+
+          // Some extra votes from the previous round are not unexpected in the Prepare phase.
+          case v: Vote[_]
+              if v.viewNumber == viewNumber.prev &&
+                federation.leaderOf(v.viewNumber) == publicKey =>
+            Right(stay)
         }
 
       // Leader:  Collect Prepare votes, broadcast Prepare Q.C.
@@ -291,7 +297,6 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     // moved to the next phase.
     case v: Vote[_]
         if v.viewNumber == viewNumber.prev &&
-          v.phase == Phase.Commit &&
           federation.leaderOf(v.viewNumber) == publicKey =>
       Right(stay)
 
