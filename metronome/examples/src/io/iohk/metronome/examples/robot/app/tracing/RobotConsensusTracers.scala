@@ -8,11 +8,11 @@ import io.iohk.metronome.hotstuff.service.tracing.{
 }
 import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
-import io.circe.{Encoder, JsonObject}
+import io.circe.{Encoder, JsonObject, Json}
 import io.iohk.metronome.crypto.hash.Hash
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
-import io.iohk.metronome.crypto.ECPublicKey
 
 object RobotConsensusTracers {
 
@@ -49,7 +49,14 @@ object RobotConsensusTracers {
       message = _.getClass.getSimpleName,
       event = {
         case e: Timeout =>
-          JsonObject("viewNumber" -> e.viewNumber.asJson)
+          JsonObject(
+            "viewNumber" -> e.viewNumber.asJson,
+            "messageCounter" -> Json.obj(
+              "past"    -> e.messageCounter.past.asJson,
+              "present" -> e.messageCounter.present.asJson,
+              "future"  -> e.messageCounter.future.asJson
+            )
+          )
 
         case e: ViewSync =>
           JsonObject("viewNumber" -> e.viewNumber.asJson)

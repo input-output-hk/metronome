@@ -286,6 +286,15 @@ case class ProtocolState[A <: Agreement: Block: Signing](
           v.blockHash == preparedBlockHash =>
       Right(stay)
 
+    // The same can happen when we receive votes for a previous view number,
+    // after the Commit Q.C. has been processed in the Decide phase and we
+    // moved to the next phase.
+    case v: Vote[_]
+        if v.viewNumber == viewNumber.prev &&
+          v.phase == Phase.Commit &&
+          federation.leaderOf(v.viewNumber) == publicKey =>
+      Right(stay)
+
     // Ignore votes for other blocks.
     case v: Vote[_]
         if isLeader && v.viewNumber == viewNumber &&

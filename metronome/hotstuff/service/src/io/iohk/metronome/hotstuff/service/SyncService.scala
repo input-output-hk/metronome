@@ -290,7 +290,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
       viewNumber <- syncStatus(
         blockSync.synchronizer,
         viewSynchronizer
-      ).handleErrorWith { case NonFatal(ex) =>
+      ).handleErrorWith { case ex: Throwable =>
         tracers.error(ex).as(request.viewNumber)
       }
       // Create a fresh fiber and block synchronizer instance.

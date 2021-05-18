@@ -147,7 +147,7 @@ class RobotService[F[_]: Sync: Timer, N](
           }
           .flatMap { state =>
             // TODO: Display robot on the console.
-            Sync[F].delay(System.out.println(s"""<<< ${state} >>>"""))
+            Sync[F].delay(System.out.println(s"\n<<< ${state} >>>\n"))
           }
     }
 
