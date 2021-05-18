@@ -144,6 +144,7 @@ object RobotApp extends TaskApp {
 
       appService <- makeApplicationService(
         config,
+        opts,
         applicationNetwork,
         blockStorage,
         viewStateStorage,
@@ -325,26 +326,25 @@ object RobotApp extends TaskApp {
 
   private def makeApplicationService(
       config: RobotConfig,
+      opts: CommandLineOptions,
       applicationNetwork: Network[Task, RobotAgreement, RobotMessage],
       blockStorage: BlockStorage[NS, RobotAgreement],
       viewStateStorage: ViewStateStorage[NS, RobotAgreement],
       stateStorage: KVRingBuffer[NS, Hash, Robot.State]
   )(implicit
       storeRunner: KVStoreRunner[Task, NS]
-  ) = {
-    Resource.liftF {
-      RobotService[Task, NS](
-        maxRow = config.model.maxRow,
-        maxCol = config.model.maxCol,
-        network = applicationNetwork,
-        blockStorage = blockStorage,
-        viewStateStorage = viewStateStorage,
-        stateStorage = stateStorage,
-        simulatedDecisionTime = config.model.simulatedDecisionTime,
-        timeout = config.network.timeout
-      )
-    }
-  }
+  ) =
+    RobotService[Task, NS](
+      maxRow = config.model.maxRow,
+      maxCol = config.model.maxCol,
+      publicKey = config.network.nodes(opts.nodeIndex).publicKey,
+      network = applicationNetwork,
+      blockStorage = blockStorage,
+      viewStateStorage = viewStateStorage,
+      stateStorage = stateStorage,
+      simulatedDecisionTime = config.model.simulatedDecisionTime,
+      timeout = config.network.timeout
+    )
 
   private def makeHotstuffService(
       config: RobotConfig,

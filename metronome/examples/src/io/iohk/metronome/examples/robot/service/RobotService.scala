@@ -1,21 +1,21 @@
 package io.iohk.metronome.examples.robot.service
 
 import cats.implicits._
-import cats.effect.{Sync, Timer}
+import cats.effect.{Sync, Timer, Resource, Concurrent}
 import cats.data.{NonEmptyList, NonEmptyVector}
 import io.iohk.metronome.core.messages.RPCTracker
 import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.hotstuff.service.ApplicationService
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot}
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
-import io.iohk.metronome.hotstuff.service.Network
+import io.iohk.metronome.hotstuff.service.{ApplicationService, Network}
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
   ViewStateStorage
 }
+import io.iohk.metronome.networking.ConnectionHandler
 import io.iohk.metronome.storage.{KVStoreRunner, KVRingBuffer}
 import io.iohk.metronome.storage.KVStoreRead
 import scala.util.Random
@@ -25,6 +25,7 @@ import cats.effect.Concurrent
 class RobotService[F[_]: Sync: Timer, N](
     maxRow: Int,
     maxCol: Int,
+    publicKey: RobotAgreement.PKey,
     network: Network[F, RobotAgreement, RobotMessage],
     blockStorage: BlockStorage[N, RobotAgreement],
     viewStateStorage: ViewStateStorage[N, RobotAgreement],
@@ -182,33 +183,74 @@ class RobotService[F[_]: Sync: Timer, N](
       from: RobotAgreement.PKey,
       stateHash: Hash
   ): F[Option[Robot.State]] = {
-    for {
-      requestId <- RobotMessage.RequestId[F]
-      request = RobotMessage.GetStateRequest(requestId, stateHash)
-      join          <- rpcTracker.register(request)
-      _             <- network.sendMessage(from, request)
-      maybeResponse <- join
-    } yield maybeResponse.map(_.state).filter(_.hash == stateHash)
+    if (from == publicKey) {
+      storeRunner.runReadOnly {
+        stateStorage.get(stateHash)
+      }
+    } else {
+      for {
+        requestId <- RobotMessage.RequestId[F]
+        request = RobotMessage.GetStateRequest(requestId, stateHash)
+        join          <- rpcTracker.register(request)
+        _             <- network.sendMessage(from, request)
+        maybeResponse <- join
+      } yield maybeResponse.map(_.state).filter(_.hash == stateHash)
+    }
   }
 
+  private def processNetworkMessages: F[Unit] = {
+    network.incomingMessages
+      .mapEval[Unit] { case ConnectionHandler.MessageReceived(from, message) =>
+        processNetworkMessage(from, message)
+      }
+      .completedL
+  }
+
+  private def processNetworkMessage(
+      from: RobotAgreement.PKey,
+      message: RobotMessage
+  ): F[Unit] = {
+    import RobotMessage._
+    message match {
+      case GetStateRequest(requestId, stateHash) =>
+        storeRunner
+          .runReadOnly {
+            stateStorage.get(stateHash)
+          }
+          .flatMap {
+            case None =>
+              ().pure[F]
+            case Some(state) =>
+              network.sendMessage(from, GetStateResponse(requestId, state))
+          }
+
+      case response: RobotMessage.Response =>
+        rpcTracker.complete(response).void
+
+    }
+  }
 }
 
 object RobotService {
   def apply[F[_]: Concurrent: Timer, N](
       maxRow: Int,
       maxCol: Int,
+      publicKey: RobotAgreement.PKey,
       network: Network[F, RobotAgreement, RobotMessage],
       blockStorage: BlockStorage[N, RobotAgreement],
       viewStateStorage: ViewStateStorage[N, RobotAgreement],
       stateStorage: KVRingBuffer[N, Hash, Robot.State],
       simulatedDecisionTime: FiniteDuration = 1.second,
       timeout: FiniteDuration = 5.seconds
-  )(implicit storeRunner: KVStoreRunner[F, N]): F[RobotService[F, N]] =
+  )(implicit
+      storeRunner: KVStoreRunner[F, N]
+  ): Resource[F, RobotService[F, N]] =
     for {
-      rpcTracker <- RPCTracker[F, RobotMessage](timeout)
+      rpcTracker <- Resource.liftF(RPCTracker[F, RobotMessage](timeout))
       service = new RobotService[F, N](
         maxRow,
         maxCol,
+        publicKey,
         network,
         blockStorage,
         viewStateStorage,
@@ -216,5 +258,8 @@ object RobotService {
         rpcTracker,
         simulatedDecisionTime
       )
+      _ <- Concurrent[F].background {
+        service.processNetworkMessages
+      }
     } yield service
 }
