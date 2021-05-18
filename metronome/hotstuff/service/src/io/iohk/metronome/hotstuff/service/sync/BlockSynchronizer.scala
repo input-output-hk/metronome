@@ -133,25 +133,33 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     * which indicates the blocks that no concurrent download has persisted yet,
     * then persist the rest.
     *
-    * Only doing oinepersist operation at a time to make sure there's no competition
+    * Only doing one persist operation at a time to make sure there's no competition
     * in the insertion order of the path elements among concurrent downloads.
     */
   private def persist(
-      blockHash: A#Hash,
+      targetBlockHash: A#Hash,
       path: List[A#Hash]
   ): F[Unit] =
     semaphore.withPermit {
       inMemoryStore
         .runReadOnly {
-          blockStorage.getPathFromRoot(blockHash).map(_.toSet)
+          blockStorage.getPathFromRoot(targetBlockHash)
         }
         .flatMap { unpersisted =>
-          persist(path, unpersisted)
+          persistAndClear(path, unpersisted.toSet)
         }
     }
 
-  /** Move the blocks on the path from memory to persistent storage. */
-  private def persist(
+  /** Move the blocks on the path from memory to persistent storage.
+    *
+    * `path` and `unpersisted` can be different when a concurrent download
+    * re-inserts some ancestor block into the in-memory store that another
+    * download has already removed during persistence. The `unpersisted`
+    * set only contains block that need to be inserted into persistent
+    * storage, but all `path` elements have to be visited to make sure
+    * nothing is left in the in-memory store, leaking memory.
+    */
+  private def persistAndClear(
       path: List[A#Hash],
       unpersisted: Set[A#Hash]
   ): F[Unit] =
@@ -181,7 +189,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
               ().pure[F]
 
           } >>
-          persist(rest, unpersisted)
+          persistAndClear(rest, unpersisted)
     }
 }
 
