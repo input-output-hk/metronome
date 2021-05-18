@@ -95,13 +95,14 @@ The [robot example](./examples/src/io/iohk/metronome/examples/robot) is about th
 Each leader proposes the next command to be carried out by the robot, once consensus is reached. The setup assumes 4 nodes, with at most
 1 Byzantine member.
 
-To test it, start 4 consoles and run commands like the following, with `--node-index` going from 0 to 3.
+To test it, start 4 consoles and run commands like the following, `$i` going from 0 to 3:
 
 ```shell
-mill metronome[2.12.13].examples.robot --node-index 0
+cd metronome/examples
+make robot-$i
 ```
 
-The logs should be in `~/.metronome/examples/robot/logs/node-$i.log`, e.g.:
+The detailed logs should be in `~/.metronome/examples/robot/logs/node-$i.log`, e.g.:
 
 ```console
 $ tail -f ~/.metronome/examples/robot/logs/node-0.log
