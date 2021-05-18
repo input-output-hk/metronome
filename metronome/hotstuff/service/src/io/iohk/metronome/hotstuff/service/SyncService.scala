@@ -8,6 +8,7 @@ import io.iohk.metronome.core.messages.{
   RPCPair,
   RPCTracker
 }
+import io.iohk.metronome.hotstuff.consensus.Federation
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
@@ -203,6 +204,8 @@ object SyncService {
     * released.
     */
   def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
+      publicKey: A#PKey,
+      federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],
       blockStorage: BlockStorage[N, A],
       blockSyncPipe: BlockSyncPipe[F, A]#Right,
@@ -229,7 +232,12 @@ object SyncService {
         rpcTracker
       )
       blockSync <- Resource.liftF {
-        BlockSynchronizer[F, N, A](blockStorage, service.getBlock)
+        BlockSynchronizer[F, N, A](
+          publicKey,
+          federation,
+          blockStorage,
+          service.getBlock
+        )
       }
       _ <- Concurrent[F].background(service.processNetworkMessages)
       _ <- Concurrent[F].background(service.processBlockSyncPipe(blockSync))

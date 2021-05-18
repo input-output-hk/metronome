@@ -26,7 +26,6 @@ object HotStuffService {
 
   /** Start up the HotStuff service stack. */
   def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
-      publicKey: A#PKey,
       network: Network[F, A, HotStuffMessage[A]],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
@@ -54,7 +53,7 @@ object HotStuffService {
       blockSyncPipe <- Resource.liftF { BlockSyncPipe[F, A] }
 
       consensusService <- ConsensusService(
-        publicKey,
+        initState.publicKey,
         consensusNetwork,
         blockStorage,
         viewStateStorage,
@@ -63,6 +62,8 @@ object HotStuffService {
       )
 
       syncService <- SyncService(
+        initState.publicKey,
+        initState.federation,
         syncNetwork,
         blockStorage,
         blockSyncPipe.right,

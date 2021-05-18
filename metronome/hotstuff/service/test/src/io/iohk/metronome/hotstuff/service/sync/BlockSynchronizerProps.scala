@@ -12,6 +12,8 @@ import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
 import scala.util.Random
 import scala.concurrent.duration._
+import io.iohk.metronome.hotstuff.consensus.Federation
+import io.iohk.metronome.hotstuff.consensus.LeaderSelection
 
 object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   import BlockStorageProps.{
@@ -36,6 +38,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       ancestorTree: List[TestBlock],
       descendantTree: List[TestBlock],
       requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])],
+      federation: Federation[TestAgreement.PKey],
       random: Random
   ) {
     val persistentRef = Ref.unsafe[Task, TestKVStore.Store] {
@@ -75,6 +78,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     implicit val storeRunner = persistentStore
 
     val synchronizer = new BlockSynchronizer[Task, Namespace, TestAgreement](
+      publicKey = federation.publicKeys.head,
+      federation = federation,
       blockStorage = TestBlockStorage,
       getBlock = getBlock,
       inMemoryStore = inMemoryStore,
@@ -99,6 +104,8 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
         federationSize <- Gen.choose(1, 10)
         federationKeys = Range(0, federationSize).toVector
+        federation = Federation(federationKeys)(LeaderSelection.RoundRobin)
+          .getOrElse(sys.error("Can't create federation."))
 
         existingPrepares <- Gen.someOf(ancestorTree)
         newPrepares      <- Gen.atLeastOne(descendantTree)
@@ -118,7 +125,13 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
         random <- arbitrary[Int].map(seed => new Random(seed))
 
-      } yield TestFixture(ancestorTree, descendantTree, requests, random)
+      } yield TestFixture(
+        ancestorTree,
+        descendantTree,
+        requests,
+        federation,
+        random
+      )
     }
   }
 
@@ -176,11 +189,13 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     // Simulate a some random time, which may or may not be enough to finish the downloads.
     scheduler.tick(duration)
 
-    // Check now that there the persistent store has just one tree.
+    // Check now that the persistent store has just one tree.
     val test = for {
       persistent <- fixture.persistentRef.get
     } yield {
       persistent(Namespace.Blocks).forall { case (_, block: TestBlock) =>
+        // Either the block is the Genesis block with an empty parent ID,
+        // or it has a parent which has been inserted into the store.
         block.parentId.isEmpty ||
           persistent(Namespace.Blocks).contains(block.parentId)
       }

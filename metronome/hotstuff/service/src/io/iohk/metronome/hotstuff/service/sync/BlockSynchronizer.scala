@@ -3,6 +3,7 @@ package io.iohk.metronome.hotstuff.service.sync
 import cats.implicits._
 import cats.effect.{Sync, Timer, Concurrent, ContextShift}
 import cats.effect.concurrent.Semaphore
+import io.iohk.metronome.hotstuff.consensus.Federation
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   QuorumCertificate,
@@ -11,6 +12,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.storage.{InMemoryKVStore, KVStoreRunner}
 import scala.concurrent.duration._
+import scala.util.Random
 
 /** The job of the `BlockSynchronizer` is to procure missing blocks when a `Prepare`
   * message builds on a High Q.C. that we don't have.
@@ -29,12 +31,17 @@ import scala.concurrent.duration._
   * a long time offline. Once that happens the block history should be pruneable.
   */
 class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
+    publicKey: A#PKey,
+    federation: Federation[A#PKey],
     blockStorage: BlockStorage[N, A],
     getBlock: BlockSynchronizer.GetBlock[F, A],
     inMemoryStore: KVStoreRunner[F, N],
     semaphore: Semaphore[F],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
+
+  private val otherPublicKeys =
+    federation.publicKeys.filterNot(_ == publicKey)
 
   // We must take care not to insert blocks into storage and risk losing
   // the pointer to them in a restart, hence keeping the unfinished tree
@@ -117,17 +124,40 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     download(from, parentBlockHash, blockHash :: path)
   }
 
-  /** Try downloading the block from the source and perform basic content validation. */
+  /** Try downloading the block from the source and perform basic content validation.
+    *
+    * If the download fails, try random alternative sources in the federation.
+    */
   private def getAndValidateBlock(
       from: A#PKey,
       blockHash: A#Hash
-  ): F[Option[A#Block]] =
-    getBlock(from, blockHash).map { maybeBlock =>
-      maybeBlock.filter { block =>
-        Block[A].blockHash(block) == blockHash &&
-        Block[A].isValid(block)
+  ): F[Option[A#Block]] = {
+    def fetch(from: A#PKey) =
+      getBlock(from, blockHash)
+        .map { maybeBlock =>
+          maybeBlock.filter { block =>
+            Block[A].blockHash(block) == blockHash &&
+            Block[A].isValid(block)
+          }
+        }
+
+    def loop(sources: List[A#PKey]): F[Option[A#Block]] =
+      sources match {
+        case Nil => none.pure[F]
+        case from :: alternatives =>
+          fetch(from).flatMap {
+            case None  => loop(alternatives)
+            case block => block.pure[F]
+          }
       }
+
+    loop(List(from)).flatMap {
+      case None =>
+        loop(Random.shuffle(otherPublicKeys.filterNot(_ == from).toList))
+      case block =>
+        block.pure[F]
     }
+  }
 
   /** See how far we can go in memory from the original block hash we asked for,
     * which indicates the blocks that no concurrent download has persisted yet,
@@ -200,6 +230,8 @@ object BlockSynchronizer {
 
   /** Create a block synchronizer resource. Stop any background downloads when released. */
   def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
+      publicKey: A#PKey,
+      federation: Federation[A#PKey],
       blockStorage: BlockStorage[N, A],
       getBlock: GetBlock[F, A]
   )(implicit
@@ -209,6 +241,8 @@ object BlockSynchronizer {
       semaphore     <- Semaphore[F](1)
       inMemoryStore <- InMemoryKVStore[F, N]
       synchronizer = new BlockSynchronizer[F, N, A](
+        publicKey,
+        federation,
         blockStorage,
         getBlock,
         inMemoryStore,
