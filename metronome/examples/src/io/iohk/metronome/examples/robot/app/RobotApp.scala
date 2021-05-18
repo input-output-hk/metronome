@@ -3,6 +3,7 @@ package io.iohk.metronome.examples.robot.app
 import cats.implicits._
 import cats.effect.{ExitCode, Resource, Concurrent}
 import monix.eval.{Task, TaskApp}
+import monix.execution.Scheduler
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey, GroupSignature}
 import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.hotstuff.consensus.{
@@ -68,6 +69,8 @@ object RobotApp extends TaskApp {
   case class CommandLineOptions(
       nodeIndex: Int = 0
   )
+
+  override protected val scheduler = Scheduler.io("robots")
 
   def oparser(config: RobotConfig) = {
     val builder = OParser.builder[CommandLineOptions]

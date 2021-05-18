@@ -186,14 +186,13 @@ class RobotService[F[_]: Sync: Timer, N](
         case Some(state) =>
           ().pure[F]
       }
-
-    loop(sources.toList)
   }
 
   private def getState(
       from: RobotAgreement.PKey,
       stateHash: Hash
   ): F[Option[Robot.State]] = {
+    assert(from != publicKey, "Shouldn't try to get state from self.")
     for {
       requestId <- RobotMessage.RequestId[F]
       request = RobotMessage.GetStateRequest(requestId, stateHash)
