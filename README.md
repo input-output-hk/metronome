@@ -98,8 +98,7 @@ Each leader proposes the next command to be carried out by the robot, once conse
 To test it, start 4 consoles and run commands like the following, `$i` going from 0 to 3:
 
 ```shell
-cd metronome/examples
-make robot-$i
+./metronome/examples/robot.sh $i
 ```
 
 The detailed logs should be in `~/.metronome/examples/robot/logs/node-$i.log`, e.g.:
