@@ -39,8 +39,7 @@ class FiberSetSpec extends AsyncFlatSpec with Matchers with Inside {
         r <- r.attempt
       } yield {
         inside(r) { case Left(ex) =>
-          ex shouldBe a[RuntimeException]
-          ex.getMessage should include("shut down")
+          ex shouldBe a[DeferredTask.CanceledException]
         }
       }
     }

@@ -1,6 +1,7 @@
 package io.iohk.metronome.checkpointing
 
 import io.iohk.metronome.crypto
+import io.iohk.metronome.hotstuff.consensus
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Secp256k1Agreement,
@@ -27,4 +28,14 @@ object CheckpointingAgreement extends Secp256k1Agreement {
         rlp.encode(phase) ++ rlp.encode(viewNumber) ++ rlp.encode(hash)
       )
     )
+
+  implicit val block: consensus.basic.Block[CheckpointingAgreement] =
+    new consensus.basic.Block[CheckpointingAgreement] {
+      override def blockHash(b: models.Block) =
+        b.hash
+      override def parentBlockHash(b: models.Block) =
+        b.header.parentHash
+      override def isValid(b: models.Block) =
+        models.Block.isValid(b)
+    }
 }

@@ -24,8 +24,8 @@ class BlockStorage[N, A <: Agreement: Block](
     * then add this block to its children.
     */
   def put(block: A#Block): KVStore[N, Unit] = {
-    val blockHash  = implicitly[Block[A]].blockHash(block)
-    val parentHash = implicitly[Block[A]].parentBlockHash(block)
+    val blockHash  = Block[A].blockHash(block)
+    val parentHash = Block[A].parentBlockHash(block)
 
     blockColl.put(blockHash, block) >>
       childToParentColl.put(blockHash, parentHash) >>
@@ -88,7 +88,7 @@ class BlockStorage[N, A <: Agreement: Block](
   /** Delete a block and remove it from any parent-to-child mapping,
     * without any checking for the tree structure invariants.
     */
-  private def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] = {
+  def deleteUnsafe(blockHash: A#Hash): KVStore[N, Unit] = {
     def deleteIfEmpty(maybeChildren: Option[Set[A#Hash]]) =
       maybeChildren.filter(_.nonEmpty)
 

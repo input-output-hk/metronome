@@ -56,6 +56,13 @@ class FiberMap[F[_]: Concurrent: ContextShift, K](
     }
   }
 
+  /** Cancel all enqueued tasks for a key. */
+  def cancelQueue(key: K): F[Unit] =
+    actorMapRef.get.map(_.get(key)).flatMap {
+      case Some(actor) => actor.cancelQueue
+      case None        => ().pure[F]
+    }
+
   /** Cancel all existing background processors. */
   private def shutdown: F[Unit] = {
     semaphore.withPermit {
@@ -95,14 +102,20 @@ object FiberMap {
         _        <- reject.whenA(!enqueued)
       } yield wrapper.join
 
+    /** Cancel all enqueued tasks. */
+    def cancelQueue: F[Unit] =
+      for {
+        tasks <- queue.drain(0, Int.MaxValue)
+        _     <- tasks.toList.traverse(_.cancel)
+      } yield ()
+
     /** Cancel the processing and signal to all enqueued tasks that they will not be executed. */
     def shutdown: F[Unit] =
       for {
         _            <- fiber.cancel
         maybeRunning <- runningRef.get
-        _            <- maybeRunning.fold(().pure[F])(_.shutdown)
-        tasks        <- queue.drain(0, Int.MaxValue)
-        _            <- tasks.toList.traverse(_.shutdown)
+        _            <- maybeRunning.fold(().pure[F])(_.cancel)
+        tasks        <- cancelQueue
       } yield ()
   }
   private object Actor {
