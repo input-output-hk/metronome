@@ -39,9 +39,9 @@ object Robot {
     def move(orientation: Orientation): Position =
       orientation match {
         case North => copy(row = row - 1)
-        case East  => copy(col = col - 1)
+        case East  => copy(col = col + 1)
         case South => copy(row = row + 1)
-        case West  => copy(col = col + 1)
+        case West  => copy(col = col - 1)
       }
   }
 
