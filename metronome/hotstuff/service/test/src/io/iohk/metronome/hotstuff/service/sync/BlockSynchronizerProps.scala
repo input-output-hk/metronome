@@ -114,7 +114,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         leaf = ancestorTree.last
         descendantTree <- genNonEmptyBlockTree(parentId = leaf.id)
 
-        federationSize <- Gen.choose(1, 10)
+        federationSize <- Gen.choose(3, 10)
         federationKeys = Range(0, federationSize).toVector
         federation = Federation(federationKeys)(LeaderSelection.RoundRobin)
           .getOrElse(sys.error("Can't create federation."))
@@ -226,8 +226,12 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
   property("getBlockFromQuorumCertificate") = forAllNoShrink(
     for {
-      fixture <- TestFixture.gen(timeoutProb = Prob(0))
-      sources <- Gen.atLeastOne(fixture.requests.map(_._1).distinct)
+      fixture <- TestFixture
+        .gen(timeoutProb = Prob(0), corruptProb = Prob(0))
+      sources <- Gen.pick(
+        fixture.federation.quorumSize,
+        fixture.federation.publicKeys
+      )
       // The last request is definitely new.
       qc = fixture.requests.last._2
     } yield (fixture, sources, qc)
