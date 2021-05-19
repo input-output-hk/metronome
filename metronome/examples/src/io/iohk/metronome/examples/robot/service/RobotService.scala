@@ -166,7 +166,7 @@ class RobotService[F[_]: Sync: Timer, N](
 
             case Some(state) =>
               storeRunner.runReadWrite {
-                stateStorage.put(state.hash, state)
+                stateStorage.put(state.hash, state).void
               }
           }
         case Nil =>

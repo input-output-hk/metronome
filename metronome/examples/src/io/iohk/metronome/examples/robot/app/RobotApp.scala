@@ -439,7 +439,6 @@ object RobotApp extends TaskApp {
       )
 
       _ <- HotStuffService[Task, NS, RobotAgreement](
-        publicKey = localNode.publicKey,
         hotstuffNetwork,
         appService,
         blockStorage,
