@@ -3,8 +3,7 @@ package io.iohk.metronome.rocksdb
 import cats._
 import cats.implicits._
 import cats.data.ReaderT
-import cats.effect.{Resource, Sync}
-import cats.free.Free.liftF
+import cats.effect.{Resource, Sync, ContextShift, Blocker}
 import io.iohk.metronome.storage.{
   KVStore,
   KVStoreOp,
@@ -44,9 +43,10 @@ import scala.annotation.nowarn
   * locking could be performed in their respective middle-layers, before they forward the
   * query for execution to this class.
   */
-class RocksDBStore[F[_]: Sync](
-    db: RocksDBStore.DBSupport[F],
-    lock: RocksDBStore.LockSupport[F],
+class RocksDBStore[F[_]: Sync: ContextShift](
+    db: RocksDBStore.DBSupport,
+    lock: RocksDBStore.LockSupport,
+    blocker: Blocker,
     handles: Map[RocksDBStore.Namespace, ColumnFamilyHandle]
 ) {
 
@@ -62,7 +62,7 @@ class RocksDBStore[F[_]: Sync](
   // Type aliases to support the `~>` transformation with types that
   // only have 1 generic type argument `A`.
   type Batch[A] =
-    ({ type L[A] = ReaderT[F, BatchEnv, A] })#L[A]
+    ({ type L[A] = ReaderT[Eval, BatchEnv, A] })#L[A]
 
   type KVNamespacedOp[A] =
     ({ type L[A] = KVStoreOp[Namespace, A] })#L[A]
@@ -71,25 +71,23 @@ class RocksDBStore[F[_]: Sync](
     ({ type L[A] = KVStoreReadOp[Namespace, A] })#L[A]
 
   /** Execute the accumulated write operations in a batch. */
-  private val writeBatch: ReaderT[F, BatchEnv, Unit] =
+  private val writeBatch: ReaderT[Eval, BatchEnv, Unit] =
     ReaderT { batch =>
       if (batch.hasPut() || batch.hasDelete())
         db.write(batch) >>
-          Sync[F].delay {
-            batch.clear()
-          }
+          Eval.always(batch.clear())
       else
-        ().pure[F]
+        ().pure[Eval]
     }
 
   /** Execute one `Get` operation. */
-  private def read[K, V](op: Get[Namespace, K, V]): F[Option[V]] = {
+  private def get[K, V](op: Get[Namespace, K, V]): Eval[Option[V]] = {
     for {
       kbs  <- encode(op.key)(op.keyEncoder)
-      mvbs <- db.read(handles(op.namespace), kbs)
+      mvbs <- db.get(handles(op.namespace), kbs)
       mv <- mvbs match {
         case None =>
-          none.pure[F]
+          none.pure[Eval]
 
         case Some(bytes) =>
           decode(bytes)(op.valueDecoder).map(_.some)
@@ -118,7 +116,7 @@ class RocksDBStore[F[_]: Sync](
 
           case op @ Get(_, _) =>
             // Execute any pending deletes and puts before performing the read.
-            writeBatch >> ReaderT.liftF(read(op))
+            writeBatch >> ReaderT.liftF(get(op))
 
           case op @ Delete(n, k) =>
             ReaderT { batch =>
@@ -130,27 +128,39 @@ class RocksDBStore[F[_]: Sync](
         }
     }
 
-  /** Intended for reads, with fallback to writes. */
-  private val nonBatchingCompiler: KVNamespacedOp ~> F =
-    new (KVNamespacedOp ~> F) {
-      def apply[A](fa: KVNamespacedOp[A]): F[A] =
+  /** Intended for reads, with fallback to writes executed individually. */
+  private val nonBatchingCompiler: KVNamespacedOp ~> Eval =
+    new (KVNamespacedOp ~> Eval) {
+      def apply[A](fa: KVNamespacedOp[A]): Eval[A] =
         fa match {
           case op @ Get(_, _) =>
-            read(op)
-          case op =>
-            lock.withLockUpgrade {
-              runWithBatchingNoLock {
-                liftF[KVNamespacedOp, A](op)
-              }
-            }
+            get(op)
+
+          case op @ Put(n, k, v) =>
+            for {
+              kbs <- encode(k)(op.keyEncoder)
+              vbs <- encode(v)(op.valueEncoder)
+              _   <- db.put(handles(n), kbs, vbs)
+            } yield ()
+
+          case op @ Delete(n, k) =>
+            for {
+              kbs <- encode(k)(op.keyEncoder)
+              _   <- db.delete(handles(n), kbs)
+            } yield ()
         }
     }
 
-  private def encode[T](value: T)(implicit ev: Encoder[T]): F[Array[Byte]] =
-    Sync[F].fromTry(ev.encode(value).map(_.toByteArray).toTry)
+  private def encode[T](value: T)(implicit ev: Encoder[T]): Eval[Array[Byte]] =
+    Eval.always(ev.encode(value).map(_.toByteArray).require)
 
-  private def decode[T](bytes: Array[Byte])(implicit ev: Decoder[T]): F[T] =
-    Sync[F].fromTry(ev.decodeValue(BitVector(bytes)).toTry)
+  private def decode[T](bytes: Array[Byte])(implicit ev: Decoder[T]): Eval[T] =
+    Eval.always(ev.decodeValue(BitVector(bytes)).require)
+
+  private def block[A](evalA: Eval[A]): F[A] =
+    ContextShift[F].blockOn(blocker) {
+      Sync[F].delay(evalA.value)
+    }
 
   /** Mostly meant for writing batches atomically.
     *
@@ -164,11 +174,12 @@ class RocksDBStore[F[_]: Sync](
     */
   def runWithBatchingNoLock[A](
       program: KVStore[Namespace, A]
-  ): DBQuery[F, A] = {
-    autoCloseableR(new WriteBatch()).use {
-      (program.foldMap(batchingCompiler) <* writeBatch).run
+  ): DBQuery[F, A] =
+    autoCloseableR(new WriteBatch()).use { batch =>
+      block {
+        (program.foldMap(batchingCompiler) <* writeBatch).run(batch)
+      }
     }
-  }
 
   /** Same as `runWithBatchingNoLock`, but write lock is taken out
     * to make sure concurrent reads are not affected.
@@ -179,8 +190,12 @@ class RocksDBStore[F[_]: Sync](
     * point to is retrieved.
     */
   def runWithBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
-    lock.withWriteLock {
-      runWithBatchingNoLock(program)
+    autoCloseableR(new WriteBatch()).use { batch =>
+      block {
+        lock.withWriteLock {
+          (program.foldMap(batchingCompiler) <* writeBatch).run(batch)
+        }
+      }
     }
 
   /** Similar to `runWithBatching` in that it can contain both reads
@@ -194,8 +209,10 @@ class RocksDBStore[F[_]: Sync](
     * threads to get in before the write statement runs.
     */
   def runWithoutBatching[A](program: KVStore[Namespace, A]): DBQuery[F, A] =
-    lock.withReadLock {
-      program.foldMap(nonBatchingCompiler)
+    block {
+      lock.withReadLock {
+        program.foldMap(nonBatchingCompiler)
+      }
     }
 
   /** For strictly read-only operations.
@@ -204,7 +221,9 @@ class RocksDBStore[F[_]: Sync](
     * where reads don't need isolation from writes.
     */
   def runReadOnlyNoLock[A](program: KVStoreRead[Namespace, A]): DBQuery[F, A] =
-    kvs.lift(program).foldMap(nonBatchingCompiler)
+    block {
+      kvs.lift(program).foldMap(nonBatchingCompiler)
+    }
 
   /** Same as `runReadOnlyNoLock`, but a read lock is taken out
     * to make sure concurrent writes cannot affect the results.
@@ -213,8 +232,10 @@ class RocksDBStore[F[_]: Sync](
     * updates are happening.
     */
   def runReadOnly[A](program: KVStoreRead[Namespace, A]): DBQuery[F, A] =
-    lock.withReadLock {
-      runReadOnlyNoLock(program)
+    block {
+      lock.withReadLock {
+        kvs.lift(program).foldMap(nonBatchingCompiler)
+      }
     }
 }
 
@@ -263,7 +284,7 @@ object RocksDBStore {
       )
   }
 
-  def apply[F[_]: Sync](
+  def apply[F[_]: Sync: ContextShift](
       config: Config,
       namespaces: Seq[Namespace]
   ): Resource[F, RocksDBStore[F]] = {
@@ -348,9 +369,13 @@ object RocksDBStore {
           s" Expected ${allNamespaces.size}; got ${columnFamilyHandleBuffer.size}."
       )
 
+      // Use a cached thread pool for blocking on locks and IO.
+      blocker <- Blocker[F]
+
       store = new RocksDBStore[F](
         new DBSupport(db, readOpts, writeOptions),
         new LockSupport(new ReentrantReadWriteLock()),
+        blocker,
         columnFamilyHandles
       )
 
@@ -391,8 +416,15 @@ object RocksDBStore {
   ): Resource[F, R] =
     Resource.fromAutoCloseable[F, R](Sync[F].delay(mk))
 
-  /** Help run reads and writes isolated from each other. */
-  private class LockSupport[F[_]: Sync](rwlock: ReentrantReadWriteLock) {
+  /** Help run reads and writes isolated from each other.
+    *
+    * Uses a `ReentrantReadWriteLock` so has to make sure that
+    * all operations are carried out on the same thread, that's
+    * why it's working with `Eval` and not `F`.
+    */
+  private class LockSupport(
+      rwlock: ReentrantReadWriteLock
+  ) {
 
     // Batches can interleave multiple reads (and writes);
     // to make sure they see a consistent view, writes are
@@ -400,16 +432,36 @@ object RocksDBStore {
     // read an ID, then retrieve the record from a different
     // collection, we can be sure it hasn't been deleted in
     // between the two operations.
-    private val lockRead    = Sync[F].delay(rwlock.readLock().lock())
-    private val unlockRead  = Sync[F].delay(rwlock.readLock().unlock())
-    private val lockWrite   = Sync[F].delay(rwlock.writeLock().lock())
-    private val unlockWrite = Sync[F].delay(rwlock.writeLock().unlock())
+    private def lockRead(timestamp: Long) = Eval.always {
+      //println(s"locking for read $timestamp...")
+      rwlock.readLock().lock()
+      //println(s"locked for read $timestamp")
+    }
+    private def unlockRead(timestamp: Long) = Eval.always {
+      //println(s"unlocking read $timestamp...")
+      rwlock.readLock().unlock()
+      //println(s"unlocked read $timestamp")
+    }
+    private def lockWrite(timestamp: Long) = Eval.always {
+      //println(s"locking for write $timestamp...")
+      rwlock.writeLock().lock()
+      //println(s"locked for write $timestamp")
+    }
+    private def unlockWrite(timestamp: Long) = Eval.always {
+      //println(s"unlocking write $timestamp...")
+      rwlock.writeLock().unlock()
+      //println(s"unlocked write $timestamp")
+    }
 
-    def withReadLock[A](fa: F[A]): F[A] =
-      Sync[F].bracket(lockRead)(_ => fa)(_ => unlockRead)
+    def withReadLock[A](evalA: Eval[A]): Eval[A] = {
+      val ts = System.currentTimeMillis
+      bracket(lockRead(ts), unlockRead(ts))(evalA)
+    }
 
-    def withWriteLock[A](fa: F[A]): F[A] =
-      Sync[F].bracket(lockWrite)(_ => fa)(_ => unlockWrite)
+    def withWriteLock[A](evalA: Eval[A]): Eval[A] = {
+      val ts = System.currentTimeMillis
+      bracket(lockWrite(ts), unlockWrite(ts))(evalA)
+    }
 
     /*
      * In case there's a write operation among the reads and we haven't
@@ -425,31 +477,58 @@ object RocksDBStore {
      * See here for the rules up (non-)upgrading and downgrading:
      * https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
      */
-    def withLockUpgrade[A](fa: F[A]): F[A] =
-      Sync[F].bracket {
-        unlockRead >> lockWrite
-      }(_ => fa) { _ =>
-        lockRead >> unlockWrite
+    def withLockUpgrade[A](fa: Eval[A]): Eval[A] = {
+      val ts = System.currentTimeMillis
+      println(s"upgrading lock $ts...")
+      bracket(
+        unlockRead(ts) >> lockWrite(ts),
+        lockRead(ts) >> unlockWrite(ts)
+      )(fa)
+    }
+
+    private def bracket[A](lock: Eval[Unit], unlock: Eval[Unit])(
+        evalA: Eval[A]
+    ): Eval[A] = Eval.always {
+      try {
+        (lock >> evalA).value
+      } finally {
+        unlock.value
       }
+    }
   }
 
   /** Wrap a RocksDB instance. */
-  private class DBSupport[F[_]: Sync](
+  private class DBSupport(
       db: RocksDB,
       readOptions: ReadOptions,
       writeOptions: WriteOptions
   ) {
-    def read(
+    def get(
         handle: ColumnFamilyHandle,
         key: Array[Byte]
-    ): F[Option[Array[Byte]]] = Sync[F].delay {
+    ): Eval[Option[Array[Byte]]] = Eval.always {
       Option(db.get(handle, readOptions, key))
     }
 
     def write(
         batch: WriteBatch
-    ): F[Unit] = Sync[F].delay {
+    ): Eval[Unit] = Eval.always {
       db.write(writeOptions, batch)
+    }
+
+    def put(
+        handle: ColumnFamilyHandle,
+        key: Array[Byte],
+        value: Array[Byte]
+    ): Eval[Unit] = Eval.always {
+      db.put(handle, writeOptions, key, value)
+    }
+
+    def delete(
+        handle: ColumnFamilyHandle,
+        key: Array[Byte]
+    ): Eval[Unit] = Eval.always {
+      db.delete(handle, writeOptions, key)
     }
   }
 }
