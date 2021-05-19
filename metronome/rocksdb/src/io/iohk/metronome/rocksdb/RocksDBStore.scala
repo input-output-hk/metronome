@@ -432,36 +432,24 @@ object RocksDBStore {
     // read an ID, then retrieve the record from a different
     // collection, we can be sure it hasn't been deleted in
     // between the two operations.
-    private def lockRead(timestamp: Long) = Eval.always {
-      //println(s"locking for read $timestamp...")
+    private val lockRead = Eval.always {
       rwlock.readLock().lock()
-      //println(s"locked for read $timestamp")
     }
-    private def unlockRead(timestamp: Long) = Eval.always {
-      //println(s"unlocking read $timestamp...")
+    private val unlockRead = Eval.always {
       rwlock.readLock().unlock()
-      //println(s"unlocked read $timestamp")
     }
-    private def lockWrite(timestamp: Long) = Eval.always {
-      //println(s"locking for write $timestamp...")
+    private val lockWrite = Eval.always {
       rwlock.writeLock().lock()
-      //println(s"locked for write $timestamp")
     }
-    private def unlockWrite(timestamp: Long) = Eval.always {
-      //println(s"unlocking write $timestamp...")
+    private val unlockWrite = Eval.always {
       rwlock.writeLock().unlock()
-      //println(s"unlocked write $timestamp")
     }
 
-    def withReadLock[A](evalA: Eval[A]): Eval[A] = {
-      val ts = System.currentTimeMillis
-      bracket(lockRead(ts), unlockRead(ts))(evalA)
-    }
+    def withReadLock[A](evalA: Eval[A]): Eval[A] =
+      bracket(lockRead, unlockRead)(evalA)
 
-    def withWriteLock[A](evalA: Eval[A]): Eval[A] = {
-      val ts = System.currentTimeMillis
-      bracket(lockWrite(ts), unlockWrite(ts))(evalA)
-    }
+    def withWriteLock[A](evalA: Eval[A]): Eval[A] =
+      bracket(lockWrite, unlockWrite)(evalA)
 
     /*
      * In case there's a write operation among the reads and we haven't
@@ -477,14 +465,11 @@ object RocksDBStore {
      * See here for the rules up (non-)upgrading and downgrading:
      * https://docs.oracle.com/javase/7/docs/api/java/util/concurrent/locks/ReentrantReadWriteLock.html
      */
-    def withLockUpgrade[A](fa: Eval[A]): Eval[A] = {
-      val ts = System.currentTimeMillis
-      println(s"upgrading lock $ts...")
+    def withLockUpgrade[A](fa: Eval[A]): Eval[A] =
       bracket(
-        unlockRead(ts) >> lockWrite(ts),
-        lockRead(ts) >> unlockWrite(ts)
+        unlockRead >> lockWrite,
+        lockRead >> unlockWrite
       )(fa)
-    }
 
     private def bracket[A](lock: Eval[Unit], unlock: Eval[Unit])(
         evalA: Eval[A]
