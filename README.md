@@ -87,11 +87,11 @@ During [publishing](https://com-lihaoyi.github.io/mill/page/common-project-layou
 
 ## Example Applications
 
-The [examples](./examples) module contains applications that demonstrate the software at work with simplified consensus use cases.
+The [examples](./metronome/examples) module contains applications that demonstrate the software at work with simplified consensus use cases.
 
 ### Robot
 
-The [robot example](./examples/src/io/iohk/metronome/examples/robot) is about the federation moving around a fictional robot on the screen.
+The [robot example](./metronome/examples/src/io/iohk/metronome/examples/robot) is about the federation moving around a fictional robot on the screen.
 Each leader proposes the next command to be carried out by the robot, once consensus is reached. The setup assumes 4 nodes, with at most
 1 Byzantine member.
 
