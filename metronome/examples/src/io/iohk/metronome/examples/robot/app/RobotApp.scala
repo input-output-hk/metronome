@@ -97,7 +97,9 @@ object RobotApp extends TaskApp {
   override def run(args: List[String]): Task[ExitCode] = {
     RobotConfigParser.parse match {
       case Left(error) =>
-        Task.delay(println(error)).as(ExitCode.Error)
+        Task
+          .delay(println(s"Error parsing configuration: $error"))
+          .as(ExitCode.Error)
       case Right(config) =>
         OParser.parse(oparser(config), args, CommandLineOptions()) match {
           case None =>
@@ -393,7 +395,8 @@ object RobotApp extends TaskApp {
     import RobotConsensusTracers._
     import RobotSyncTracers._
 
-    implicit val leaderSelection = LeaderSelection.Hashing
+    // Round-Robing is more predictable than Hashing.
+    implicit val leaderSelection = LeaderSelection.RoundRobin
 
     implicit val signing = new RobotSigning(genesis.hash)
 
@@ -409,9 +412,14 @@ object RobotApp extends TaskApp {
       (viewState, preparedBlock) <- Resource.liftF {
         storeRunner.runReadOnly {
           for {
-            bundle   <- viewStateStorage.getBundle
-            prepared <- blockStorage.get(bundle.prepareQC.blockHash)
-          } yield (bundle, prepared.get)
+            bundle        <- viewStateStorage.getBundle
+            maybePrepared <- blockStorage.get(bundle.prepareQC.blockHash)
+            prepared = maybePrepared.getOrElse {
+              throw new IllegalStateException(
+                s"Cannot get the last prepared block from storage."
+              )
+            }
+          } yield (bundle, prepared)
         }
       }
 

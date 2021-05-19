@@ -266,7 +266,9 @@ class ConsensusService[
             handleTransition(state.handleBlockCreated(e))
         }
 
-        handle >> processEvents
+        handle.handleErrorWith { ex =>
+          tracers.error(s"Error processing event $event", ex)
+        } >> processEvents
       }
     }
   }
@@ -279,7 +281,8 @@ class ConsensusService[
     // Only requesting a state sync if we haven't received any message that looks to be in sync
     // but we have received some from the future. If we have received messages from the past,
     // then by the virtue of timeouts they should catch up with us at some point.
-    val isOutOfSync = counter.present == 0 && counter.future > 0
+    val isOutOfSync = counter.present == 0 && counter.future > 0 ||
+      counter.present == 0 && counter.future == 0 && counter.past > 0
 
     // In the case that there were two groups being in sync within group members, but not with
     // each other, than there should be rounds when none of them are leaders and they shouldn't
@@ -422,8 +425,9 @@ class ConsensusService[
   }
 
   /** Effects can be processed independently of each other in the background. */
-  private def scheduleEffects(effects: Seq[Effect[A]]): F[Unit] =
+  private def scheduleEffects(effects: Seq[Effect[A]]): F[Unit] = {
     effects.toList.traverse(scheduleEffect).void
+  }
 
   /** Start processing an effect in the background. Add the background fiber
     * to the scheduled items so they can be canceled if the service is released.
@@ -440,6 +444,7 @@ class ConsensusService[
     val process = effect match {
       case ScheduleNextView(viewNumber, timeout) =>
         val event = validated(NextView(viewNumber))
+
         Timer[F].sleep(timeout) >>
           enqueueEvent(event)
 
