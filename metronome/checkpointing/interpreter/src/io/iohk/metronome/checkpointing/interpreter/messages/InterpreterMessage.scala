@@ -41,7 +41,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     * potentially produce a new checkpoint candidate in
     * the next view when the replica becomes leader.
     *
-    * In that round, the Service should send a `CreateBlockRequest`.
+    * In that round, the Service should send a `CreateBlockBodyRequest`.
     *
     * This is a potential optimization, so we don't send the `Ledger`
     * in futile attempts when there's no chance for a block to
@@ -86,7 +86,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     * doesn't have access to the block history, so it couldn't do
     * the same on its own.
     */
-  case class CreateBlockRequest(
+  case class CreateBlockBodyRequest(
       requestId: RequestId,
       ledger: Ledger,
       mempool: Seq[Transaction.ProposerBlock]
@@ -103,7 +103,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     * to keep everyone in sync, or just move to the next leader by
     * other means.
     */
-  case class CreateBlockResponse(
+  case class CreateBlockBodyResponse(
       requestId: RequestId,
       blockBody: Block.Body
   ) extends InterpreterMessage
@@ -111,21 +111,20 @@ object InterpreterMessage extends RPCMessageCompanion {
       with FromInterpreter
 
   /** The Service asks the Interpreter to validate all transactions
-    * in a block, given the current ledger state, and return the
-    * updated ledger.
+    * in a block, given the current ledger state.
     *
     * This could be done transaction by transaction, but that would
     * require sending the ledger every step along the way, which
     * would be less efficient.
     *
-    * The updated ledger is returned so the interpeter can decide
-    * which proposer blocks to keep after applying any checkpoints.
-    *
     * If the Interpreter doesn't have enough data to validate the
     * block, it should hold on to it until it does, only responding
     * when it has the final conclusion.
+    *
+    * If the transactions are valid, the Service will apply them
+    * on the ledger on its own; the update rules are transparent.
     */
-  case class ValidateBlockRequest(
+  case class ValidateBlockBodyRequest(
       requestId: RequestId,
       blockBody: Block.Body,
       ledger: Ledger
@@ -146,7 +145,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     * and checks that the `postStateHash` in the block also
     * corresponds to its state.
     */
-  case class ValidateBlockResponse(
+  case class ValidateBlockBodyResponse(
       requestId: RequestId,
       isValid: Boolean
   ) extends InterpreterMessage
@@ -168,9 +167,9 @@ object InterpreterMessage extends RPCMessageCompanion {
       with FromService
       with NoResponse
 
-  implicit val createBlockPair =
-    pair[CreateBlockRequest, CreateBlockResponse]
+  implicit val createBlockBodyPair =
+    pair[CreateBlockBodyRequest, CreateBlockBodyResponse]
 
-  implicit val validateBlockPair =
-    pair[ValidateBlockRequest, ValidateBlockResponse]
+  implicit val validateBlockBodyPair =
+    pair[ValidateBlockBodyRequest, ValidateBlockBodyResponse]
 }
