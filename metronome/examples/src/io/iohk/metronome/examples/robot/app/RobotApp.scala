@@ -395,7 +395,7 @@ object RobotApp extends TaskApp {
     import RobotConsensusTracers._
     import RobotSyncTracers._
 
-    // Round-Robing is more predictable than Hashing.
+    // Round-Robin is more predictable than Hashing.
     implicit val leaderSelection = LeaderSelection.RoundRobin
 
     implicit val signing = new RobotSigning(genesis.hash)
@@ -423,8 +423,9 @@ object RobotApp extends TaskApp {
         }
       }
 
+      // Start from the next view number, so we aren't in Prepare state when it was, say, PreCommit before.
       protocolState = ProtocolState[RobotAgreement](
-        viewNumber = viewState.viewNumber,
+        viewNumber = viewState.viewNumber.next,
         phase = Phase.Prepare,
         publicKey = localNode.publicKey,
         signingKey = localNode.privateKey,
@@ -462,14 +463,17 @@ object RobotApp extends TaskApp {
   )(implicit storeRunner: KVStoreRunner[Task, NS]) =
     Concurrent[Task].background {
       val query: KVStore[NS, Unit] = for {
+        // Always keep the last executed block.
         lastExecutedBlock <- viewStateStorage.getLastExecutedBlockHash.lift
         pathFromRoot      <- blockStorage.getPathFromRoot(lastExecutedBlock).lift
 
+        // Keep the last N blocks.
         pruneable = pathFromRoot.reverse
           .drop(config.db.blockHistorySize)
           .reverse
 
-        _ <- pruneable.headOption match {
+        // Make the last pruneable block the new root.
+        _ <- pruneable.lastOption match {
           case Some(newRoot) =>
             blockStorage.pruneNonDescendants(newRoot) >>
               viewStateStorage.setRootBlockHash(newRoot)
