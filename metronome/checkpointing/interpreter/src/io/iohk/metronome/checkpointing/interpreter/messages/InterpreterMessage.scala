@@ -64,7 +64,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     * leader after an idle round (agreeing on an empty block),
     * without incurring a full timeout.
     *
-    * The reason the mempool has to be sent to the interpreter
+    * The reason the mempool has to be sent to the Interpreter
     * and not just appended to the block, with a potential
     * checkpoint at the end, is because the checkpoint empties
     * the Ledger, and the Service has no way of knowing whether
@@ -76,6 +76,15 @@ object InterpreterMessage extends RPCMessageCompanion {
     *
     * The mempool will be eventually cleared by the Service as
     * blocks are executed, based on what transactions they have.
+    *
+    * Another reason the ledger and mempool are sent and not
+    * handled inside the Interpreter alone is because the Service
+    * can project the correct values based on what (potentially
+    * uncommitted) parent block it's currently trying to extends,
+    * by updating the last stable ledger and filtering the mempool
+    * based on the blocks in the tentative branch. The Interpreter
+    * doesn't have access to the block history, so it couldn't do
+    * the same on its own.
     */
   case class CreateBlockRequest(
       requestId: RequestId,
