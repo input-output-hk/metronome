@@ -9,7 +9,7 @@ import io.iohk.metronome.checkpointing.models.{
 }
 
 /** Messages exchanged between the Checkpointing Service
-  * and the Checkpointing Interpreter.
+  * and the local Checkpointing Interpreter.
   */
 sealed trait InterpreterMessage { self: RPCMessage => }
 
@@ -31,7 +31,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     */
   case class NewProposerBlockRequest(
       requestId: RequestId,
-      block: Transaction.ProposerBlock
+      proposerBlock: Transaction.ProposerBlock
   ) extends InterpreterMessage
       with Request
       with FromInterpreter
@@ -40,17 +40,12 @@ object InterpreterMessage extends RPCMessageCompanion {
   /** The Interpreter signals to the Service that it can
     * potentially produce a new checkpoint candidate in
     * the next view when the replica becomes leader.
-    * In that round, the Service should send a
-    * `GetCheckpointCandidateRequest`.
     *
-    * This is an optimisation, so we don't send the `Ledger` in
-    * futile attempts when there's no chance for a candidate to
-    * be produced.
+    * In that round, the Service should send a `CreateBlockRequest`.
     *
-    * It is also a way for the Service to remember where
-    * in the mempoool a checkpoint can be added, before
-    * adding more proposer events that aren't perhaps
-    * visible to the checkpoint.
+    * This is a potential optimization, so we don't send the `Ledger`
+    * in futile attempts when there's no chance for a block to
+    * be produced when there have been no events.
     */
   case class NewCheckpointCandidateRequest(
       requestId: RequestId
@@ -60,16 +55,32 @@ object InterpreterMessage extends RPCMessageCompanion {
       with NoResponse
 
   /** When it becomes a leader of a view, the Service asks
-    * the Interpreter to produce a new checkpoint candidate,
-    * given the current state of the ledger.
+    * the Interpreter to produce a new block body, populating
+    * it with transactions in the correct order, based on
+    * the current ledger and the mempool.
     *
-    * A response is expected even when there's no candidate
-    * to put in a block, so that we can move on to the next
-    * leader after an idle round, but without a timeout.
+    * A response is expected even when there are no transactions
+    * to be put in a block, so that we can move on to the next
+    * leader after an idle round (agreeing on an empty block),
+    * without incurring a full timeout.
+    *
+    * The reason the mempool has to be sent to the interpreter
+    * and not just appended to the block, with a potential
+    * checkpoint at the end, is because the checkpoint empties
+    * the Ledger, and the Service has no way of knowing whether
+    * all proposer blocks have been rightly checkpointed. The
+    * Interpreter, on the other hand, can put the checkpoint
+    * in the correct position in the block body, and make sure
+    * that proposer blocks which cannot be checkpointed yet are
+    * added in a trailing position.
+    *
+    * The mempool will be eventually cleared by the Service as
+    * blocks are executed, based on what transactions they have.
     */
-  case class GetCheckpointCandidateRequest(
+  case class CreateBlockRequest(
       requestId: RequestId,
-      ledger: Ledger
+      ledger: Ledger,
+      mempool: Seq[Transaction.ProposerBlock]
   ) extends InterpreterMessage
       with Request
       with FromService
@@ -78,12 +89,14 @@ object InterpreterMessage extends RPCMessageCompanion {
     * checkpoint candidate, depending on whether the conditions
     * are right (e.g. the next checkpointing height has been reached).
     *
-    * The response should contain `None` if we should just move on
-    * to the next leader, or `Some` if a block is to be prepared.
+    * The response should contain an empty block body if there is
+    * nothing to do, so the Service can either propose an empty block
+    * to keep everyone in sync, or just move to the next leader by
+    * other means.
     */
-  case class GetCheckpointCandidateResponse(
+  case class CreateBlockResponse(
       requestId: RequestId,
-      maybeCheckpointCandidate: Option[Transaction.CheckpointCandidate]
+      blockBody: Block.Body
   ) extends InterpreterMessage
       with Response
       with FromInterpreter
@@ -145,4 +158,10 @@ object InterpreterMessage extends RPCMessageCompanion {
       with Request
       with FromService
       with NoResponse
+
+  implicit val createBlockPair =
+    pair[CreateBlockRequest, CreateBlockResponse]
+
+  implicit val validateBlockPair =
+    pair[ValidateBlockRequest, ValidateBlockResponse]
 }
