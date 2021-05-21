@@ -12,7 +12,8 @@ trait ApplicationService[F[_], A <: Agreement] {
   def createBlock(highQC: QuorumCertificate[A]): F[Option[A#Block]]
 
   // TODO (PM-3132, PM-3133): Block validation.
-  def validateBlock(block: A#Block): F[Boolean]
+  // Returns None if validation cannot be carried out due to data availability issues within a given timeout.
+  def validateBlock(block: A#Block): F[Option[Boolean]]
 
   // TODO (PM-3135): Tell the application to sync any state of the block, i.e. the Ledger.
   // The `sources` are peers who most probably have this state.

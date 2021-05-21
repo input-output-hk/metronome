@@ -239,11 +239,14 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     blockSync.fiberMap.cancelQueue(sender) >>
       blockSync.fiberMap
         .submit(sender) {
-          for {
-            _       <- blockSync.synchronizer.sync(sender, prepare.highQC)
-            isValid <- appService.validateBlock(prepare.block)
-            _       <- syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
-          } yield ()
+          blockSync.synchronizer.sync(sender, prepare.highQC) >>
+            appService.validateBlock(prepare.block) >>= {
+            case Some(isValid) =>
+              syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
+            case None =>
+              // We didn't have data to decide validity in time; not responding.
+              ().pure[F]
+          }
         }
         .void
   }
