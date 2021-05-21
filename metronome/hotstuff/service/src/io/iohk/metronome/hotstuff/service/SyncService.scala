@@ -345,9 +345,11 @@ object SyncService {
     * in the background, shutting processing down when the resource is
     * released.
     */
-  def apply[F[
-      _
-  ]: Concurrent: ContextShift: Timer: Parallel, N, A <: Agreement: Block: Signing](
+  def apply[
+      F[_]: Concurrent: ContextShift: Timer: Parallel,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       publicKey: A#PKey,
       federation: Federation[A#PKey],
       network: Network[F, A, SyncMessage[A]],

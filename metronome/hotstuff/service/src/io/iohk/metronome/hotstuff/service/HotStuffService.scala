@@ -27,9 +27,11 @@ import io.iohk.metronome.storage.KVStoreRunner
 object HotStuffService {
 
   /** Start up the HotStuff service stack. */
-  def apply[F[
-      _
-  ]: Concurrent: ContextShift: Timer: Parallel, N, A <: Agreement: Block: Signing](
+  def apply[
+      F[_]: Concurrent: ContextShift: Timer: Parallel,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       network: Network[F, A, HotStuffMessage[A]],
       appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],

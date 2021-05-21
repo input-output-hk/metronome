@@ -35,9 +35,11 @@ import scala.util.control.NonFatal
   *
   * It handles the `consensus.basic.Message` events coming from the network.
   */
-class ConsensusService[F[
-    _
-]: Timer: Concurrent, N, A <: Agreement: Block: Signing](
+class ConsensusService[
+    F[_]: Timer: Concurrent,
+    N,
+    A <: Agreement: Block: Signing
+](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
     appService: ApplicationService[F, A],
@@ -540,9 +542,11 @@ object ConsensusService {
     * `initState` is expected to be restored from persistent storage
     * instances upon restart.
     */
-  def apply[F[
-      _
-  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block: Signing](
+  def apply[
+      F[_]: Timer: Concurrent: ContextShift,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       appService: ApplicationService[F, A],
@@ -578,9 +582,11 @@ object ConsensusService {
       _ <- Resource.liftF(service.scheduleEffects(initEffects))
     } yield service
 
-  private def build[F[
-      _
-  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block: Signing](
+  private def build[
+      F[_]: Timer: Concurrent: ContextShift,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
       appService: ApplicationService[F, A],
