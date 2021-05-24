@@ -58,6 +58,7 @@ import java.security.SecureRandom
 import scodec.Codec
 import scodec.bits.ByteVector
 import java.nio.file.Files
+import monix.execution.schedulers.SchedulerService
 
 /** Composition root for dependency injection.
   *
@@ -131,27 +132,30 @@ class RobotComposition {
       config: RobotConfig,
       opts: RobotOptions
   ) = {
-    implicit val scheduler = Scheduler.io("scalanet")
-
     val localNode = config.network.nodes(opts.nodeIndex)
+    for {
+      implicit0(scheduler: SchedulerService) <- Resource.make(
+        Task(Scheduler.io("scalanet"))
+      )(scheduler => Task(scheduler.shutdown()))
 
-    ScalanetConnectionProvider[
-      Task,
-      ECPublicKey,
-      NetworkMessage
-    ](
-      bindAddress = localNode.address,
-      nodeKeyPair = ECKeyPair(localNode.privateKey, localNode.publicKey),
-      new SecureRandom(),
-      useNativeTlsImplementation = true,
-      framingConfig = DynamicTLSPeerGroup.FramingConfig
-        .buildStandardFrameConfig(
-          maxFrameLength = 1024 * 1024,
-          lengthFieldLength = 8
-        )
-        .fold(e => sys.error(e.description), identity),
-      maxIncomingQueueSizePerPeer = 100
-    )
+      connectionProvider <- ScalanetConnectionProvider[
+        Task,
+        ECPublicKey,
+        NetworkMessage
+      ](
+        bindAddress = localNode.address,
+        nodeKeyPair = ECKeyPair(localNode.privateKey, localNode.publicKey),
+        new SecureRandom(),
+        useNativeTlsImplementation = true,
+        framingConfig = DynamicTLSPeerGroup.FramingConfig
+          .buildStandardFrameConfig(
+            maxFrameLength = 1024 * 1024,
+            lengthFieldLength = 8
+          )
+          .fold(e => sys.error(e.description), identity),
+        maxIncomingQueueSizePerPeer = 100
+      )
+    } yield connectionProvider
   }
 
   protected def makeConnectionManager(
