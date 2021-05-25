@@ -18,7 +18,7 @@ import io.iohk.metronome.examples.robot.app.config.{
   RobotConfigParser,
   RobotOptions
 }
-import io.iohk.metronome.logging.{InMemoryLogTracer, HybridLog}
+import io.iohk.metronome.logging.{InMemoryLogTracer, HybridLog, HybridLogObject}
 import java.nio.file.Files
 import java.net.InetSocketAddress
 import monix.eval.Task
@@ -27,16 +27,18 @@ import monix.tail.Iterant
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.compatible.Assertion
 import scala.concurrent.duration._
+import org.scalatest.Inspectors
+import org.scalatest.matchers.should.Matchers
 
-class RobotCompositionSpec extends AnyFlatSpec {
-  import RobotCompositionSpec.Fixture
+class RobotCompositionSpec extends AnyFlatSpec with Matchers {
+  import RobotCompositionSpec._
 
   def test(fixture: Fixture): Assertion = {
     implicit val scheduler = fixture.scheduler
 
     // Without an extra delay, the `TestScheduler` executes tasks immediately.
-    val fut = fixture.resources.use { _ =>
-      fixture.test.delayExecution(0.second)
+    val fut = fixture.resources.use { envs =>
+      fixture.test(envs).delayExecution(0.second)
     }.runToFuture
 
     scheduler.tick(fixture.duration)
@@ -49,25 +51,36 @@ class RobotCompositionSpec extends AnyFlatSpec {
   it should "compose components that can run and stay in sync" in test {
     new Fixture(10.minutes) {
       // Wait with the test result to keep the resources working.
-      override val test =
-        Task(succeed).delayResult(duration - 1.minute)
+      override def test(envs: List[Env]) =
+        for {
+          _    <- Task.sleep(duration - 1.minute)
+          logs <- envs.traverse(_.logTracer.getLogs)
+        } yield {
+          Inspectors.forAll(logs) { logs =>
+            // Networking isn't yet implemented, so it should just warn about timeouts.
+            logs.count(_.level == HybridLogObject.Level.Warn) should be > 0
+          }
+        }
     }
   }
 }
 
 object RobotCompositionSpec {
+
+  /** Things we may want to access in tests. */
+  case class Env(
+      logTracer: InMemoryLogTracer.HybridLogTracer[Task]
+  )
+
   abstract class Fixture(val duration: FiniteDuration)
       extends RobotComposition {
 
     /** Override to implement the test. */
-    def test: Task[Assertion]
+    def test(envs: List[Env]): Task[Assertion]
 
     val scheduler = TestScheduler()
 
-    // TODO: Separate builder and trace for each node.
-    val logTracer = InMemoryLogTracer.hybrid[Task]
-
-    def config: Resource[Task, RobotConfig] = {
+    val config: Resource[Task, RobotConfig] =
       for {
         defaultConfig <- Resource.liftF {
           Task.fromEither {
@@ -102,15 +115,25 @@ object RobotCompositionSpec {
           )
         )
       } yield config
-    }
 
-    def resources = for {
-      config <- config
-      nodes <- (0 until config.network.nodes.size).toList.map { i =>
-        val opts = RobotOptions(nodeIndex = i)
-        compose(opts, config)
-      }.sequence
-    } yield ()
+    val resources =
+      for {
+        config <- config
+        nodeEnvs <- (0 until config.network.nodes.size).toList.map { i =>
+          val opts = RobotOptions(nodeIndex = i)
+          val comp = makeComposition(scheduler)
+          val env  = Env(comp.logTracer)
+          comp.compose(opts, config).as(env)
+        }.sequence
+      } yield nodeEnvs
+
+    def makeComposition(scheduler: TestScheduler) =
+      new TestComposition(scheduler)
+  }
+
+  // Every node has its own composer, so we can track logs separately.
+  class TestComposition(scheduler: TestScheduler) extends RobotComposition {
+    val logTracer = InMemoryLogTracer.hybrid[Task]
 
     private def makeLogTracer[T: HybridLog] =
       InMemoryLogTracer.hybrid[Task, T](logTracer)
