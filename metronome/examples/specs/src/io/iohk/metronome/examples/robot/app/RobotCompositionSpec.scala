@@ -46,6 +46,17 @@ class RobotCompositionSpec extends AnyFlatSpec with Matchers {
     fut.value.getOrElse(sys.error("The test hasn't finished")).get
   }
 
+  def printLogs(logs: List[Seq[HybridLogObject]]): Unit = {
+    logs.zipWithIndex
+      .flatMap { case (logs, i) =>
+        logs.map(log => (i, log))
+      }
+      .sortBy(_._2.timestamp)
+      .foreach { case (i, log) =>
+        println(s"node-$i: ${log.show}")
+      }
+  }
+
   behavior of "RobotComposition"
 
   it should "compose components that can run and stay in sync" in test {
