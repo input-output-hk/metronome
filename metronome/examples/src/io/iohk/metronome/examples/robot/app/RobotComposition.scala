@@ -64,7 +64,7 @@ import monix.execution.schedulers.SchedulerService
   *
   * We can subclass it in integration tests to provide mocks where appropriate.
   */
-class RobotComposition {
+trait RobotComposition {
   import RobotCodecs._
 
   type NetworkMessage = DuplexMessage[RobotAgreement, RobotMessage]
@@ -445,3 +445,5 @@ class RobotComposition {
         .foreverM
     }
 }
+
+object RobotComposition extends RobotComposition

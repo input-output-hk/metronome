@@ -28,7 +28,7 @@ object RobotApp extends TaskApp {
   }
 
   def run(opts: RobotOptions, config: RobotConfig): Task[ExitCode] =
-    new RobotComposition()
+    RobotComposition
       .compose(opts, config)
       .use(_ => Task.never.as(ExitCode.Success))
 
