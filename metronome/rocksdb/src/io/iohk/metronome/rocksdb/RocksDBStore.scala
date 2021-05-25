@@ -286,7 +286,8 @@ object RocksDBStore {
 
   def apply[F[_]: Sync: ContextShift](
       config: Config,
-      namespaces: Seq[Namespace]
+      namespaces: Seq[Namespace],
+      blocker: Blocker
   ): Resource[F, RocksDBStore[F]] = {
 
     @nowarn // JavaConverters are deprecated in 2.13
@@ -368,9 +369,6 @@ object RocksDBStore {
         "Should have created a column family handle for each namespace." +
           s" Expected ${allNamespaces.size}; got ${columnFamilyHandleBuffer.size}."
       )
-
-      // Use a cached thread pool for blocking on locks and IO.
-      blocker <- Blocker[F]
 
       store = new RocksDBStore[F](
         new DBSupport(db, readOpts, writeOptions),

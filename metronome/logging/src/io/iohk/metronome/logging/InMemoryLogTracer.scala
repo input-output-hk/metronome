@@ -26,14 +26,16 @@ object InMemoryLogTracer {
     def getInfos  = getLevel(HybridLogObject.Level.Info)
     def getDebugs = getLevel(HybridLogObject.Level.Debug)
     def getTraces = getLevel(HybridLogObject.Level.Trace)
+
+    def clear: F[Unit] = logRef.set(Vector.empty)
   }
 
   /** For example:
     *
     * ```
     * val logTracer = InMemoryLogTracer.hybrid[Task]
-    * val networkEventTracer   = logTracer.contramap(implicitly[HybridLog[NetworkEvent]].apply _)
-    * val consensusEventTracer = logTracer.contramap(implicitly[HybridLog[ConsensusEvent]].apply _)
+    * val networkEventTracer   = InMemoryLogTracer.hybrid[Task, NetworkEvent](logTracer)
+    * val consensusEventTracer = InMemoryLogTracer.hybrid[Task, ConsensusEvent](logTracer)
     *
     * val test = for {
     *   msg   <- network.nextMessage
@@ -45,6 +47,11 @@ object InMemoryLogTracer {
     *
     * ```
     */
-  def hybrid[F[_]: Sync]: Tracer[F, HybridLogObject] =
+  def hybrid[F[_]: Sync]: HybridLogTracer[F] =
     new HybridLogTracer[F](Ref.unsafe[F, Vector[HybridLogObject]](Vector.empty))
+
+  def hybrid[F[_]: Sync, T: HybridLog](
+      tracer: HybridLogTracer[F]
+  ): Tracer[F, T] =
+    tracer.contramap(implicitly[HybridLog[T]].apply _)
 }

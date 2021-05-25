@@ -1,14 +1,13 @@
 package io.iohk.metronome.examples.robot.app.tracing
 
 import monix.eval.Task
-import io.iohk.metronome.examples.robot.RobotAgreement
-import io.iohk.metronome.hotstuff.service.tracing.{SyncEvent, SyncTracers}
-import io.iohk.metronome.tracer.Tracer
-import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
-import io.circe.{Encoder, JsonObject, Json}
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.crypto.ECPublicKey
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import io.iohk.metronome.hotstuff.service.tracing.{SyncEvent, SyncTracers}
+import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
+import io.iohk.metronome.examples.robot.RobotAgreement
+import io.circe.{Encoder, JsonObject, Json}
 
 object RobotSyncTracers {
 
@@ -84,9 +83,9 @@ object RobotSyncTracers {
     )
   }
 
-  implicit val syncEventTracer: Tracer[Task, RobotSyncEvent] =
+  implicit val syncEventTracer =
     LogTracer.hybrid[Task, RobotSyncEvent]
 
-  implicit val syncTracers: SyncTracers[Task, RobotAgreement] =
+  implicit val syncTracers =
     SyncTracers(syncEventTracer)
 }

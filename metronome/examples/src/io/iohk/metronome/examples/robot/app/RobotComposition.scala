@@ -1,11 +1,15 @@
 package io.iohk.metronome.examples.robot.app
 
 import cats.implicits._
-import cats.effect.{Resource, Concurrent}
+import cats.effect.{Resource, Concurrent, Blocker}
 import monix.eval.Task
 import monix.execution.Scheduler
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey, GroupSignature}
 import io.iohk.metronome.crypto.hash.Hash
+import io.iohk.metronome.hotstuff.service.tracing.{
+  ConsensusTracers,
+  SyncTracers
+}
 import io.iohk.metronome.hotstuff.consensus.{
   Federation,
   LeaderSelection,
@@ -21,15 +25,16 @@ import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
 }
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
+}
 import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
   ScalanetConnectionProvider,
   RemoteConnectionManager,
+  NetworkTracers,
   Network
-}
-import io.iohk.metronome.hotstuff.service.storage.{
-  BlockStorage,
-  ViewStateStorage
 }
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.codecs.RobotCodecs
@@ -48,15 +53,14 @@ import io.iohk.metronome.storage.{
   KVStoreRead,
   KVStore,
   KVCollection,
-  KVRingBuffer
+  KVRingBuffer,
+  KVTree
 }
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
 import java.security.SecureRandom
 import scodec.Codec
 import scodec.bits.ByteVector
 import java.nio.file.Files
-import monix.execution.schedulers.SchedulerService
-import io.iohk.metronome.storage.KVTree
 
 /** Composition root for dependency injection.
   *
@@ -65,9 +69,17 @@ import io.iohk.metronome.storage.KVTree
 trait RobotComposition {
   import RobotCodecs._
 
-  type NetworkMessage = DuplexMessage[RobotAgreement, RobotMessage]
+  type NetworkMessage =
+    DuplexMessage[RobotAgreement, RobotMessage]
+
+  type ConnectionManager =
+    RemoteConnectionManager[Task, ECPublicKey, NetworkMessage]
 
   type NS = RocksDBStore.Namespace
+
+  type NTS = NetworkTracers[Task, ECPublicKey, NetworkMessage]
+  type CTS = ConsensusTracers[Task, RobotAgreement]
+  type STS = SyncTracers[Task, RobotAgreement]
 
   def compose(
       opts: RobotOptions,
@@ -90,9 +102,13 @@ trait RobotComposition {
       command = Robot.Command.Rest
     )
 
+    implicit val networkTracers: NTS  = makeNetworkTracers
+    implicit val consesusTracers: CTS = makeConsensusTracers
+    implicit val syncTracers: STS     = makeSyncTracers
+
     for {
-      connectionProvider <- makeConnectionProvider(config, opts)
-      connectionManager  <- makeConnectionManager(config, connectionProvider)
+
+      connectionManager <- makeConnectionManager(config, opts)
 
       (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
 
@@ -127,13 +143,22 @@ trait RobotComposition {
     } yield ()
   }
 
+  protected def makeNetworkTracers =
+    RobotNetworkTracers.networkTracers
+
+  protected def makeConsensusTracers =
+    RobotConsensusTracers.consensusTracers
+
+  protected def makeSyncTracers =
+    RobotSyncTracers.syncTracers
+
   protected def makeConnectionProvider(
       config: RobotConfig,
       opts: RobotOptions
   ) = {
     val localNode = config.network.nodes(opts.nodeIndex)
     for {
-      implicit0(scheduler: SchedulerService) <- Resource.make(
+      implicit0(scheduler: Scheduler) <- Resource.make(
         Task(Scheduler.io("scalanet"))
       )(scheduler => Task(scheduler.shutdown()))
 
@@ -164,8 +189,9 @@ trait RobotComposition {
         ECPublicKey,
         NetworkMessage
       ]
-  ) = {
-    import RobotNetworkTracers.networkTracers
+  )(implicit
+      networkTracers: NTS
+  ): Resource[Task, ConnectionManager] = {
 
     val clusterConfig = RemoteConnectionManager.ClusterConfig(
       clusterNodes = config.network.nodes.map { node =>
@@ -181,6 +207,17 @@ trait RobotComposition {
     ](connectionProvider, clusterConfig, retryConfig)
   }
 
+  protected def makeConnectionManager(
+      config: RobotConfig,
+      opts: RobotOptions
+  )(implicit
+      networkTracers: NTS
+  ): Resource[Task, ConnectionManager] =
+    for {
+      connectionProvider <- makeConnectionProvider(config, opts)
+      connectionManager  <- makeConnectionManager(config, connectionProvider)
+    } yield connectionManager
+
   protected def makeRocksDBStore(
       config: RobotConfig,
       opts: RobotOptions
@@ -188,13 +225,19 @@ trait RobotComposition {
     val dbConfig = RocksDBStore.Config.default(
       config.db.path.resolve(opts.nodeIndex.toString)
     )
-    Resource.liftF {
-      Task {
-        Files.createDirectories(dbConfig.path)
+    for {
+      dir <- Resource.liftF {
+        Task {
+          Files.createDirectories(dbConfig.path)
+        }
       }
-    } >>
-      RocksDBStore[Task](dbConfig, RobotNamespaces.all)
+      blocker <- makeDBBlocker
+      db      <- RocksDBStore[Task](dbConfig, RobotNamespaces.all, blocker)
+    } yield db
   }
+
+  protected def makeDBBlocker =
+    Blocker[Task]
 
   protected def makeKVStoreRunner(
       db: RocksDBStore[Task]
@@ -346,15 +389,13 @@ trait RobotComposition {
       blockStorage: BlockStorage[NS, RobotAgreement],
       viewStateStorage: ViewStateStorage[NS, RobotAgreement]
   )(implicit
-      storeRunner: KVStoreRunner[Task, NS]
+      storeRunner: KVStoreRunner[Task, NS],
+      consensusTracers: CTS,
+      syncTracers: STS
   ) = {
-    import RobotConsensusTracers._
-    import RobotSyncTracers._
-
     // Round-Robin is more predictable than Hashing.
     implicit val leaderSelection = LeaderSelection.RoundRobin
-
-    implicit val signing = new RobotSigning(genesis.hash)
+    implicit val signing         = new RobotSigning(genesis.hash)
 
     val localNode = config.network.nodes(opts.nodeIndex)
 

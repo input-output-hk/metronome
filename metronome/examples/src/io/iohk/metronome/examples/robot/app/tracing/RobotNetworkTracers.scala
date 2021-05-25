@@ -5,7 +5,6 @@ import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.hotstuff.service.messages.DuplexMessage
 import io.iohk.metronome.networking.{NetworkTracers, NetworkEvent}
-import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.circe.{Encoder, JsonObject}
 
@@ -56,10 +55,9 @@ object RobotNetworkTracers {
     )
   }
 
-  implicit val networkEventTracer: Tracer[Task, RobotNetworkEvent] =
+  implicit val networkEventTracer =
     LogTracer.hybrid[Task, RobotNetworkEvent]
 
-  implicit val networkTracers
-      : NetworkTracers[Task, RobotAgreement.PKey, RobotNetworkMessage] =
+  implicit val networkTracers =
     NetworkTracers(networkEventTracer)
 }
