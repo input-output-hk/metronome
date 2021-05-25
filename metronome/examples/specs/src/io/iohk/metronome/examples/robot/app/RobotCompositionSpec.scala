@@ -136,6 +136,9 @@ object RobotCompositionSpec {
           val env  = Env(comp.logTracer)
           comp.compose(opts, config).as(env)
         }.sequence
+        _ <- Resource.pure[Task, Unit](()).onFinalize {
+          nodeEnvs.traverse(_.logTracer.clear).void
+        }
       } yield nodeEnvs
 
     def makeComposition(scheduler: TestScheduler) =
@@ -144,6 +147,11 @@ object RobotCompositionSpec {
 
   // Every node has its own composer, so we can track logs separately.
   class TestComposition(scheduler: TestScheduler) extends RobotComposition {
+
+    /** Class level log collector.
+      *
+      * If the composer is reused, this should be cleared between tests.
+      */
     val logTracer = InMemoryLogTracer.hybrid[Task]
 
     private def makeLogTracer[T: HybridLog] =
