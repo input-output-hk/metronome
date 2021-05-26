@@ -3,12 +3,7 @@ package io.iohk.metronome.examples.robot.app
 import cats.implicits._
 import cats.effect.{Blocker, Resource}
 import cats.effect.concurrent.Ref
-import io.iohk.metronome.crypto.ECPublicKey
-import io.iohk.metronome.networking.{
-  RemoteConnectionManager,
-  ConnectionHandler,
-  NetworkTracers
-}
+import io.iohk.metronome.networking.NetworkTracers
 import io.iohk.metronome.hotstuff.service.tracing.{
   ConsensusTracers,
   SyncTracers
@@ -17,10 +12,8 @@ import io.iohk.metronome.examples.robot.app.tracing._
 import io.iohk.metronome.examples.robot.app.config.{RobotConfig, RobotOptions}
 import io.iohk.metronome.logging.{InMemoryLogTracer, HybridLog}
 import io.iohk.metronome.tracer.Tracer
-import java.net.InetSocketAddress
 import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
-import monix.tail.Iterant
 
 /** Test composition where we can override the default componetns
   *
@@ -81,41 +74,12 @@ class RobotTestComposition(scheduler: TestScheduler) extends RobotComposition {
   override protected def makeDBBlocker =
     Resource.pure[Task, Blocker](Blocker.liftExecutionContext(scheduler))
 
-  // TODO: Simulate a network.
-  // NOTE: We cannot use a real network with the `TestScheduler`.
   override protected def makeConnectionManager(
       config: RobotConfig,
       opts: RobotOptions
   )(implicit
       networkTracers: NTS
-  ) = Resource.pure[Task, ConnectionManager] {
-    val localNode = config.network.nodes(opts.nodeIndex)
-
-    new RemoteConnectionManager[Task, ECPublicKey, NetworkMessage] {
-      override val getLocalPeerInfo: (ECPublicKey, InetSocketAddress) =
-        (
-          localNode.publicKey,
-          new InetSocketAddress(localNode.host, localNode.port)
-        )
-
-      override def getAcquiredConnections: Task[Set[ECPublicKey]] = Task {
-        config.network.nodes.map(_.publicKey).toSet - localNode.publicKey
-      }
-
-      override def incomingMessages: Iterant[
-        Task,
-        ConnectionHandler.MessageReceived[ECPublicKey, NetworkMessage]
-      ] = Iterant.never
-
-      override def sendMessage(
-          recipient: ECPublicKey,
-          message: NetworkMessage
-      ): Task[Either[ConnectionHandler.ConnectionAlreadyClosedException[
-        ECPublicKey
-      ], Unit]] = Task.now(Right(()))
-
-    }
-  }
+  ) = RobotTestConnectionManager(config, opts)
 }
 
 object RobotTestComposition {
