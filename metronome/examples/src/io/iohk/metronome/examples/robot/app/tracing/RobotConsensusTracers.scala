@@ -120,9 +120,9 @@ object RobotConsensusTracers {
     )
   }
 
-  implicit val consensusEventTracer =
+  implicit val consensusEventHybridLogTracer =
     LogTracer.hybrid[Task, RobotConsensusEvent]
 
-  implicit val consensusTracers =
-    ConsensusTracers(consensusEventTracer)
+  implicit val consensusHybridLogTracers =
+    ConsensusTracers(consensusEventHybridLogTracer)
 }

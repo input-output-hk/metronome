@@ -83,9 +83,9 @@ object RobotSyncTracers {
     )
   }
 
-  implicit val syncEventTracer =
+  implicit val syncEventHybridLogTracer =
     LogTracer.hybrid[Task, RobotSyncEvent]
 
-  implicit val syncTracers =
-    SyncTracers(syncEventTracer)
+  implicit val syncHybridLogTracers =
+    SyncTracers(syncEventHybridLogTracer)
 }

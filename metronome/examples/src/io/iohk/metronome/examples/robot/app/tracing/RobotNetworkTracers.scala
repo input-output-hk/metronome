@@ -55,9 +55,9 @@ object RobotNetworkTracers {
     )
   }
 
-  implicit val networkEventTracer =
+  implicit val networkEventHybridLogTracer =
     LogTracer.hybrid[Task, RobotNetworkEvent]
 
-  implicit val networkTracers =
-    NetworkTracers(networkEventTracer)
+  implicit val networkHybridLogTracers =
+    NetworkTracers(networkEventHybridLogTracer)
 }

@@ -2,6 +2,7 @@ package io.iohk.metronome.examples.robot.app
 
 import cats.implicits._
 import cats.effect.{Blocker, Resource}
+import cats.effect.concurrent.Ref
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey}
 import io.iohk.metronome.networking.{
   RemoteConnectionManager,
@@ -9,6 +10,7 @@ import io.iohk.metronome.networking.{
   NetworkTracers
 }
 import io.iohk.metronome.hotstuff.service.tracing.{
+  ConsensusEvent,
   ConsensusTracers,
   SyncTracers
 }
@@ -19,6 +21,7 @@ import io.iohk.metronome.examples.robot.app.config.{
   RobotOptions
 }
 import io.iohk.metronome.logging.{InMemoryLogTracer, HybridLog, HybridLogObject}
+import io.iohk.metronome.tracer.Tracer
 import java.nio.file.Files
 import java.net.InetSocketAddress
 import monix.eval.Task
@@ -29,6 +32,7 @@ import org.scalatest.compatible.Assertion
 import scala.concurrent.duration._
 import org.scalatest.Inspectors
 import org.scalatest.matchers.should.Matchers
+import scala.reflect.ClassTag
 
 class RobotCompositionSpec extends AnyFlatSpec with Matchers {
   import RobotCompositionSpec._
@@ -57,6 +61,11 @@ class RobotCompositionSpec extends AnyFlatSpec with Matchers {
       }
   }
 
+  def eventCount[A: ClassTag](events: Vector[_]): Int =
+    events.collect { case e: A =>
+      e
+    }.size
+
   behavior of "RobotComposition"
 
   it should "compose components that can run and stay in sync" in test {
@@ -64,12 +73,16 @@ class RobotCompositionSpec extends AnyFlatSpec with Matchers {
       // Wait with the test result to keep the resources working.
       override def test(envs: List[Env]) =
         for {
-          _    <- Task.sleep(duration - 1.minute)
-          logs <- envs.traverse(_.logTracer.getLogs)
+          _               <- Task.sleep(duration - 1.minute)
+          logs            <- envs.traverse(_.logTracer.getLogs)
+          consensusEvents <- envs.traverse(_.consensusEventTracer.getEvents)
+          syncEvents      <- envs.traverse(_.syncEventTracer.getEvents)
         } yield {
-          Inspectors.forAll(logs) { logs =>
+          // printLogs(logs)
+          Inspectors.forAll(consensusEvents) { events =>
             // Networking isn't yet implemented, so it should just warn about timeouts.
-            logs.count(_.level == HybridLogObject.Level.Warn) should be > 0
+            eventCount[ConsensusEvent.Timeout](events) should be > 0
+            eventCount[ConsensusEvent.Quorum[_]](events) shouldBe 0
           }
         }
     }
@@ -77,11 +90,33 @@ class RobotCompositionSpec extends AnyFlatSpec with Matchers {
 }
 
 object RobotCompositionSpec {
+  import RobotConsensusTracers.RobotConsensusEvent
+  import RobotSyncTracers.RobotSyncEvent
+
+  class EventTracer[A](eventLogRef: Ref[Task, Vector[A]])
+      extends Tracer[Task, A] {
+
+    override def apply(a: => A): Task[Unit] =
+      eventLogRef.update(_ :+ a)
+
+    val clear     = eventLogRef.set(Vector.empty)
+    val getEvents = eventLogRef.get
+  }
+  object EventTracer {
+    def apply[A] =
+      new EventTracer[A](Ref.unsafe[Task, Vector[A]](Vector.empty))
+  }
 
   /** Things we may want to access in tests. */
   case class Env(
-      logTracer: InMemoryLogTracer.HybridLogTracer[Task]
-  )
+      storages: TestComposition#Storages,
+      logTracer: InMemoryLogTracer.HybridLogTracer[Task],
+      consensusEventTracer: EventTracer[RobotConsensusEvent],
+      syncEventTracer: EventTracer[RobotSyncEvent]
+  ) {
+    val clear =
+      logTracer.clear >> consensusEventTracer.clear >> syncEventTracer.clear
+  }
 
   abstract class Fixture(val duration: FiniteDuration)
       extends RobotComposition {
@@ -130,14 +165,22 @@ object RobotCompositionSpec {
     val resources =
       for {
         config <- config
+
         nodeEnvs <- (0 until config.network.nodes.size).toList.map { i =>
           val opts = RobotOptions(nodeIndex = i)
           val comp = makeComposition(scheduler)
-          val env  = Env(comp.logTracer)
-          comp.compose(opts, config).as(env)
+          comp.compose(opts, config).map { storages =>
+            Env(
+              storages,
+              comp.logTracer,
+              comp.consensusEventTracer,
+              comp.syncEventTracer
+            )
+          }
         }.sequence
+
         _ <- Resource.pure[Task, Unit](()).onFinalize {
-          nodeEnvs.traverse(_.logTracer.clear).void
+          nodeEnvs.traverse(_.clear).void
         }
       } yield nodeEnvs
 
@@ -152,7 +195,9 @@ object RobotCompositionSpec {
       *
       * If the composer is reused, this should be cleared between tests.
       */
-    val logTracer = InMemoryLogTracer.hybrid[Task]
+    val logTracer            = InMemoryLogTracer.hybrid[Task]
+    val consensusEventTracer = EventTracer[RobotConsensusEvent]
+    val syncEventTracer      = EventTracer[RobotSyncEvent]
 
     private def makeLogTracer[T: HybridLog] =
       InMemoryLogTracer.hybrid[Task, T](logTracer)
@@ -164,12 +209,14 @@ object RobotCompositionSpec {
 
     override protected def makeConsensusTracers = {
       import RobotConsensusTracers._
-      ConsensusTracers(makeLogTracer[RobotConsensusEvent])
+      ConsensusTracers(
+        makeLogTracer[RobotConsensusEvent] |+| consensusEventTracer
+      )
     }
 
     override protected def makeSyncTracers = {
       import RobotSyncTracers._
-      SyncTracers(makeLogTracer[RobotSyncEvent])
+      SyncTracers(makeLogTracer[RobotSyncEvent] |+| syncEventTracer)
     }
 
     // Use the `TestScheduler` to block on queries, otherwise the test hangs.

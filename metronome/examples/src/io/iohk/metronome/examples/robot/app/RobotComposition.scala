@@ -81,10 +81,17 @@ trait RobotComposition {
   type CTS = ConsensusTracers[Task, RobotAgreement]
   type STS = SyncTracers[Task, RobotAgreement]
 
+  /** Storages to be returned so we can look at state in tests. */
+  case class Storages(
+      blockStorage: BlockStorage[NS, RobotAgreement],
+      viewStateStorage: ViewStateStorage[NS, RobotAgreement],
+      stateStorage: KVRingBuffer[NS, Hash, Robot.State]
+  )(implicit val storeRunner: KVStoreRunner[Task, NS])
+
   def compose(
       opts: RobotOptions,
       config: RobotConfig
-  ): Resource[Task, Unit] = {
+  ): Resource[Task, Storages] = {
 
     val genesisState = Robot
       .State(
@@ -140,17 +147,17 @@ trait RobotComposition {
 
       _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
 
-    } yield ()
+    } yield Storages(blockStorage, viewStateStorage, stateStorage)
   }
 
   protected def makeNetworkTracers =
-    RobotNetworkTracers.networkTracers
+    RobotNetworkTracers.networkHybridLogTracers
 
   protected def makeConsensusTracers =
-    RobotConsensusTracers.consensusTracers
+    RobotConsensusTracers.consensusHybridLogTracers
 
   protected def makeSyncTracers =
-    RobotSyncTracers.syncTracers
+    RobotSyncTracers.syncHybridLogTracers
 
   protected def makeConnectionProvider(
       config: RobotConfig,
