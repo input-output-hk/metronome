@@ -24,14 +24,14 @@ import org.scalatest.Inspectors
 /** Set up an in-memory federation with simulated network stack and elapsed time. */
 class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
   import RobotIntegrationSpec._
-  import RobotTestConnectionManager.{Delay, Loss}
+  import RobotTestConnectionManager.{Dispatcher, Delay, Loss}
 
   def test(fixture: Fixture): Assertion = {
     implicit val scheduler = fixture.scheduler
 
-    // Without an extra delay, the `TestScheduler` executes tasks immediately.
-    val fut = fixture.resources.use { envs =>
-      fixture.test(envs).delayExecution(0.second)
+    val fut = fixture.resources.use { case (dispatcher, envs) =>
+      // Without an extra delay, the `TestScheduler` executes tasks immediately.
+      fixture.test(dispatcher, envs).delayExecution(0.second)
     }.runToFuture
 
     scheduler.tick(fixture.duration)
@@ -58,10 +58,13 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
     // running flawlessly, so we should see consensus very quickly.
     new Fixture(
       1.minutes,
-      networkDelay = Delay(min = 50.millis, max = 1.second),
+      networkDelay = Delay(min = 50.millis, max = 500.millis),
       networkLoss = Loss(0.01)
     ) {
-      override def test(envs: List[RobotTestComposition.Env]) =
+      override def test(
+          dispatcher: Dispatcher,
+          envs: List[RobotTestComposition.Env]
+      ) =
         for {
           _    <- Task.sleep(duration - 5.seconds)
           logs <- envs.traverse(_.logTracer.getLogs)
@@ -110,11 +113,59 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
         }
     }
   }
+
+  it should "be able to sync when nodes go offline" in test {
+    // In this scenario, networking is disabled on all nodes in the
+    // beginning, then they are enabled one by one. By the end they
+    // should reconnect and sync with each other.
+    new Fixture(
+      360.seconds,
+      networkDelay = Delay(min = 50.millis, max = 500.millis)
+    ) {
+      override def test(
+          dispatcher: Dispatcher,
+          envs: List[RobotTestComposition.Env]
+      ) =
+        for {
+          keys <- dispatcher.connectionPublicKeys.map(_.toList)
+          _    <- keys.traverse(dispatcher.disable)
+          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(0))
+          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(1))
+          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(2))
+          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(3))
+          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(4))
+          // Let them sync now.
+          _    <- Task.sleep(250.seconds)
+          logs <- envs.traverse(_.logTracer.getLogs)
+
+          quourumCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.Quorum[RobotAgreement]]
+          )
+
+          adoptCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.AdoptView[RobotAgreement]]
+          )
+
+          viewNumbers <- envs.traverse { env =>
+            env.storages.storeRunner.runReadOnly {
+              env.storages.viewStateStorage.getBundle.map(_.viewNumber)
+            }
+          }
+        } yield {
+          //printLogs(logs)
+          all(quourumCounts) should be > 0
+          atLeast(1, adoptCounts) should be > 0
+          viewNumbers.distinct.size should be <= 2
+        }
+    }
+  }
 }
 
 object RobotIntegrationSpec {
 
-  import RobotTestConnectionManager.{Delay, Loss}
+  import RobotTestConnectionManager.{Delay, Loss, Dispatcher}
 
   abstract class Fixture(
       val duration: FiniteDuration,
@@ -123,7 +174,10 @@ object RobotIntegrationSpec {
   ) extends RobotComposition {
 
     /** Override to implement the test. */
-    def test(envs: List[RobotTestComposition.Env]): Task[Assertion]
+    def test(
+        dispatcher: Dispatcher,
+        envs: List[RobotTestComposition.Env]
+    ): Task[Assertion]
 
     val scheduler = TestScheduler()
 
@@ -168,15 +222,15 @@ object RobotIntegrationSpec {
     val resources =
       for {
         config <- config
-        dispatcher <- Resource.liftF(
-          RobotTestConnectionManager.Dispatcher(networkDelay, networkLoss)
-        )
+        dispatcher <- Resource.liftF {
+          Dispatcher(networkDelay, networkLoss)
+        }
         nodeEnvs <- (0 until config.network.nodes.size).toList.map { i =>
           val opts = RobotOptions(nodeIndex = i)
           val comp = makeComposition(scheduler, dispatcher)
           comp.composeEnv(opts, config)
         }.sequence
-      } yield nodeEnvs
+      } yield (dispatcher, nodeEnvs)
 
     def makeComposition(
         scheduler: TestScheduler,

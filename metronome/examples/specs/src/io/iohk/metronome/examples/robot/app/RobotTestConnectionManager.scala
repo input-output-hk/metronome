@@ -79,20 +79,31 @@ object RobotTestConnectionManager {
     */
   class Dispatcher(
       connectionsRef: Ref[Task, Map[ECPublicKey, Connection]],
+      disabledRef: Ref[Task, Set[ECPublicKey]],
       delay: Delay,
       loss: Loss
   ) {
     val connectionPublicKeys =
       connectionsRef.get.map(_.values.map(_.getLocalPeerInfo._1).toSet)
 
-    def dispatch(from: ECPublicKey, to: ECPublicKey, message: NetworkMessage) =
-      connectionsRef.get.flatMap { connections =>
-        connections.get(to) match {
+    def dispatch(
+        from: ECPublicKey,
+        to: ECPublicKey,
+        message: NetworkMessage
+    ) = {
+      val alreadyClosed = ConnectionHandler
+        .ConnectionAlreadyClosedException(to)
+        .asLeft[Unit]
+        .pure[Task]
+      for {
+        connections <- connectionsRef.get
+        disabled    <- disabledRef.get
+        result <- connections.get(to) match {
+          case _ if disabled(to) || disabled(from) =>
+            alreadyClosed
+
           case None =>
-            ConnectionHandler
-              .ConnectionAlreadyClosedException(to)
-              .asLeft[Unit]
-              .pure[Task]
+            alreadyClosed
 
           case Some(_) if loss.next =>
             ().asRight[AlreadyClosed].pure[Task]
@@ -104,19 +115,27 @@ object RobotTestConnectionManager {
               .startAndForget
               .as(().asRight[AlreadyClosed])
         }
-      }
+      } yield result
+    }
 
     def add(connection: Connection) =
       connectionsRef.update(_ + (connection.getLocalPeerInfo._1 -> connection))
 
     def remove(connection: Connection) =
       connectionsRef.update(_ - connection.publicKey)
+
+    def disable(publicKey: ECPublicKey) =
+      disabledRef.update(_ + publicKey)
+
+    def enable(publicKey: ECPublicKey) =
+      disabledRef.update(_ - publicKey)
   }
   object Dispatcher {
     def apply(delay: Delay = Delay.Zero, loss: Loss = Loss.Zero) =
-      Ref
-        .of[Task, Map[ECPublicKey, Connection]](Map.empty)
-        .map(new Dispatcher(_, delay, loss))
+      for {
+        connectionsRef <- Ref.of[Task, Map[ECPublicKey, Connection]](Map.empty)
+        disabledRef    <- Ref.of[Task, Set[ECPublicKey]](Set.empty)
+      } yield new Dispatcher(connectionsRef, disabledRef, delay, loss)
   }
 
   case class Delay(min: FiniteDuration, max: FiniteDuration) {
