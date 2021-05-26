@@ -13,6 +13,8 @@ import java.net.InetSocketAddress
 import monix.eval.Task
 import monix.tail.Iterant
 import monix.catnap.ConcurrentQueue
+import scala.concurrent.duration._
+import scala.util.Random
 
 /** Mocked networking stack for integration tests.
   *
@@ -71,9 +73,14 @@ object RobotTestConnectionManager {
     ) = messageQueue.offer(ConnectionHandler.MessageReceived(from, message))
   }
 
-  /** Deliver messages to other nodes. */
+  /** Deliver messages to other nodes.
+    *
+    * Introduce delays and losses into the delivery.
+    */
   class Dispatcher(
-      connectionsRef: Ref[Task, Map[ECPublicKey, Connection]]
+      connectionsRef: Ref[Task, Map[ECPublicKey, Connection]],
+      delay: Delay,
+      loss: Loss
   ) {
     val connectionPublicKeys =
       connectionsRef.get.map(_.values.map(_.getLocalPeerInfo._1).toSet)
@@ -87,9 +94,14 @@ object RobotTestConnectionManager {
               .asLeft[Unit]
               .pure[Task]
 
+          case Some(_) if loss.next =>
+            ().asRight[AlreadyClosed].pure[Task]
+
           case Some(connection) =>
             connection
               .receiveMessage(from, message)
+              .delayExecution(delay.next)
+              .startAndForget
               .as(().asRight[AlreadyClosed])
         }
       }
@@ -101,10 +113,27 @@ object RobotTestConnectionManager {
       connectionsRef.update(_ - connection.publicKey)
   }
   object Dispatcher {
-    val empty =
+    def apply(delay: Delay = Delay.Zero, loss: Loss = Loss.Zero) =
       Ref
         .of[Task, Map[ECPublicKey, Connection]](Map.empty)
-        .map(new Dispatcher(_))
+        .map(new Dispatcher(_, delay, loss))
+  }
+
+  case class Delay(min: FiniteDuration, max: FiniteDuration) {
+    def next: FiniteDuration =
+      min + ((max.toMillis - min.toMillis) * Random.nextDouble()).millis
+  }
+  object Delay {
+    val Zero = Delay(Duration.Zero, Duration.Zero)
+  }
+
+  case class Loss(prob: Double) {
+
+    /** Return true if the next call should go lost. */
+    def next: Boolean = Random.nextDouble() < prob
+  }
+  object Loss {
+    val Zero = Loss(0)
   }
 
   /** Create a connection for the selected node and register with with the dispatcher. */

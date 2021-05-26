@@ -24,6 +24,7 @@ import org.scalatest.Inspectors
 /** Set up an in-memory federation with simulated network stack and elapsed time. */
 class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
   import RobotIntegrationSpec._
+  import RobotTestConnectionManager.{Delay, Loss}
 
   def test(fixture: Fixture): Assertion = {
     implicit val scheduler = fixture.scheduler
@@ -50,12 +51,16 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
       }
   }
 
-  behavior of "Robot Integration"
+  behavior of "RobotAgreement"
 
   it should "compose components that can run and stay in sync" in test {
     // This is a happy scenario, all nodes starting at the same time and
     // running flawlessly, so we should see consensus very quickly.
-    new Fixture(1.minutes) {
+    new Fixture(
+      1.minutes,
+      networkDelay = Delay(min = 50.millis, max = 1.second),
+      networkLoss = Loss(0.01)
+    ) {
       override def test(envs: List[RobotTestComposition.Env]) =
         for {
           _    <- Task.sleep(duration - 5.seconds)
@@ -109,8 +114,13 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
 
 object RobotIntegrationSpec {
 
-  abstract class Fixture(val duration: FiniteDuration)
-      extends RobotComposition {
+  import RobotTestConnectionManager.{Delay, Loss}
+
+  abstract class Fixture(
+      val duration: FiniteDuration,
+      networkDelay: Delay = Delay.Zero,
+      networkLoss: Loss = Loss.Zero
+  ) extends RobotComposition {
 
     /** Override to implement the test. */
     def test(envs: List[RobotTestComposition.Env]): Task[Assertion]
@@ -159,7 +169,7 @@ object RobotIntegrationSpec {
       for {
         config <- config
         dispatcher <- Resource.liftF(
-          RobotTestConnectionManager.Dispatcher.empty
+          RobotTestConnectionManager.Dispatcher(networkDelay, networkLoss)
         )
         nodeEnvs <- (0 until config.network.nodes.size).toList.map { i =>
           val opts = RobotOptions(nodeIndex = i)
