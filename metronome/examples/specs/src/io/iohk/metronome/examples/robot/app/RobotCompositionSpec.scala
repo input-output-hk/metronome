@@ -4,6 +4,7 @@ import cats.implicits._
 import cats.effect.Resource
 import io.iohk.metronome.crypto.ECKeyPair
 import io.iohk.metronome.hotstuff.service.tracing.ConsensusEvent
+import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.app.config.{
   RobotConfig,
   RobotConfigParser,
@@ -16,9 +17,7 @@ import monix.execution.schedulers.TestScheduler
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.compatible.Assertion
 import scala.concurrent.duration._
-import org.scalatest.Inspectors
 import org.scalatest.matchers.should.Matchers
-import scala.reflect.ClassTag
 
 /** Set up an in-memory federation with simulated network stack and elapsed time. */
 class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
@@ -49,29 +48,29 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
       }
   }
 
-  def eventCount[A: ClassTag](events: Vector[_]): Int =
-    events.collect { case e: A =>
-      e
-    }.size
-
-  behavior of "RobotComposition"
+  behavior of "Robot Integration"
 
   it should "compose components that can run and stay in sync" in test {
-    new Fixture(10.minutes) {
-      // Wait with the test result to keep the resources working.
+    // This is a happy scenario, all nodes starting at the same time and
+    // running flawlessly, so we should see consensus very quickly.
+    new Fixture(1.minutes) {
       override def test(envs: List[RobotTestComposition.Env]) =
         for {
-          _               <- Task.sleep(duration - 1.minute)
-          logs            <- envs.traverse(_.logTracer.getLogs)
-          consensusEvents <- envs.traverse(_.consensusEventTracer.getEvents)
-          syncEvents      <- envs.traverse(_.syncEventTracer.getEvents)
+          _    <- Task.sleep(duration - 5.seconds)
+          logs <- envs.traverse(_.logTracer.getLogs)
+          quourumCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.Quorum[RobotAgreement]]
+          )
+          blockCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.BlockExecuted[RobotAgreement]]
+          )
         } yield {
           // printLogs(logs)
-          Inspectors.forAll(consensusEvents) { events =>
-            // Networking isn't yet implemented, so it should just warn about timeouts.
-            eventCount[ConsensusEvent.Timeout](events) should be > 0
-            eventCount[ConsensusEvent.Quorum[_]](events) shouldBe 0
-          }
+          all(quourumCounts) should be > 0
+          all(blockCounts) should be > 0
+          all(blockCounts) should be >= (blockCounts.max * 0.9).toInt
         }
     }
   }
@@ -96,9 +95,11 @@ object RobotIntegrationSpec {
             )
           }
         }
-        // Use 5 nodes in integration testing.
-        rnd  = new java.security.SecureRandom()
-        keys = List.fill(5)(ECKeyPair.generate(rnd))
+        // Use 5 nodes in integration testing. Just generate new keys,
+        // ignore what's in the default configuration.
+        nodeCount = 5
+        rnd       = new java.security.SecureRandom()
+        keys      = List.fill(nodeCount)(ECKeyPair.generate(rnd))
 
         tmpdir <- Resource.liftF(Task {
           val tmp = Files.createTempDirectory("robot-testdb")
@@ -126,15 +127,20 @@ object RobotIntegrationSpec {
     val resources =
       for {
         config <- config
-
+        dispatcher <- Resource.liftF(
+          RobotTestConnectionManager.Dispatcher.empty
+        )
         nodeEnvs <- (0 until config.network.nodes.size).toList.map { i =>
           val opts = RobotOptions(nodeIndex = i)
-          val comp = makeComposition(scheduler)
+          val comp = makeComposition(scheduler, dispatcher)
           comp.composeEnv(opts, config)
         }.sequence
       } yield nodeEnvs
 
-    def makeComposition(scheduler: TestScheduler) =
-      new RobotTestComposition(scheduler)
+    def makeComposition(
+        scheduler: TestScheduler,
+        dispatcher: RobotTestConnectionManager.Dispatcher
+    ) =
+      new RobotTestComposition(scheduler, dispatcher)
   }
 }

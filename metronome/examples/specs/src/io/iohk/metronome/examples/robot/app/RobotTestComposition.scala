@@ -14,12 +14,16 @@ import io.iohk.metronome.logging.{InMemoryLogTracer, HybridLog}
 import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
+import scala.reflect.ClassTag
 
 /** Test composition where we can override the default componetns
   *
   * Every test node should have its own composer, so we can track logs separately.
   */
-class RobotTestComposition(scheduler: TestScheduler) extends RobotComposition {
+class RobotTestComposition(
+    scheduler: TestScheduler,
+    dispatcher: RobotTestConnectionManager.Dispatcher
+) extends RobotComposition {
   import RobotTestComposition._
   import RobotConsensusTracers.RobotConsensusEvent
   import RobotSyncTracers.RobotSyncEvent
@@ -79,7 +83,8 @@ class RobotTestComposition(scheduler: TestScheduler) extends RobotComposition {
       opts: RobotOptions
   )(implicit
       networkTracers: NTS
-  ) = RobotTestConnectionManager(config, opts)
+  ) =
+    RobotTestConnectionManager(config, opts, dispatcher)
 }
 
 object RobotTestComposition {
@@ -87,14 +92,21 @@ object RobotTestComposition {
   import RobotSyncTracers.RobotSyncEvent
 
   /** Collect events as they are. It's easier to pattern match than JSON logs. */
-  class EventTracer[A](eventLogRef: Ref[Task, Vector[A]])
+  class EventTracer[A](eventsRef: Ref[Task, Vector[A]])
       extends Tracer[Task, A] {
 
     override def apply(a: => A): Task[Unit] =
-      eventLogRef.update(_ :+ a)
+      eventsRef.update(_ :+ a)
 
-    val clear     = eventLogRef.set(Vector.empty)
-    val getEvents = eventLogRef.get
+    val clear     = eventsRef.set(Vector.empty)
+    val getEvents = eventsRef.get
+
+    def count[E <: A: ClassTag] =
+      eventsRef.get.map { events =>
+        events.collect { case e: E =>
+          e
+        }.size
+      }
   }
   object EventTracer {
     def apply[A] =
