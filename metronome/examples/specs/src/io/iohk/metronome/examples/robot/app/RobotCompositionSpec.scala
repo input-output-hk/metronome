@@ -129,11 +129,10 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
         for {
           keys <- dispatcher.connectionPublicKeys.map(_.toList)
           _    <- keys.traverse(dispatcher.disable)
-          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(0))
-          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(1))
-          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(2))
-          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(3))
-          _    <- Task.sleep(20.seconds) >> dispatcher.enable(keys(4))
+          // NOTE: keys.traverse doesn't seem to work with the TestScheduler and sleep.
+          _ <- keys.foldLeft(Task.unit) { case (task, key) =>
+            task >> Task.sleep(20.seconds) >> dispatcher.enable(key)
+          }
           // Let them sync now.
           _    <- Task.sleep(250.seconds)
           logs <- envs.traverse(_.logTracer.getLogs)
@@ -168,9 +167,13 @@ object RobotIntegrationSpec {
   import RobotTestConnectionManager.{Delay, Loss, Dispatcher}
 
   abstract class Fixture(
+      // Maximum time to run the simulated test for.
+      // There should be some `Task.sleep` in the `test` to let things unfold
+      // before making assertions, but altogether less sleep than `duration`.
       val duration: FiniteDuration,
       networkDelay: Delay = Delay.Zero,
-      networkLoss: Loss = Loss.Zero
+      networkLoss: Loss = Loss.Zero,
+      nodeCount: Int = 5
   ) extends RobotComposition {
 
     /** Override to implement the test. */
@@ -190,11 +193,9 @@ object RobotIntegrationSpec {
             )
           }
         }
-        // Use 5 nodes in integration testing. Just generate new keys,
-        // ignore what's in the default configuration.
-        nodeCount = 5
-        rnd       = new java.security.SecureRandom()
-        keys      = List.fill(nodeCount)(ECKeyPair.generate(rnd))
+        // Just generate new keys, ignore what's in the default configuration.
+        rnd  = new java.security.SecureRandom()
+        keys = List.fill(nodeCount)(ECKeyPair.generate(rnd))
 
         tmpdir <- Resource.liftF(Task {
           val tmp = Files.createTempDirectory("robot-testdb")

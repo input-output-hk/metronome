@@ -72,6 +72,23 @@ object RobotTestConnectionManager {
         message: NetworkMessage
     ) = messageQueue.offer(ConnectionHandler.MessageReceived(from, message))
   }
+  object Connection {
+
+    /** Create a connection for the selected node and register with with the dispatcher. */
+    def apply(
+        config: RobotConfig,
+        opts: RobotOptions,
+        dispatcher: Dispatcher
+    ): Resource[Task, Connection] =
+      Resource.make[Task, Connection] {
+        for {
+          messageQueue <- ConcurrentQueue.unbounded[Task, MessageReceived]()
+          localNode  = config.network.nodes(opts.nodeIndex)
+          connection = new Connection(dispatcher, localNode, messageQueue)
+          _ <- dispatcher.add(connection)
+        } yield connection
+      }(dispatcher.remove)
+  }
 
   /** Deliver messages to other nodes.
     *
@@ -84,7 +101,7 @@ object RobotTestConnectionManager {
       loss: Loss
   ) {
     val connectionPublicKeys =
-      connectionsRef.get.map(_.values.map(_.getLocalPeerInfo._1).toSet)
+      connectionsRef.get.map(_.keySet)
 
     def dispatch(
         from: ECPublicKey,
@@ -119,7 +136,7 @@ object RobotTestConnectionManager {
     }
 
     def add(connection: Connection) =
-      connectionsRef.update(_ + (connection.getLocalPeerInfo._1 -> connection))
+      connectionsRef.update(_ + (connection.publicKey -> connection))
 
     def remove(connection: Connection) =
       connectionsRef.update(_ - connection.publicKey)
@@ -154,19 +171,4 @@ object RobotTestConnectionManager {
   object Loss {
     val Zero = Loss(0)
   }
-
-  /** Create a connection for the selected node and register with with the dispatcher. */
-  def apply(
-      config: RobotConfig,
-      opts: RobotOptions,
-      dispatcher: Dispatcher
-  ): Resource[Task, Connection] =
-    Resource.make[Task, Connection] {
-      for {
-        messageQueue <- ConcurrentQueue.unbounded[Task, MessageReceived]()
-        localNode  = config.network.nodes(opts.nodeIndex)
-        connection = new Connection(dispatcher, localNode, messageQueue)
-        _ <- dispatcher.add(connection)
-      } yield connection
-    }(dispatcher.remove)
 }

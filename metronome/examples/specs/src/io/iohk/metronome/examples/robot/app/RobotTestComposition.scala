@@ -92,7 +92,7 @@ class RobotTestComposition(
   )(implicit
       networkTracers: NTS
   ) =
-    RobotTestConnectionManager(config, opts, dispatcher)
+    RobotTestConnectionManager.Connection(config, opts, dispatcher)
 }
 
 object RobotTestComposition {
