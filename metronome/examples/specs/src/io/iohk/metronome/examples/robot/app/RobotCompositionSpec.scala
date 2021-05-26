@@ -3,6 +3,7 @@ package io.iohk.metronome.examples.robot.app
 import cats.implicits._
 import cats.effect.Resource
 import io.iohk.metronome.crypto.ECKeyPair
+import io.iohk.metronome.hotstuff.consensus.basic.Phase
 import io.iohk.metronome.hotstuff.service.tracing.ConsensusEvent
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.app.config.{
@@ -18,9 +19,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.compatible.Assertion
 import scala.concurrent.duration._
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.Inspectors
 
 /** Set up an in-memory federation with simulated network stack and elapsed time. */
-class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
+class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
   import RobotIntegrationSpec._
 
   def test(fixture: Fixture): Assertion = {
@@ -58,6 +60,7 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
         for {
           _    <- Task.sleep(duration - 5.seconds)
           logs <- envs.traverse(_.logTracer.getLogs)
+
           quourumCounts <- envs.traverse(
             _.consensusEventTracer
               .count[ConsensusEvent.Quorum[RobotAgreement]]
@@ -66,11 +69,39 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
             _.consensusEventTracer
               .count[ConsensusEvent.BlockExecuted[RobotAgreement]]
           )
+
+          lastCommittedBlockHashes <- envs
+            .traverse { env =>
+              env.consensusEventTracer.getEvents.map { events =>
+                events.reverse.collectFirst {
+                  case ConsensusEvent.Quorum(qc) if qc.phase == Phase.Commit =>
+                    qc.blockHash
+                }
+              }
+            }
+            .map(_.flatten)
+
+          lastExecutedBlockHashes <- envs.traverse { env =>
+            env.storages.storeRunner.runReadOnly {
+              env.storages.viewStateStorage.getLastExecutedBlockHash
+            }
+          }
         } yield {
           // printLogs(logs)
           all(quourumCounts) should be > 0
           all(blockCounts) should be > 0
-          all(blockCounts) should be >= (blockCounts.max * 0.9).toInt
+          // Check that consensus is reasonably close on nodes.
+          lastExecutedBlockHashes.distinct.size should be <= 2
+          lastCommittedBlockHashes.distinct.size should be <= 2
+          // Hopefully someone has executed the last commit as well.
+          forAtLeast(
+            1,
+            lastCommittedBlockHashes
+          ) { lastCommittedBlockHash =>
+            lastExecutedBlockHashes.contains(
+              lastCommittedBlockHash
+            ) shouldBe true
+          }
         }
     }
   }

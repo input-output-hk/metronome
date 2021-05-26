@@ -10,6 +10,10 @@ import io.iohk.metronome.hotstuff.service.tracing.{
 }
 import io.iohk.metronome.examples.robot.app.tracing._
 import io.iohk.metronome.examples.robot.app.config.{RobotConfig, RobotOptions}
+import io.iohk.metronome.examples.robot.service.tracing.{
+  RobotEvent,
+  RobotTracers
+}
 import io.iohk.metronome.logging.{InMemoryLogTracer, HybridLog}
 import io.iohk.metronome.tracer.Tracer
 import monix.eval.Task
@@ -72,6 +76,10 @@ class RobotTestComposition(
   override protected def makeSyncTracers = {
     import RobotSyncTracers._
     SyncTracers(makeLogTracer[RobotSyncEvent] |+| syncEventTracer)
+  }
+
+  override protected def makeRobotTracers = {
+    RobotTracers(Tracer.noOpTracer[Task, RobotEvent])
   }
 
   // Use the `TestScheduler` to block on queries, otherwise the test hangs.

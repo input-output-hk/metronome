@@ -41,6 +41,10 @@ import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot, RobotSigning}
 import io.iohk.metronome.examples.robot.service.RobotService
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
+import io.iohk.metronome.examples.robot.service.tracing.{
+  RobotTracers,
+  RobotEvent
+}
 import io.iohk.metronome.examples.robot.app.config.{RobotConfig, RobotOptions}
 import io.iohk.metronome.examples.robot.app.tracing.{
   RobotNetworkTracers,
@@ -61,6 +65,7 @@ import java.security.SecureRandom
 import scodec.Codec
 import scodec.bits.ByteVector
 import java.nio.file.Files
+import io.iohk.metronome.tracer.Tracer
 
 /** Composition root for dependency injection.
   *
@@ -112,6 +117,7 @@ trait RobotComposition {
     implicit val networkTracers: NTS  = makeNetworkTracers
     implicit val consesusTracers: CTS = makeConsensusTracers
     implicit val syncTracers: STS     = makeSyncTracers
+    implicit val robotTracers         = makeRobotTracers
 
     for {
 
@@ -158,6 +164,17 @@ trait RobotComposition {
 
   protected def makeSyncTracers =
     RobotSyncTracers.syncHybridLogTracers
+
+  protected def makeRobotTracers = {
+    // TODO: Display the robot moving in the console: https://eed3si9n.com/console-games-in-scala
+    val robotEventTracer = Tracer.instance[Task, RobotEvent] {
+      case RobotEvent.Proposing(block) =>
+        Task(println(s"<<< PROPOSING COMMAND: ${block.command} >>>"))
+      case RobotEvent.NewState(state) =>
+        Task(println(s"\n<<< ROBOT: ${state} >>>\n"))
+    }
+    RobotTracers(robotEventTracer)
+  }
 
   protected def makeConnectionProvider(
       config: RobotConfig,
@@ -369,8 +386,9 @@ trait RobotComposition {
       viewStateStorage: ViewStateStorage[NS, RobotAgreement],
       stateStorage: KVRingBuffer[NS, Hash, Robot.State]
   )(implicit
-      storeRunner: KVStoreRunner[Task, NS]
-  ) =
+      storeRunner: KVStoreRunner[Task, NS],
+      tracers: RobotTracers[Task]
+  ) = {
     RobotService[Task, NS](
       maxRow = config.model.maxRow,
       maxCol = config.model.maxCol,
@@ -382,6 +400,7 @@ trait RobotComposition {
       simulatedDecisionTime = config.model.simulatedDecisionTime,
       timeout = config.network.timeout
     )
+  }
 
   protected def makeHotstuffService(
       config: RobotConfig,
