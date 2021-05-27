@@ -10,6 +10,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   ProtocolStateCommands,
   QuorumCertificate,
   Phase,
+  VotingPhase,
   Signing
 }
 import io.iohk.metronome.hotstuff.service.Status
@@ -117,53 +118,41 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       genesisQC: QuorumCertificate[TestAgreement]
   ): Gen[Responses] = {
 
-    def genPrepareQC(qc: QuorumCertificate[TestAgreement]) =
+    def genQC(
+        viewNumber: ViewNumber,
+        phase: VotingPhase,
+        blockHash: TestAgreement.Hash
+    ) =
       for {
         quorumKeys <- Gen
           .pick(federation.quorumSize, federation.publicKeys)
           .map(_.toVector)
-        blockHash <- genHash
-        viewNumber = qc.viewNumber.next
         partialSigs = quorumKeys.map { publicKey =>
           val signingKey = mockSigningKey(publicKey)
           Signing[TestAgreement].sign(
             signingKey,
-            Phase.Prepare,
+            phase,
             viewNumber,
             blockHash
           )
         }
         groupSig = mockSigning.combine(partialSigs)
       } yield QuorumCertificate[TestAgreement](
-        Phase.Prepare,
+        phase,
         viewNumber,
         blockHash,
         groupSig
       )
 
+    /** Extend a Q.C. by building a new block on top of it. */
+    def genPrepareQC(qc: QuorumCertificate[TestAgreement]) =
+      genHash.flatMap { blockHash =>
+        genQC(qc.viewNumber.next, Phase.Prepare, blockHash)
+      }
+
+    /** Extend a Q.C. by committing the block in it. */
     def genCommitQC(qc: QuorumCertificate[TestAgreement]) =
-      for {
-        quorumKeys <- Gen
-          .pick(federation.quorumSize, federation.publicKeys)
-          .map(_.toVector)
-        blockHash  = qc.blockHash
-        viewNumber = qc.viewNumber
-        partialSigs = quorumKeys.map { publicKey =>
-          val signingKey = mockSigningKey(publicKey)
-          Signing[TestAgreement].sign(
-            signingKey,
-            Phase.Commit,
-            viewNumber,
-            blockHash
-          )
-        }
-        groupSig = mockSigning.combine(partialSigs)
-      } yield QuorumCertificate[TestAgreement](
-        Phase.Commit,
-        viewNumber,
-        blockHash,
-        groupSig
-      )
+      genQC(qc.viewNumber, Phase.Commit, qc.blockHash)
 
     def genInvalid(status: Status[TestAgreement]) = {
       def delay(invalid: => Status[TestAgreement]) =
