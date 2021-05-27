@@ -10,6 +10,7 @@ import io.iohk.metronome.hotstuff.service.tracing.{
 }
 import io.iohk.metronome.examples.robot.app.tracing._
 import io.iohk.metronome.examples.robot.app.config.{RobotConfig, RobotOptions}
+import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 import io.iohk.metronome.examples.robot.service.tracing.{
   RobotEvent,
   RobotTracers
@@ -91,8 +92,10 @@ class RobotTestComposition(
       opts: RobotOptions
   )(implicit
       networkTracers: NTS
-  ) =
+  ) = {
+    import RobotCodecs.duplexMessageCodec
     RobotTestConnectionManager.Connection(config, opts, dispatcher)
+  }
 }
 
 object RobotTestComposition {

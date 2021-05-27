@@ -15,6 +15,8 @@ import monix.tail.Iterant
 import monix.catnap.ConcurrentQueue
 import scala.concurrent.duration._
 import scala.util.Random
+import scodec.Codec
+import scodec.bits.BitVector
 
 /** Mocked networking stack for integration tests.
   *
@@ -46,7 +48,9 @@ object RobotTestConnectionManager {
       dispatcher: Dispatcher,
       localNode: RobotConfig.Node,
       messageQueue: ConcurrentQueue[Task, MessageReceived]
-  ) extends ConnectionManager {
+  )(implicit codec: Codec[NetworkMessage])
+      extends ConnectionManager {
+
     val publicKey = localNode.publicKey
 
     override val getLocalPeerInfo: (ECPublicKey, InetSocketAddress) =
@@ -64,22 +68,31 @@ object RobotTestConnectionManager {
     override def sendMessage(
         recipient: ECPublicKey,
         message: NetworkMessage
-    ): Task[Either[AlreadyClosed, Unit]] =
-      dispatcher.dispatch(from = localNode.publicKey, to = recipient, message)
+    ): Task[Either[AlreadyClosed, Unit]] = for {
+      data   <- Task(codec.encode(message).require)
+      result <- dispatcher.dispatch(from = publicKey, to = recipient, data)
+    } yield result
 
     def receiveMessage(
         from: ECPublicKey,
-        message: NetworkMessage
-    ) = messageQueue.offer(ConnectionHandler.MessageReceived(from, message))
+        data: BitVector
+    ) = for {
+      // Since we are in a Fiber, decoding failures are reported to the `TestScheduler`.
+      message <- Task(codec.decodeValue(data).require)
+      _       <- messageQueue.offer(ConnectionHandler.MessageReceived(from, message))
+    } yield ()
   }
   object Connection {
 
-    /** Create a connection for the selected node and register with with the dispatcher. */
+    /** Create a connection for the selected node and register with with the dispatcher.
+      *
+      * Exercise the codec as well to see if we have anything wrong.
+      */
     def apply(
         config: RobotConfig,
         opts: RobotOptions,
         dispatcher: Dispatcher
-    ): Resource[Task, Connection] =
+    )(implicit codec: Codec[NetworkMessage]): Resource[Task, Connection] =
       Resource.make[Task, Connection] {
         for {
           messageQueue <- ConcurrentQueue.unbounded[Task, MessageReceived]()
@@ -106,12 +119,13 @@ object RobotTestConnectionManager {
     def dispatch(
         from: ECPublicKey,
         to: ECPublicKey,
-        message: NetworkMessage
+        data: BitVector
     ) = {
       val alreadyClosed = ConnectionHandler
         .ConnectionAlreadyClosedException(to)
         .asLeft[Unit]
         .pure[Task]
+
       for {
         connections <- connectionsRef.get
         disabled    <- disabledRef.get
@@ -127,7 +141,7 @@ object RobotTestConnectionManager {
 
           case Some(connection) =>
             connection
-              .receiveMessage(from, message)
+              .receiveMessage(from, data)
               .delayExecution(delay.next)
               .startAndForget
               .as(().asRight[AlreadyClosed])

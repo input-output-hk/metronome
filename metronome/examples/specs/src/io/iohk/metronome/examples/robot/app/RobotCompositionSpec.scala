@@ -36,6 +36,9 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
 
     scheduler.tick(fixture.duration)
 
+    // Check that no fiber raised an unhandled error.
+    scheduler.state.lastReportedError shouldBe null
+
     fut.value.getOrElse(sys.error("The test hasn't finished")).get
   }
 
@@ -120,8 +123,10 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
     // should reconnect and sync with each other.
     new Fixture(
       360.seconds,
-      networkDelay = Delay(min = 50.millis, max = 500.millis)
+      networkDelay = Delay(min = 50.millis, max = 250.millis)
     ) {
+      val staggerDuration = 30.seconds
+
       override def test(
           dispatcher: Dispatcher,
           envs: List[RobotTestComposition.Env]
@@ -131,10 +136,10 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
           _    <- keys.traverse(dispatcher.disable)
           // NOTE: keys.traverse doesn't seem to work with the TestScheduler and sleep.
           _ <- keys.foldLeft(Task.unit) { case (task, key) =>
-            task >> Task.sleep(20.seconds) >> dispatcher.enable(key)
+            task >> Task.sleep(staggerDuration) >> dispatcher.enable(key)
           }
           // Let them sync now.
-          _    <- Task.sleep(250.seconds)
+          _    <- Task.sleep(duration - 5.seconds - keys.length * staggerDuration)
           logs <- envs.traverse(_.logTracer.getLogs)
 
           quourumCounts <- envs.traverse(
