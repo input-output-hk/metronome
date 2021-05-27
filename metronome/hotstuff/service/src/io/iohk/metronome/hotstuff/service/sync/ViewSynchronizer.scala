@@ -132,6 +132,17 @@ object ViewSynchronizer {
   /** Send a network request to get the status of a replica. */
   type GetStatus[F[_], A <: Agreement] = A#PKey => F[Option[Status[A]]]
 
+  /** Determines the best values to adopt: it picks the highest Prepare and
+    * Commit Quorum Certificates, and the median View Number.
+    *
+    * The former have signatures to prove their validity, but the latter could be
+    * gamed by adversarial actors, hence not using the highest value.
+    * Multiple rounds of peers trying to sync with each other and picking the
+    * median should make them converge in the end, unless an adversarial group
+    * actively tries to present different values to every honest node.
+    *
+    * Another candiate would be to use _mode_.
+    */
   def aggregateStatus[A <: Agreement](
       statuses: NonEmptySeq[Status[A]]
   ): Status[A] = {
@@ -146,6 +157,16 @@ object ViewSynchronizer {
     )
   }
 
+  /** Pick the middle from an ordered sequence of values.
+    *
+    * In case of an even number of values, it returns the right
+    * one from the two values in the middle, it doesn't take the average.
+    *
+    * The idea is that we want a value that exists, not something made up,
+    * and we prefer the higher value, in case this is a progression where
+    * picking the lower one would mean we'd be left behind.
+    */
   def median[T: Order](xs: NonEmptySeq[T]): T =
-    xs.sorted.getUnsafe((xs.size / 2).toInt)
+    xs.sorted.getUnsafe(xs.size.toInt / 2)
+
 }

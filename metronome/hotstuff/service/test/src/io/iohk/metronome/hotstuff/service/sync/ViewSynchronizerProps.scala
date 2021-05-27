@@ -329,9 +329,9 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
     for {
       m   <- arbitrary[Int].map(_.toLong)
       l   <- Gen.posNum[Int]
-      h   <- Gen.oneOf(l, l + 1)
+      h   <- Gen.oneOf(l, l - 1)
       ls  <- Gen.listOfN(l, Gen.posNum[Int].map(m - _))
-      hs  <- Gen.listOfN(l, Gen.posNum[Int].map(m + _))
+      hs  <- Gen.listOfN(h, Gen.posNum[Int].map(m + _))
       rnd <- arbitrary[Int].map(new Random(_))
     } yield (m, rnd.shuffle(ls ++ Seq(m) ++ hs))
   ) { case (m, xs) =>
