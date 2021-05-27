@@ -84,11 +84,7 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
         checkPhase(Phase.Prepare),
         checkSignature,
         checkVisible(status),
-        qc =>
-          check(
-            qc.viewNumber >= status.commitQC.viewNumber,
-            "Prepare Q.C. lower than Commit Q.C."
-          )
+        checkPrepareIsAfterCommit(status)
       )
       _ <- validateQC(from, status.commitQC)(
         checkPhase(Phase.Commit),
@@ -111,6 +107,14 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
       status.viewNumber >= qc.viewNumber,
       "View number of status earlier than Q.C."
     )
+
+  // This could be checked from either Q.C. perspective.
+  private def checkPrepareIsAfterCommit(status: Status[A]) =
+    (_: QuorumCertificate[A]) =>
+      check(
+        status.prepareQC.viewNumber >= status.commitQC.viewNumber,
+        "Prepare Q.C. lower than Commit Q.C."
+      )
 
   private def validateQC(from: A#PKey, qc: QuorumCertificate[A])(
       checks: (QuorumCertificate[A] => Option[String])*
