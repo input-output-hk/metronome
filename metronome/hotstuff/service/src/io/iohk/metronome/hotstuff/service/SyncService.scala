@@ -246,13 +246,20 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     blockSync.fiberMap.cancelQueue(sender) >>
       blockSync.fiberMap
         .submit(sender) {
-          blockSync.synchronizer.sync(sender, prepare.highQC) >>
-            validateBlock(prepare.block) >>= {
-            case Some(isValid) =>
-              syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
-            case None =>
-              // We didn't have data to decide validity in time; not responding.
-              ().pure[F]
+          val handle = for {
+            _            <- blockSync.synchronizer.sync(sender, prepare.highQC)
+            maybeIsValid <- appService.validateBlock(prepare.block)
+            _ <- maybeIsValid match {
+              case None =>
+                // We didn't have enough data to validate the block, not responding.
+                ().pure[F]
+              case Some(isValid) =>
+                syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
+            }
+          } yield ()
+          // Provide some feedback about any potential errors.
+          handle.handleErrorWith { case NonFatal(ex) =>
+            tracers.error(ex)
           }
         }
         .void
