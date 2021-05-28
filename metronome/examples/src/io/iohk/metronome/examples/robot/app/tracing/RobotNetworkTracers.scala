@@ -13,7 +13,7 @@ object RobotNetworkTracers {
   type RobotNetworkEvent =
     NetworkEvent[RobotAgreement.PKey, RobotNetworkMessage]
 
-  implicit val networkEventHybridLog: HybridLog[RobotNetworkEvent] = {
+  implicit val networkEventHybridLog: HybridLog[Task, RobotNetworkEvent] = {
     import NetworkEvent._
     import io.circe.syntax._
 
@@ -28,7 +28,7 @@ object RobotNetworkTracers {
         )
       }
 
-    HybridLog.instance[RobotNetworkEvent](
+    HybridLog.instance[Task, RobotNetworkEvent](
       level = {
         case _: ConnectionRegistered[_]   => HybridLogObject.Level.Info
         case _: ConnectionDeregistered[_] => HybridLogObject.Level.Info

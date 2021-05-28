@@ -59,7 +59,7 @@ class RobotTestComposition(
   val consensusEventTracer = EventTracer[RobotConsensusEvent]
   val syncEventTracer      = EventTracer[RobotSyncEvent]
 
-  private def makeLogTracer[T: HybridLog] =
+  private def makeLogTracer[T](implicit ev: HybridLog[Task, T]) =
     InMemoryLogTracer.hybrid[Task, T](logTracer)
 
   override protected def makeNetworkTracers = {

@@ -158,7 +158,7 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
             }
           }
         } yield {
-          //printLogs(logs)
+          // printLogs(logs)
           all(quourumCounts) should be > 0
           atLeast(1, adoptCounts) should be > 0
           viewNumbers.distinct.size should be <= 2

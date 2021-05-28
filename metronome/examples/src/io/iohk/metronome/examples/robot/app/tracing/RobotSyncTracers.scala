@@ -13,7 +13,8 @@ object RobotSyncTracers {
 
   type RobotSyncEvent = SyncEvent[RobotAgreement]
 
-  implicit val syncEventHybridLog: HybridLog[SyncEvent[RobotAgreement]] = {
+  implicit val syncEventHybridLog
+      : HybridLog[Task, SyncEvent[RobotAgreement]] = {
     import SyncEvent._
     import io.circe.syntax._
 
@@ -26,7 +27,7 @@ object RobotSyncTracers {
     implicit val publicKeyEncoder: Encoder[ECPublicKey] =
       Encoder[String].contramap[ECPublicKey](_.bytes.toHex)
 
-    HybridLog.instance[RobotSyncEvent](
+    HybridLog.instance[Task, RobotSyncEvent](
       level = {
         case _: Error              => HybridLogObject.Level.Error
         case _: InvalidStatus[_]   => HybridLogObject.Level.Warn

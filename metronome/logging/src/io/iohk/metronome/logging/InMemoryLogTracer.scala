@@ -50,8 +50,8 @@ object InMemoryLogTracer {
   def hybrid[F[_]: Sync]: HybridLogTracer[F] =
     new HybridLogTracer[F](Ref.unsafe[F, Vector[HybridLogObject]](Vector.empty))
 
-  def hybrid[F[_]: Sync, T: HybridLog](
+  def hybrid[F[_]: Sync, T](
       tracer: HybridLogTracer[F]
-  ): Tracer[F, T] =
-    tracer.contramap(implicitly[HybridLog[T]].apply _)
+  )(implicit ev: HybridLog[F, T]): Tracer[F, T] =
+    Tracer.contramapM[F, T, HybridLogObject](ev.apply _, tracer)
 }

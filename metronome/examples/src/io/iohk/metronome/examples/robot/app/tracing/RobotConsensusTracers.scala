@@ -18,7 +18,7 @@ object RobotConsensusTracers {
   type RobotConsensusEvent = ConsensusEvent[RobotAgreement]
 
   implicit val consensusEventHybridLog
-      : HybridLog[ConsensusEvent[RobotAgreement]] = {
+      : HybridLog[Task, ConsensusEvent[RobotAgreement]] = {
     import ConsensusEvent._
     import io.circe.syntax._
 
@@ -34,7 +34,7 @@ object RobotConsensusTracers {
     implicit val publicKeyEncoder: Encoder[ECPublicKey] =
       Encoder[String].contramap[ECPublicKey](_.bytes.toHex)
 
-    HybridLog.instance[RobotConsensusEvent](
+    HybridLog.instance[Task, RobotConsensusEvent](
       level = {
         case _: Error        => HybridLogObject.Level.Error
         case _: Timeout      => HybridLogObject.Level.Warn
