@@ -75,9 +75,9 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
           if (round >= responses.size) None
           else
             responses(round)(publicKey) match {
-              case TestResponse.Timeout               => None
-              case TestResponse.InvalidStatus(status) => Some(status)
-              case TestResponse.ValidStatus(status)   => Some(status)
+              case TestResponse.Timeout                  => None
+              case TestResponse.InvalidStatus(status, _) => Some(status)
+              case TestResponse.ValidStatus(status)      => Some(status)
             }
       } yield result
   }
@@ -106,9 +106,10 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
 
   sealed trait TestResponse
   object TestResponse {
-    case object Timeout                                     extends TestResponse
-    case class ValidStatus(status: Status[TestAgreement])   extends TestResponse
-    case class InvalidStatus(status: Status[TestAgreement]) extends TestResponse
+    case object Timeout                                   extends TestResponse
+    case class ValidStatus(status: Status[TestAgreement]) extends TestResponse
+    case class InvalidStatus(status: Status[TestAgreement], reason: String)
+        extends TestResponse
   }
 
   /** Generate a series of hypothetical responses projected from an idealized consensus process. */
@@ -156,20 +157,32 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       genQC(qc.viewNumber, Phase.Commit, qc.blockHash)
 
     def genInvalid(status: Status[TestAgreement]) = {
-      def delay(invalid: => Status[TestAgreement]) =
+      def delay(invalid: => (Status[TestAgreement], String)) =
         Gen.delay(Gen.const(invalid))
       Gen.oneOf(
-        delay(status.copy(viewNumber = status.prepareQC.viewNumber.prev)),
-        delay(status.copy(prepareQC = status.commitQC)),
-        delay(status.copy(commitQC = status.prepareQC)),
+        delay(
+          status.copy(viewNumber =
+            status.prepareQC.viewNumber.prev
+          ) -> "view number less than prepare"
+        ),
+        delay(
+          status.copy(prepareQC =
+            status.commitQC
+          ) -> "commit instead of prepare"
+        ),
+        delay(
+          status.copy(commitQC =
+            status.prepareQC
+          ) -> "prepare instead of commit"
+        ),
         delay(
           status.copy(commitQC =
             status.commitQC.copy[TestAgreement](signature =
               status.commitQC.signature
-                .copy(sig = status.commitQC.signature.sig.map(_ + 1))
+                .copy(sig = status.commitQC.signature.sig.map(_ * 2))
             )
-          )
-        ).filter(_.commitQC.viewNumber > 0)
+          ) -> "wrong commit signature"
+        ).filter(_._1.commitQC.viewNumber > 0)
       )
     }
 
@@ -204,7 +217,9 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
                 Gen.frequency(
                   3 -> Gen.const(TestResponse.Timeout),
                   2 -> Gen.const(TestResponse.ValidStatus(status)),
-                  5 -> genInvalid(status).map(TestResponse.InvalidStatus(_))
+                  5 -> genInvalid(status).map(
+                    (TestResponse.InvalidStatus.apply _).tupled
+                  )
                 )
               } else {
                 Gen.frequency(
@@ -260,7 +275,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
           else fixture.responses
         responses
           .flatMap(_.values)
-          .collect { case TestResponse.InvalidStatus(_) =>
+          .collect { case _: TestResponse.InvalidStatus =>
           }
           .size
       }
