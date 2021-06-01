@@ -84,12 +84,17 @@ object BlockStorageProps extends Properties("BlockStorage") {
 
     def getPathFromAncestor(
         ancestorBlockHash: Hash,
-        descendantBlockHash: Hash
+        descendantBlockHash: Hash,
+        maxDistance: Int = Int.MaxValue
     ) =
       TestKVStore
         .compile(
           TestBlockStorage
-            .getPathFromAncestor(ancestorBlockHash, descendantBlockHash)
+            .getPathFromAncestor(
+              ancestorBlockHash,
+              descendantBlockHash,
+              maxDistance
+            )
         )
         .run(store)
 
@@ -259,8 +264,8 @@ object BlockStorageProps extends Properties("BlockStorage") {
       nonExisting <- genBlock
     } yield (data, ancestor, descendant, nonExisting)
   ) { case (data, ancestor, descendant, nonExisting) =>
-    def getPath(a: TestBlock, d: TestBlock) =
-      data.store.getPathFromAncestor(a.id, d.id)
+    def getPath(a: TestBlock, d: TestBlock, maxDistance: Int = Int.MaxValue) =
+      data.store.getPathFromAncestor(a.id, d.id, maxDistance)
 
     def pathExists(a: TestBlock, d: TestBlock) = {
       val path = getPath(a, d)
@@ -282,7 +287,17 @@ object BlockStorageProps extends Properties("BlockStorage") {
       "fromAtoA" |: pathExists(ancestor, ancestor),
       "fromDtoD" |: pathExists(descendant, descendant),
       "fromAtoN" |: pathNotExists(ancestor, nonExisting),
-      "fromNtoD" |: pathNotExists(nonExisting, descendant)
+      "fromNtoD" |: pathNotExists(nonExisting, descendant),
+      "maxDistance" |: {
+        val (a, d, n) = (ancestor, descendant, nonExisting)
+        val dist      = getPath(ancestor, descendant).length - 1
+        all(
+          "fromAtoD maxDistance=dist" |: getPath(a, d, dist).nonEmpty,
+          "fromAtoD maxDistance=dist-1" |: getPath(a, d, dist - 1).isEmpty,
+          "fromDtoD maxDistance=0" |: getPath(d, d, 0).nonEmpty,
+          "fromNtoN maxDistance=0" |: getPath(n, n, 0).isEmpty
+        )
+      }
     )
   }
 
