@@ -338,7 +338,9 @@ class ConsensusService[
         viewStateStorage.setViewNumber(viewNumber)
       }
 
-  private def updateQuorum(quorumCertificate: QuorumCertificate[A]): F[Unit] =
+  private def updateQuorum(
+      quorumCertificate: QuorumCertificate[A, _]
+  ): F[Unit] =
     tracers.quorum(quorumCertificate) >>
       storeRunner.runReadWrite {
         viewStateStorage.setQuorumCertificate(quorumCertificate)

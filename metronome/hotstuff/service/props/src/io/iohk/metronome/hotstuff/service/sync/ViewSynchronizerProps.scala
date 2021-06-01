@@ -10,8 +10,8 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   ProtocolStateCommands,
   QuorumCertificate,
   Phase,
-  VotingPhase,
-  Signing
+  Signing,
+  VotingPhase
 }
 import io.iohk.metronome.hotstuff.service.Status
 import io.iohk.metronome.hotstuff.service.tracing.{SyncTracers, SyncEvent}
@@ -117,12 +117,12 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       rounds: Int,
       federation: Federation[TestAgreement.PKey],
       byzantines: Set[TestAgreement.PKey],
-      genesisQC: QuorumCertificate[TestAgreement]
+      genesisQC: QuorumCertificate[TestAgreement, Phase.Prepare]
   ): Gen[Responses] = {
 
-    def genQC(
+    def genQC[P <: VotingPhase](
         viewNumber: ViewNumber,
-        phase: VotingPhase,
+        phase: P,
         blockHash: TestAgreement.Hash
     ) =
       for {
@@ -139,7 +139,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
           )
         }
         groupSig = mockSigning.combine(partialSigs)
-      } yield QuorumCertificate[TestAgreement](
+      } yield QuorumCertificate[TestAgreement, P](
         phase,
         viewNumber,
         blockHash,
@@ -147,13 +147,13 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       )
 
     /** Extend a Q.C. by building a new block on top of it. */
-    def genPrepareQC(qc: QuorumCertificate[TestAgreement]) =
+    def genPrepareQC(qc: QuorumCertificate[TestAgreement, _]) =
       genHash.flatMap { blockHash =>
         genQC(qc.viewNumber.next, Phase.Prepare, blockHash)
       }
 
     /** Extend a Q.C. by committing the block in it. */
-    def genCommitQC(qc: QuorumCertificate[TestAgreement]) =
+    def genCommitQC(qc: QuorumCertificate[TestAgreement, _]) =
       genQC(qc.viewNumber, Phase.Commit, qc.blockHash)
 
     def genInvalid(status: Status[TestAgreement]) = {
@@ -167,17 +167,17 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
         ),
         delay(
           status.copy(prepareQC =
-            status.commitQC
+            status.commitQC.coerce[Phase.Prepare]
           ) -> "commit instead of prepare"
         ),
         delay(
           status.copy(commitQC =
-            status.prepareQC
+            status.prepareQC.coerce[Phase.Commit]
           ) -> "prepare instead of commit"
         ),
         delay(
           status.copy(commitQC =
-            status.commitQC.copy[TestAgreement](signature =
+            status.commitQC.copy[TestAgreement, Phase.Commit](signature =
               status.commitQC.signature
                 .copy(sig = status.commitQC.signature.sig.map(_ * 2))
             )
@@ -188,15 +188,15 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
 
     def loop(
         round: Int,
-        prepareQC: QuorumCertificate[TestAgreement],
-        commitQC: QuorumCertificate[TestAgreement],
+        prepareQC: QuorumCertificate[TestAgreement, Phase.Prepare],
+        commitQC: QuorumCertificate[TestAgreement, Phase.Commit],
         accum: Responses
     ): Gen[Responses] =
       if (round == rounds) Gen.const(accum)
       else {
         val keepCommit = Gen.const(commitQC)
 
-        def maybeCommit(qc: QuorumCertificate[TestAgreement]) =
+        def maybeCommit(qc: QuorumCertificate[TestAgreement, _]) =
           if (qc.blockHash != commitQC.blockHash) genCommitQC(qc)
           else keepCommit
 
@@ -240,7 +240,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
     loop(
       0,
       genesisQC,
-      genesisQC.copy[TestAgreement](phase = Phase.Commit),
+      genesisQC.copy[TestAgreement, Phase.Commit](phase = Phase.Commit),
       Vector.empty
     )
   }

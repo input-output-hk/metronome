@@ -1,11 +1,16 @@
 package io.iohk.metronome.hotstuff.service.codecs
 
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
-import io.iohk.metronome.hotstuff.consensus.basic.{Message, QuorumCertificate}
-import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
-import scodec.Codec
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Message,
+  QuorumCertificate,
+  Agreement,
+  VotingPhase,
+  Phase
+}
+import scodec.{Attempt, Codec, Err}
 import scodec.codecs._
+import scala.reflect.ClassTag
 
 trait DefaultProtocolCodecs[A <: Agreement] { self: DefaultConsensusCodecs[A] =>
 
@@ -16,7 +21,8 @@ trait DefaultProtocolCodecs[A <: Agreement] { self: DefaultConsensusCodecs[A] =>
   implicit def blockCodec: Codec[A#Block]
 
   // Derivation doesn't work for Quorum and Vote.
-  implicit val quorumCertificateCodec: Codec[QuorumCertificate[A]] =
+  implicit val quorumCertificateCodec
+      : Codec[QuorumCertificate[A, VotingPhase]] =
     (("phase" | phaseCodec) ::
       ("viewNumber" | viewNumberCodec) ::
       ("blockHash" | hashCodec) ::
@@ -30,9 +36,34 @@ trait DefaultProtocolCodecs[A <: Agreement] { self: DefaultConsensusCodecs[A] =>
         )
       ]
       .xmap(
-        (QuorumCertificate.apply[A] _).tupled,
-        QuorumCertificate.unapply[A](_).get
+        (QuorumCertificate.apply[A, VotingPhase] _).tupled,
+        QuorumCertificate.unapply[A, VotingPhase](_).get
       )
+
+  def quorumCertificateCodecPhase[P <: VotingPhase: ClassTag] = {
+    val ct = implicitly[ClassTag[P]]
+    quorumCertificateCodec.exmap[QuorumCertificate[A, P]](
+      qc =>
+        ct.unapply(qc.phase) match {
+          case Some(_) => Attempt.successful(qc.coerce[P])
+          case None =>
+            Attempt.failure(
+              Err(
+                s"Invalid phase ${qc.phase}, expected ${ct.runtimeClass.getSimpleName}"
+              )
+            )
+        },
+      qc => Attempt.successful(qc)
+    )
+  }
+
+  implicit val quorumCertificateCodecPrepare
+      : Codec[QuorumCertificate[A, Phase.Prepare]] =
+    quorumCertificateCodecPhase[Phase.Prepare]
+
+  implicit val quorumCertificateCodecCommit
+      : Codec[QuorumCertificate[A, Phase.Commit]] =
+    quorumCertificateCodecPhase[Phase.Commit]
 
   implicit val prepareCodec: Codec[Message.Prepare[A]] =
     Codec.deriveLabelledGeneric

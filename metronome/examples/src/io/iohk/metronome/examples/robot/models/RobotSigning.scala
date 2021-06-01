@@ -22,7 +22,7 @@ class RobotSigning(
     */
   override def validate(
       federation: Federation[RobotAgreement.PKey],
-      quorumCertificate: QuorumCertificate[RobotAgreement]
+      quorumCertificate: QuorumCertificate[RobotAgreement, _]
   ): Boolean =
     if (quorumCertificate.blockHash == genesisHash) {
       quorumCertificate.signature.sig.isEmpty

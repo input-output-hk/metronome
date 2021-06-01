@@ -9,7 +9,11 @@ import io.iohk.metronome.hotstuff.consensus.{
   Federation,
   LeaderSelection
 }
-import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  QuorumCertificate,
+  Phase,
+  VotingPhase
+}
 import io.iohk.metronome.hotstuff.service.storage.BlockStorageProps
 import io.iohk.metronome.storage.InMemoryKVStore
 import org.scalacheck.{Properties, Arbitrary, Gen, Prop}, Arbitrary.arbitrary
@@ -45,7 +49,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   case class TestFixture(
       ancestorTree: List[TestBlock],
       descendantTree: List[TestBlock],
-      requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])],
+      requests: List[
+        (TestAgreement.PKey, QuorumCertificate[TestAgreement, VotingPhase])
+      ],
       federation: Federation[TestAgreement.PKey],
       random: Random,
       timeoutProb: Prob,
@@ -127,7 +133,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
 
         requests = (prepares zip proposerKeys).zipWithIndex.map {
           case ((parent, publicKey), idx) =>
-            publicKey -> QuorumCertificate[TestAgreement](
+            publicKey -> QuorumCertificate[TestAgreement, Phase.Prepare](
               phase = Phase.Prepare,
               viewNumber = ViewNumber(100L + idx),
               blockHash = parent.id,

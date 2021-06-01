@@ -132,7 +132,7 @@ object ArbitraryInstances
 
         viewNumber <- Gen.posNum[Long].map(x => ViewNumber(x + n))
         signature  <- arbitrary[CheckpointingAgreement.GSig]
-        commitQC = QuorumCertificate[CheckpointingAgreement](
+        commitQC = QuorumCertificate[CheckpointingAgreement, Phase.Commit](
           phase = Phase.Commit,
           viewNumber = viewNumber,
           blockHash = headers.head.hash,

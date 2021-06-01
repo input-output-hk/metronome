@@ -46,4 +46,8 @@ object Phase {
   case object PreCommit extends VotingPhase
   case object Commit    extends VotingPhase
   case object Decide    extends Phase
+
+  type Prepare   = Prepare.type
+  type PreCommit = PreCommit.type
+  type Commit    = Commit.type
 }

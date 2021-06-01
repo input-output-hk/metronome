@@ -16,6 +16,7 @@ import io.iohk.metronome.hotstuff.service.Status
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import scala.concurrent.duration._
 import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
+import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 
 /** The job of the `ViewSynchronizer` is to ask the other federation members
   * what their status is and figure out a view number we should be using.
@@ -86,7 +87,10 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
       from: A#PKey,
       status: Status[A]
   ): Either[
-    (ProtocolError.InvalidQuorumCertificate[A], ViewSynchronizer.Hint),
+    (
+        ProtocolError.InvalidQuorumCertificate[A],
+        ViewSynchronizer.Hint
+    ),
     Validated[Status[A]]
   ] =
     for {
@@ -106,13 +110,13 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
   private def check(cond: Boolean, hint: => String) =
     if (cond) none else hint.some
 
-  private def checkPhase(phase: Phase)(qc: QuorumCertificate[A]) =
+  private def checkPhase(phase: Phase)(qc: QuorumCertificate[A, _]) =
     check(phase == qc.phase, s"Phase should be $phase.")
 
-  private def checkSignature(qc: QuorumCertificate[A]) =
+  private def checkSignature(qc: QuorumCertificate[A, _]) =
     check(Signing[A].validate(federation, qc), "Invalid signature.")
 
-  private def checkVisible(status: Status[A])(qc: QuorumCertificate[A]) =
+  private def checkVisible(status: Status[A])(qc: QuorumCertificate[A, _]) =
     check(
       status.viewNumber >= qc.viewNumber,
       "View number of status earlier than Q.C."
@@ -120,14 +124,17 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
 
   // This could be checked from either Q.C. perspective.
   private def checkPrepareIsAfterCommit(status: Status[A]) =
-    (_: QuorumCertificate[A]) =>
+    (_: QuorumCertificate[A, _]) =>
       check(
         status.prepareQC.viewNumber >= status.commitQC.viewNumber,
         "Prepare Q.C. lower than Commit Q.C."
       )
 
-  private def validateQC(from: A#PKey, qc: QuorumCertificate[A])(
-      checks: (QuorumCertificate[A] => Option[String])*
+  private def validateQC[P <: VotingPhase](
+      from: A#PKey,
+      qc: QuorumCertificate[A, P]
+  )(
+      checks: (QuorumCertificate[A, _] => Option[String])*
   ) =
     checks.toList.traverse { check =>
       check(qc)

@@ -17,6 +17,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   QuorumCertificate
 }
 import scodec.bits.{BitVector, ByteVector}
+import scala.reflect.ClassTag
 
 object RLPCodecs {
   implicit val rlpBitVector: RLPCodec[BitVector] =
@@ -173,10 +174,10 @@ object RLPCodecs {
       : RLPCodec[CheckpointingAgreement.GroupSignature] =
     deriveLabelledGenericRLPCodec
 
-  // Derviation doesn't seem to work on generic case class.
+  // Derivation doesn't seem to work on generic case class.
   implicit val rlpQuorumCertificate
-      : RLPCodec[QuorumCertificate[CheckpointingAgreement]] =
-    RLPCodec.instance[QuorumCertificate[CheckpointingAgreement]](
+      : RLPCodec[QuorumCertificate[CheckpointingAgreement, VotingPhase]] =
+    RLPCodec.instance[QuorumCertificate[CheckpointingAgreement, VotingPhase]](
       { case QuorumCertificate(phase, viewNumber, blockHash, signature) =>
         RLPList(
           RLPEncoder.encode(phase),
@@ -186,7 +187,7 @@ object RLPCodecs {
         )
       },
       { case RLPList(phase, viewNumber, blockHash, signature) =>
-        QuorumCertificate[CheckpointingAgreement](
+        QuorumCertificate[CheckpointingAgreement, VotingPhase](
           phase.decodeAs[VotingPhase]("phase"),
           viewNumber.decodeAs[ViewNumber]("viewNumber"),
           blockHash.decodeAs[CheckpointingAgreement.Hash]("blockHash"),
@@ -194,6 +195,27 @@ object RLPCodecs {
         )
       }
     )
+
+  def rlpQuorumCertificate[P <: VotingPhase: ClassTag]
+      : RLPCodec[QuorumCertificate[CheckpointingAgreement, P]] = {
+    val ct = implicitly[ClassTag[P]]
+    rlpQuorumCertificate.xmap[QuorumCertificate[CheckpointingAgreement, P]](
+      qc =>
+        ct.unapply(qc.phase) match {
+          case Some(_) => qc.coerce[P]
+          case None =>
+            RLPException.decodeError(
+              "QuorumCertificate",
+              s"expected phase ${ct.runtimeClass.getSimpleName}, got ${qc.phase}"
+            )
+        },
+      qc => qc.coerce[VotingPhase]
+    )
+  }
+
+  implicit val rlpQuorumCertificateCommit
+      : RLPCodec[QuorumCertificate[CheckpointingAgreement, Phase.Commit]] =
+    rlpQuorumCertificate[Phase.Commit]
 
   implicit val rlpCheckpointCertificate: RLPCodec[CheckpointCertificate] =
     deriveLabelledGenericRLPCodec

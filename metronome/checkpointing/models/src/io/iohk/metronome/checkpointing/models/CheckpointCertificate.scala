@@ -1,7 +1,7 @@
 package io.iohk.metronome.checkpointing.models
 
 import cats.data.NonEmptyList
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
 
@@ -27,14 +27,14 @@ case class CheckpointCertificate(
     // Proof that `checkpoint` is part of `headers.head.contentMerkleRoot`.
     proof: MerkleTree.Proof,
     // Commit Q.C. over `headers.last`.
-    commitQC: QuorumCertificate[CheckpointingAgreement]
+    commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit]
 )
 
 object CheckpointCertificate {
   def construct(
       block: Block,
       headers: NonEmptyList[Block.Header],
-      commitQC: QuorumCertificate[CheckpointingAgreement]
+      commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit]
   ): Option[CheckpointCertificate] =
     constructProof(block).map { case (proof, cp) =>
       CheckpointCertificate(headers, cp, proof, commitQC)
