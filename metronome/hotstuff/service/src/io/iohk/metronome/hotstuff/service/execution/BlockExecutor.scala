@@ -11,7 +11,8 @@ import io.iohk.metronome.hotstuff.service.storage.{
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Effect,
-  QuorumCertificate
+  QuorumCertificate,
+  Phase
 }
 import io.iohk.metronome.hotstuff.service.tracing.ConsensusTracers
 import io.iohk.metronome.storage.KVStoreRunner
@@ -97,7 +98,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
   private def getBlockPath(
       lastExecutedBlockHash: A#Hash,
       lastCommittedBlockHash: A#Hash,
-      commitQC: QuorumCertificate[A]
+      commitQC: QuorumCertificate[A, Phase.Commit]
   ): F[List[A#Hash]] = {
     def readPath(ancestorBlockHash: A#Hash) =
       storeRunner
@@ -123,7 +124,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     */
   private def tryExecuteBatch(
       newBlockHashes: List[A#Hash],
-      commitQC: QuorumCertificate[A],
+      commitQC: QuorumCertificate[A, Phase.Commit],
       lastExecutedBlockHash: A#Hash
   ): F[A#Hash] = {
     def loop(
@@ -163,7 +164,7 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     */
   private def executeBlock(
       blockHash: A#Hash,
-      commitQC: QuorumCertificate[A],
+      commitQC: QuorumCertificate[A, Phase.Commit],
       commitPath: NonEmptyList[A#Hash],
       lastExecutedBlockHash: A#Hash
   ): F[Unit] = {

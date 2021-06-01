@@ -65,7 +65,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
     val appService = new ApplicationService[Task, TestAgreement] {
       def createBlock(
-          highQC: QuorumCertificate[TestAgreement]
+          highQC: QuorumCertificate[TestAgreement, Phase.Prepare]
       ): Task[Option[TestBlock]] = ???
 
       def validateBlock(block: TestBlock): Task[Option[Boolean]] = ???
@@ -77,7 +77,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
       def executeBlock(
           block: TestBlock,
-          commitQC: QuorumCertificate[TestAgreement],
+          commitQC: QuorumCertificate[TestAgreement, Phase.Commit],
           commitPath: NonEmptyList[TestAgreement.Hash]
       ): Task[Unit] =
         for {
@@ -92,7 +92,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
       for {
         viewStateStorage <- Resource.liftF {
           storeRunner.runReadWrite {
-            val genesisQC = QuorumCertificate[TestAgreement](
+            val genesisQC = QuorumCertificate[TestAgreement, Phase.Commit](
               phase = Phase.Commit,
               viewNumber = ViewNumber(0),
               blockHash = blocks.head.id,
@@ -154,7 +154,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
             ancestor = tree.last
             descendantTree <- genNonEmptyBlockTree(parentId = ancestor.id)
             descendant = descendantTree.last
-            commitQC = QuorumCertificate[TestAgreement](
+            commitQC = QuorumCertificate[TestAgreement, Phase.Commit](
               phase = Phase.Commit,
               viewNumber = viewNumber,
               blockHash = descendant.id,

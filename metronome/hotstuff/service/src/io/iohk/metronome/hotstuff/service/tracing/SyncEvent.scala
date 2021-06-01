@@ -4,7 +4,6 @@ import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolError}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.Status
-import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
 
 sealed trait SyncEvent[+A <: Agreement]
 

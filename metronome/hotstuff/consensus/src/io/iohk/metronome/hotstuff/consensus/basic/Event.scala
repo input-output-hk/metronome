@@ -21,6 +21,6 @@ object Event {
       viewNumber: ViewNumber,
       block: A#Block,
       // The certificate which the block extended.
-      highQC: QuorumCertificate[A]
+      highQC: QuorumCertificate[A, Phase.Prepare]
   ) extends Event[A]
 }
