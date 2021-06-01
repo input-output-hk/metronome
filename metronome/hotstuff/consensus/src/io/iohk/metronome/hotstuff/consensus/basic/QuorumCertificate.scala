@@ -13,29 +13,33 @@ case class QuorumCertificate[A <: Agreement, +P <: VotingPhase](
     blockHash: A#Hash,
     signature: GroupSignature[A#PKey, (VotingPhase, ViewNumber, A#Hash), A#GSig]
 ) {
+
+  /** In protocol messages we can treat QCs as `QuorumCertificate[A, VotingPhase]`,
+    * and coerce to a specific type after checking what it is. We can also coerce
+    * back into the supertype, if necessary.
+    */
   def coerce[V <: VotingPhase](implicit
       ct: ClassTag[V]
   ): QuorumCertificate[A, V] = {
-    // The following assertion is not always true in testing.
-    // This is a remnant of the fact that originally the `QuorumCertificate` was not generic in P,
-    // and tests generate invalid certificates, which the code is supposed to detect.
-    // We can coerce into the wrong type, but accessing the `phase` on such an instance would lead
-    // to a `ClassCastException`. In practice the codecs will reject such messages.
-
-    // assert(ct.unapply(phase).isDefined)
+    assert(
+      ct.unapply(phase).isDefined,
+      s"Can only coerce between VotingPhase and a subclass; attempted to cast ${phase} to ${ct.runtimeClass.getSimpleName}"
+    )
     this.asInstanceOf[QuorumCertificate[A, V]]
   }
 
-  protected[basic] def withPhase[V <: VotingPhase](phase: V) =
+  // The following methods are used in tests.
+
+  def withPhase[V <: VotingPhase](phase: V) =
     copy[A, V](phase = phase)
 
-  protected[basic] def withViewNumber(viewNumber: ViewNumber) =
+  def withViewNumber(viewNumber: ViewNumber) =
     copy[A, P](viewNumber = viewNumber)
 
-  protected[basic] def withBlockHash(blockHash: A#Hash) =
+  def withBlockHash(blockHash: A#Hash) =
     copy[A, P](blockHash = blockHash)
 
-  protected[basic] def withSignature(
+  def withSignature(
       signature: GroupSignature[
         A#PKey,
         (VotingPhase, ViewNumber, A#Hash),
@@ -46,5 +50,5 @@ case class QuorumCertificate[A <: Agreement, +P <: VotingPhase](
 
   // Sometimes when we have just `QuorumCertificate[A, _]` the compiler
   // can't prove that `.phase` is a `VotingPhase` and not just `$1`.
-  protected[basic] def votingPhase: VotingPhase = phase
+  def votingPhase: VotingPhase = phase
 }

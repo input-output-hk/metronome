@@ -165,19 +165,20 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
             status.prepareQC.viewNumber.prev
           ) -> "view number less than prepare"
         ),
-        delay(
-          status.copy(prepareQC =
-            status.commitQC.coerce[Phase.Prepare]
-          ) -> "commit instead of prepare"
-        ),
+        // The following two are now prevented by the compiler and the codecs:
+        // delay(
+        //   status.copy(prepareQC =
+        //     status.commitQC.coerce[Phase.Prepare]
+        //   ) -> "commit instead of prepare"
+        // ),
+        // delay(
+        //   status.copy(commitQC =
+        //     status.prepareQC.coerce[Phase.Commit]
+        //   ) -> "prepare instead of commit"
+        // ),
         delay(
           status.copy(commitQC =
-            status.prepareQC.coerce[Phase.Commit]
-          ) -> "prepare instead of commit"
-        ),
-        delay(
-          status.copy(commitQC =
-            status.commitQC.copy[TestAgreement, Phase.Commit](signature =
+            status.commitQC.withSignature(
               status.commitQC.signature
                 .copy(sig = status.commitQC.signature.sig.map(_ * 2))
             )

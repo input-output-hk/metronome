@@ -9,8 +9,7 @@ import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Signing,
-  QuorumCertificate,
-  Phase
+  QuorumCertificate
 }
 import io.iohk.metronome.hotstuff.service.Status
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
@@ -95,13 +94,11 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
   ] =
     for {
       _ <- validateQC(from, status.prepareQC)(
-        checkPhase(Phase.Prepare),
         checkSignature,
         checkVisible(status),
         checkPrepareIsAfterCommit(status)
       )
       _ <- validateQC(from, status.commitQC)(
-        checkPhase(Phase.Commit),
         checkSignature,
         checkVisible(status)
       )
@@ -109,9 +106,6 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
 
   private def check(cond: Boolean, hint: => String) =
     if (cond) none else hint.some
-
-  private def checkPhase(phase: Phase)(qc: QuorumCertificate[A, _]) =
-    check(phase == qc.phase, s"Phase should be $phase.")
 
   private def checkSignature(qc: QuorumCertificate[A, _]) =
     check(Signing[A].validate(federation, qc), "Invalid signature.")

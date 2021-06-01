@@ -314,26 +314,28 @@ object ProtocolStateCommands extends Commands {
     def invalidateViewNumber(v: ViewNumber)   = ViewNumber(v + 1000)
     def invalidSender                         = state.federation.sum + 1
 
-    def invalidateQC(
-        qc: QuorumCertificate[TestAgreement, _]
-    ): Gen[QuorumCertificate[TestAgreement, _]] = {
+    def invalidateQC[P <: VotingPhase](
+        qc: QuorumCertificate[TestAgreement, P]
+    ): Gen[QuorumCertificate[TestAgreement, P]] = {
       Gen.oneOf(
         genLazy(
-          qc.withBlockHash(invalidateHash(qc.blockHash)).coerce[VotingPhase]
+          qc.withBlockHash(invalidateHash(qc.blockHash))
         ),
-        genLazy(
-          qc.withPhase(nextVoting(qc.phase.asInstanceOf[VotingPhase]))
-            .coerce[VotingPhase]
-        ).suchThat(_.blockHash != genesisQC.blockHash),
+        // Now that the compiler (and codecs) check that we're getting the right message,
+        // we shouldn't encounter an unexpected phase in a field like `highQC`,
+        // so this kind of test is no longer needed and would fail with an assertion error
+        // when it's coerced into a type it doesn't match.
+        // genLazy(
+        //   qc.withPhase[VotingPhase](nextVoting(qc.votingPhase))
+        // ).suchThat(_.blockHash != genesisQC.blockHash),
         genLazy(
           qc.withViewNumber(invalidateViewNumber(qc.viewNumber))
-            .coerce[VotingPhase]
         ),
         genLazy(
           qc.withSignature(
             // The quorum cert has no items, so add one to make it different.
             qc.signature.copy(sig = 0L +: qc.signature.sig.map(invalidateSig))
-          ).coerce[VotingPhase]
+          )
         )
       )
     }
@@ -355,7 +357,7 @@ object ProtocolStateCommands extends Commands {
                 )
               ),
               "prepareQC" ! invalidateQC(m.prepareQC).map { qc =>
-                cmd.copy(message = m.copy(prepareQC = qc.coerce[Phase.Prepare]))
+                cmd.copy(message = m.copy(prepareQC = qc))
               }
             )
 
@@ -376,7 +378,7 @@ object ProtocolStateCommands extends Commands {
                 )
               ),
               "highQC" ! invalidateQC(m.highQC).map { qc =>
-                cmd.copy(message = m.copy(highQC = qc.coerce[Phase.Prepare]))
+                cmd.copy(message = m.copy(highQC = qc))
               }
             )
 
@@ -414,9 +416,7 @@ object ProtocolStateCommands extends Commands {
               "sender" ! genLazy(cmd.copy(sender = invalidSender)),
               "quorumCertificate" ! invalidateQC(m.quorumCertificate)
                 .map { qc =>
-                  cmd.copy(message =
-                    m.copy(quorumCertificate = qc.coerce[VotingPhase])
-                  )
+                  cmd.copy(message = m.copy(quorumCertificate = qc))
                 }
             )
         }

@@ -115,11 +115,8 @@ object ViewStateStorage {
       commitQC: QuorumCertificate[A, Phase.Commit],
       lastExecutedBlockHash: A#Hash,
       rootBlockHash: A#Hash
-  ) {
-    assert(prepareQC.phase == Phase.Prepare)
-    assert(lockedQC.phase == Phase.PreCommit)
-    assert(commitQC.phase == Phase.Commit)
-  }
+  )
+
   object Bundle {
 
     /** Convenience method reflecting the expectation that the signature
