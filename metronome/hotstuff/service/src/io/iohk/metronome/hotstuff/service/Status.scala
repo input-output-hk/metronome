@@ -1,8 +1,7 @@
 package io.iohk.metronome.hotstuff.service
 
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, QuorumCertificate}
 
 /** Status has all the fields necessary for nodes to sync with each other.
   *

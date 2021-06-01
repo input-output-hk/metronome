@@ -23,7 +23,7 @@ package io.iohk.metronome.hotstuff.consensus
   *
   * Extra: The above two inequalities `(n+f)/2 < q <= n-f`, lead to the constraint: `f < n/3`, or `n >= 3*f+1`.
   */
-abstract case class Federation[PKey](
+abstract case class Federation[PKey] private (
     publicKeys: IndexedSeq[PKey],
     // Maximum number of Byzantine nodes.
     maxFaulty: Int

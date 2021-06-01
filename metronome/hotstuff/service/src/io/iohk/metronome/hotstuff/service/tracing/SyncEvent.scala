@@ -1,7 +1,10 @@
 package io.iohk.metronome.hotstuff.service.tracing
 
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
+import io.iohk.metronome.core.Validated
+import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, ProtocolError}
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
+import io.iohk.metronome.hotstuff.service.Status
+import io.iohk.metronome.hotstuff.consensus.basic.ProtocolError
 
 sealed trait SyncEvent[+A <: Agreement]
 
@@ -25,6 +28,20 @@ object SyncEvent {
       sender: A#PKey,
       response: SyncMessage[A] with SyncMessage.Response,
       maybeError: Option[Throwable]
+  ) extends SyncEvent[A]
+
+  /** Performed a poll for `Status` across the federation.
+    * Only contains results for federation members that responded within the timeout.
+    */
+  case class StatusPoll[A <: Agreement](
+      statuses: Map[A#PKey, Validated[Status[A]]]
+  ) extends SyncEvent[A]
+
+  /** A federation members sent a `Status` with invalid content. */
+  case class InvalidStatus[A <: Agreement](
+      status: Status[A],
+      error: ProtocolError.InvalidQuorumCertificate[A],
+      hint: String
   ) extends SyncEvent[A]
 
   /** An unexpected error in one of the background tasks. */

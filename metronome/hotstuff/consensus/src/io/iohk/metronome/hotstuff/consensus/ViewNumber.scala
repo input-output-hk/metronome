@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.consensus
 
 import io.iohk.metronome.core.Tagger
+import cats.kernel.Order
 
 object ViewNumber extends Tagger[Long] {
   implicit class Ops(val vn: ViewNumber) extends AnyVal {
@@ -10,4 +11,7 @@ object ViewNumber extends Tagger[Long] {
 
   implicit val ord: Ordering[ViewNumber] =
     Ordering.by(identity[Long])
+
+  implicit val order: Order[ViewNumber] =
+    Order.fromOrdering(ord)
 }
