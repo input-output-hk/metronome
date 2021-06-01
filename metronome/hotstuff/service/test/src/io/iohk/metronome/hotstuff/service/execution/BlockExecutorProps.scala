@@ -66,8 +66,10 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
     val appService = new ApplicationService[Task, TestAgreement] {
       def createBlock(
           highQC: QuorumCertificate[TestAgreement]
-      ): Task[Option[TestBlock]]                         = ???
-      def validateBlock(block: TestBlock): Task[Boolean] = ???
+      ): Task[Option[TestBlock]] = ???
+
+      def validateBlock(block: TestBlock): Task[Option[Boolean]] = ???
+
       def syncState(
           sources: NonEmptyVector[Int],
           block: TestBlock
