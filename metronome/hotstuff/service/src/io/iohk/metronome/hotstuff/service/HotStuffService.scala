@@ -1,17 +1,19 @@
 package io.iohk.metronome.hotstuff.service
 
+import cats.Parallel
 import cats.effect.{Concurrent, ContextShift, Resource, Timer}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   ProtocolState,
   Message,
-  Block
+  Block,
+  Signing
 }
 import io.iohk.metronome.hotstuff.service.messages.{
   HotStuffMessage,
   SyncMessage
 }
-import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
+import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
   ViewStateStorage
@@ -25,8 +27,13 @@ import io.iohk.metronome.storage.KVStoreRunner
 object HotStuffService {
 
   /** Start up the HotStuff service stack. */
-  def apply[F[_]: Concurrent: ContextShift: Timer, N, A <: Agreement: Block](
+  def apply[
+      F[_]: Concurrent: ContextShift: Timer: Parallel,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       network: Network[F, A, HotStuffMessage[A]],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       initState: ProtocolState[A]
@@ -50,14 +57,15 @@ object HotStuffService {
           }
         )
 
-      blockSyncPipe <- Resource.liftF { BlockSyncPipe[F, A] }
+      syncPipe <- Resource.liftF { SyncPipe[F, A] }
 
       consensusService <- ConsensusService(
         initState.publicKey,
         consensusNetwork,
+        appService,
         blockStorage,
         viewStateStorage,
-        blockSyncPipe.left,
+        syncPipe.left,
         initState
       )
 
@@ -65,8 +73,10 @@ object HotStuffService {
         initState.publicKey,
         initState.federation,
         syncNetwork,
+        appService,
         blockStorage,
-        blockSyncPipe.right,
+        viewStateStorage,
+        syncPipe.right,
         consensusService.getState
       )
     } yield ()

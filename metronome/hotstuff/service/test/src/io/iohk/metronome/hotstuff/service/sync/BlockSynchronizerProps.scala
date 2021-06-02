@@ -1,19 +1,23 @@
 package io.iohk.metronome.hotstuff.service.sync
 
+import cats.implicits._
+import cats.data.NonEmptyVector
 import cats.effect.concurrent.{Ref, Semaphore}
 import io.iohk.metronome.crypto.GroupSignature
-import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import io.iohk.metronome.hotstuff.consensus.{
+  ViewNumber,
+  Federation,
+  LeaderSelection
+}
 import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.storage.BlockStorageProps
 import io.iohk.metronome.storage.InMemoryKVStore
-import org.scalacheck.{Properties, Arbitrary, Gen}, Arbitrary.arbitrary
-import org.scalacheck.Prop.{all, forAll, propBoolean}
+import org.scalacheck.{Properties, Arbitrary, Gen, Prop}, Arbitrary.arbitrary
+import org.scalacheck.Prop.{all, forAll, forAllNoShrink, propBoolean}
 import monix.eval.Task
 import monix.execution.schedulers.TestScheduler
 import scala.util.Random
 import scala.concurrent.duration._
-import io.iohk.metronome.hotstuff.consensus.Federation
-import io.iohk.metronome.hotstuff.consensus.LeaderSelection
 
 object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   import BlockStorageProps.{
@@ -23,6 +27,10 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     TestKVStore,
     Namespace,
     genNonEmptyBlockTree
+  }
+
+  case class Prob(value: Double) {
+    require(value >= 0 && value <= 1)
   }
 
   // Insert the prefix three into "persistent" storage,
@@ -39,7 +47,9 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       descendantTree: List[TestBlock],
       requests: List[(TestAgreement.PKey, QuorumCertificate[TestAgreement])],
       federation: Federation[TestAgreement.PKey],
-      random: Random
+      random: Random,
+      timeoutProb: Prob,
+      corruptProb: Prob
   ) {
     val persistentRef = Ref.unsafe[Task, TestKVStore.Store] {
       TestKVStore.build(ancestorTree)
@@ -60,11 +70,11 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         blockHash: TestAgreement.Hash
     ): Task[Option[TestAgreement.Block]] = {
       val timeout   = 5000
-      val delay     = random.nextDouble() * 3000
-      val isLost    = random.nextDouble() < 0.2
-      val isCorrupt = random.nextDouble() < 0.2
+      val delay     = random.nextDouble() * 2900 + 100
+      val isTimeout = random.nextDouble() < timeoutProb.value
+      val isCorrupt = random.nextDouble() < corruptProb.value
 
-      if (isLost) {
+      if (isTimeout) {
         Task.pure(None).delayResult(timeout.millis)
       } else {
         val block  = blockMap(blockHash)
@@ -96,13 +106,15 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
   }
   object TestFixture {
 
-    implicit val arb: Arbitrary[TestFixture] = Arbitrary {
+    implicit val arb: Arbitrary[TestFixture] = Arbitrary(gen())
+
+    def gen(timeoutProb: Prob = Prob(0.2), corruptProb: Prob = Prob(0.2)) =
       for {
         ancestorTree <- genNonEmptyBlockTree
         leaf = ancestorTree.last
         descendantTree <- genNonEmptyBlockTree(parentId = leaf.id)
 
-        federationSize <- Gen.choose(1, 10)
+        federationSize <- Gen.choose(3, 10)
         federationKeys = Range(0, federationSize).toVector
         federation = Federation(federationKeys)(LeaderSelection.RoundRobin)
           .getOrElse(sys.error("Can't create federation."))
@@ -130,14 +142,23 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         descendantTree,
         requests,
         federation,
-        random
+        random,
+        timeoutProb,
+        corruptProb
       )
-    }
   }
 
-  property("persists") = forAll { (fixture: TestFixture) =>
+  def simulate(duration: FiniteDuration)(test: Task[Prop]): Prop = {
     implicit val scheduler = TestScheduler()
+    // Schedule the execution, using a Future so we can check the value.
+    val testFuture = test.runToFuture
+    // Simulate a time.
+    scheduler.tick(duration)
+    // Get the completed results.
+    testFuture.value.get.get
+  }
 
+  property("sync - persist") = forAll { (fixture: TestFixture) =>
     val test = for {
       fibers <- Task.traverse(fixture.requests) { case (publicKey, qc) =>
         fixture.synchronizer.sync(publicKey, qc).start
@@ -148,7 +169,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       ephemeral  <- fixture.ephemeralRef.get
     } yield {
       all(
-        "ephermeral empty" |: ephemeral.isEmpty,
+        "ephemeral empty" |: ephemeral.isEmpty,
         "persistent contains all" |: fixture.requests.forall { case (_, qc) =>
           persistent(Namespace.Blocks).contains(qc.blockHash)
         },
@@ -161,19 +182,13 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         }
       )
     }
-
-    // Schedule the execution, using a Future so we can check the value.
-    val testFuture = test.runToFuture
-
     // Simulate a long time, which should be enough for all downloads to finish.
-    scheduler.tick(1.day)
-
-    testFuture.value.get.get
+    simulate(1.day)(test)
   }
 
-  property("no forest") = forAll(
+  property("sync - no forest") = forAll(
     for {
-      fixture  <- arbitrary[TestFixture]
+      fixture  <- TestFixture.gen(timeoutProb = Prob(0))
       duration <- Gen.choose(1, fixture.requests.size).map(_ * 500.millis)
     } yield (fixture, duration)
   ) { case (fixture: TestFixture, duration: FiniteDuration) =>
@@ -207,5 +222,60 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
     scheduler.tick()
 
     testFuture.value.get.get
+  }
+
+  property("getBlockFromQuorumCertificate") = forAllNoShrink(
+    for {
+      fixture <- TestFixture
+        .gen(timeoutProb = Prob(0), corruptProb = Prob(0))
+      sources <- Gen.pick(
+        fixture.federation.quorumSize,
+        fixture.federation.publicKeys
+      )
+      // The last request is definitely new.
+      qc = fixture.requests.last._2
+    } yield (fixture, sources, qc)
+  ) { case (fixture, sources, qc) =>
+    val test = for {
+      block <- fixture.synchronizer
+        .getBlockFromQuorumCertificate(
+          sources = NonEmptyVector.fromVectorUnsafe(sources.toVector),
+          quorumCertificate = qc
+        )
+        .rethrow
+      persistent <- fixture.persistentRef.get
+      ephemeral  <- fixture.ephemeralRef.get
+    } yield {
+      all(
+        "downloaded" |: block.id == qc.blockHash,
+        "not in ephemeral" |: ephemeral.isEmpty,
+        "not in persistent" |:
+          !persistent(Namespace.Blocks).contains(qc.blockHash)
+      )
+    }
+    simulate(1.minute)(test)
+  }
+
+  property("getBlockFromQuorumCertificate - timeout") = forAllNoShrink(
+    for {
+      fixture <- TestFixture.gen(timeoutProb = Prob(1))
+      request = fixture.requests.last // Use one that isn't persisted yet.
+    } yield (fixture, request._1, request._2)
+  ) { case (fixture, source, qc) =>
+    val test = for {
+      result <- fixture.synchronizer
+        .getBlockFromQuorumCertificate(
+          sources = NonEmptyVector.one(source),
+          quorumCertificate = qc
+        )
+    } yield "fail with the right exception" |: {
+      result match {
+        case Left(ex: BlockSynchronizer.DownloadFailedException[_]) =>
+          true
+        case _ =>
+          false
+      }
+    }
+    simulate(1.minute)(test)
   }
 }

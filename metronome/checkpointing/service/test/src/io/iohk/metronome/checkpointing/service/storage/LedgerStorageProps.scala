@@ -60,8 +60,13 @@ object LedgerStorageProps extends Properties("LedgerStorage") {
     def getByHash(ledgerHash: Ledger.Hash) =
       TestKVStore.compile(ledgerStorage.get(ledgerHash)).run(store)
 
-    val ledgerMap      = store.get(Namespace.Ledgers).getOrElse(Map.empty[Any, Any])
-    val (current, old) = ledgers.reverse.splitAt(maxSize)
+    val ledgerMap = store.get(Namespace.Ledgers).getOrElse(Map.empty[Any, Any])
+
+    val (current, old) = {
+      val (lastN, prev) = ledgers.reverse.splitAt(maxSize)
+      // There can be duplicates, re-insertions.
+      (lastN, prev.filterNot(lastN.contains))
+    }
 
     all(
       "max-history" |: ledgerMap.values.size <= maxSize,

@@ -26,7 +26,7 @@ object SyncTracers {
     (A#PKey, SyncMessage[A] with SyncMessage.Response, Option[Throwable])
 
   type Statuses[A <: Agreement] =
-    (IndexedSeq[A#PKey], IndexedSeq[Option[Validated[Status[A]]]])
+    Map[A#PKey, Validated[Status[A]]]
 
   type StatusError[A <: Agreement] =
     (Status[A], ProtocolError.InvalidQuorumCertificate[A], String)
@@ -41,17 +41,9 @@ object SyncTracers {
       responseIgnored = tracer
         .contramap[Response[A]]((ResponseIgnored.apply[A] _).tupled),
       statusPoll = tracer
-        .contramap[Statuses[A]] { case (publicKeys, maybeStatuses) =>
-          StatusPoll[A] {
-            (publicKeys zip maybeStatuses).toMap.collect {
-              case (key, Some(status)) => key -> status
-            }
-          }
-        },
+        .contramap[Statuses[A]](StatusPoll(_)),
       invalidStatus =
-        tracer.contramap[StatusError[A]] { case (status, error, hint) =>
-          InvalidStatus(status, error, hint)
-        },
+        tracer.contramap[StatusError[A]]((InvalidStatus.apply[A] _).tupled),
       error = tracer.contramap[Throwable](Error(_))
     )
 }

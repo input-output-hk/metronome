@@ -136,6 +136,15 @@ object ViewStateStorageCommands extends Commands {
       )
     } yield SetLastExecutedBlockHashCommand(h)
 
+  def genSetRootBlockHash(state: State) =
+    for {
+      h <- Gen.oneOf(
+        state.prepareQC.blockHash,
+        state.lockedQC.blockHash,
+        state.commitQC.blockHash
+      )
+    } yield SetRootBlockHashCommand(h)
+
   val genGetBundle = Gen.const(GetBundleCommand)
 
   case class SetViewNumberCommand(viewNumber: ViewNumber) extends UnitCommand {
@@ -173,6 +182,22 @@ object ViewStateStorageCommands extends Commands {
 
     override def nextState(state: State): State =
       state.copy(lastExecutedBlockHash = blockHash)
+
+    override def preCondition(state: State): Boolean =
+      Set(state.prepareQC, state.lockedQC, state.commitQC)
+        .map(_.blockHash)
+        .contains(blockHash)
+
+    override def postCondition(state: State, success: Boolean): Prop = success
+  }
+
+  case class SetRootBlockHashCommand(blockHash: TestAgreement.Hash)
+      extends UnitCommand {
+    override def run(sut: Sut): Result =
+      sut.write(_.setRootBlockHash(blockHash))
+
+    override def nextState(state: State): State =
+      state.copy(rootBlockHash = blockHash)
 
     override def preCondition(state: State): Boolean =
       Set(state.prepareQC, state.lockedQC, state.commitQC)

@@ -3,7 +3,7 @@ package io.iohk.metronome.hotstuff.service.sync
 import cats._
 import cats.implicits._
 import cats.effect.{Timer, Sync}
-import cats.data.NonEmptySeq
+import cats.data.{NonEmptySeq, NonEmptyVector}
 import io.iohk.metronome.core.Validated
 import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{
@@ -27,7 +27,7 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
     getStatus: ViewSynchronizer.GetStatus[F, A],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit tracers: SyncTracers[F, A]) {
-  import ViewSynchronizer.aggregateStatus
+  import ViewSynchronizer.{aggregateStatus, FederationStatus}
 
   /** Poll the federation members for the current status until we have gathered
     * enough to make a decision, i.e. we have a quorum.
@@ -37,18 +37,28 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
     *
     * Try again until in one round we can gather all statuses from everyone.
     */
-  def sync: F[Status[A]] = {
+  def sync: F[ViewSynchronizer.FederationStatus[A]] = {
     federation.publicKeys.toVector
       .parTraverse(getAndValidateStatus)
       .flatMap { maybeStatuses =>
+        val statusMap = (federation.publicKeys zip maybeStatuses).collect {
+          case (k, Some(s)) => k -> s
+        }.toMap
+
         tracers
-          .statusPoll(federation.publicKeys -> maybeStatuses)
-          .as(maybeStatuses.flatten)
+          .statusPoll(statusMap)
+          .as(statusMap)
       }
-      .map(NonEmptySeq.fromSeq)
       .flatMap {
-        case Some(statuses) if statuses.size >= federation.quorumSize =>
-          aggregateStatus(statuses).pure[F]
+        case statusMap if statusMap.size >= federation.quorumSize =>
+          val statuses = statusMap.values.toList
+          val status   = aggregateStatus(NonEmptySeq.fromSeqUnsafe(statuses))
+
+          // Returning everyone who responded so we always have a quorum sized set to talk to.
+          val sources =
+            NonEmptyVector.fromVectorUnsafe(statusMap.keySet.toVector)
+
+          FederationStatus(status, sources).pure[F]
 
         case _ =>
           // We traced all responses, so we can detect if we're in an endless loop.
@@ -173,4 +183,9 @@ object ViewSynchronizer {
   def median[T: Order](xs: NonEmptySeq[T]): T =
     xs.sorted.getUnsafe(xs.size.toInt / 2)
 
+  /** The final status coupled with the federation members that can serve the data. */
+  case class FederationStatus[A <: Agreement](
+      status: Status[A],
+      sources: NonEmptyVector[A#PKey]
+  )
 }

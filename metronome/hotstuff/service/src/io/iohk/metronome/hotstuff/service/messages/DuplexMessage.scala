@@ -6,7 +6,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 /** Messages type to use in the networking layer if the use case has
   * application specific message types, e.g. ledger synchronisation,
   * not just the general BFT agreement (which could be enough if
-  * we need to execute all blocks to synchronise state).
+  * we need to execute all blocks to synchronize state).
   */
 sealed trait DuplexMessage[A <: Agreement, M]
 

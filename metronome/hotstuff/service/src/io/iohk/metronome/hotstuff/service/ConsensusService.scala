@@ -15,9 +15,10 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Phase,
   Message,
   Block,
+  Signing,
   QuorumCertificate
 }
-import io.iohk.metronome.hotstuff.service.pipes.BlockSyncPipe
+import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
   ViewStateStorage
@@ -34,19 +35,27 @@ import scala.util.control.NonFatal
   *
   * It handles the `consensus.basic.Message` events coming from the network.
   */
-class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
+class ConsensusService[
+    F[_]: Timer: Concurrent,
+    N,
+    A <: Agreement: Block: Signing
+](
     publicKey: A#PKey,
     network: Network[F, A, Message[A]],
+    appService: ApplicationService[F, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
     stateRef: Ref[F, ProtocolState[A]],
     stashRef: Ref[F, ConsensusService.MessageStash[A]],
-    blockSyncPipe: BlockSyncPipe[F, A]#Left,
+    counterRef: Ref[F, ConsensusService.MessageCounter],
+    syncPipe: SyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     blockExecutionQueue: ConcurrentQueue[F, Effect.ExecuteBlocks[A]],
     fiberSet: FiberSet[F],
     maxEarlyViewNumberDiff: Int
 )(implicit tracers: ConsensusTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
+
+  import ConsensusService.MessageCounter
 
   /** Get the current protocol state, perhaps to respond to status requests. */
   def getState: F[ProtocolState[A]] =
@@ -88,18 +97,18 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
             .as(none)
 
         case Right(valid) if valid.message.viewNumber < state.viewNumber =>
-          // TODO (PM-3063): Also collect these for the round so we can realise if we're out of sync.
-          tracers.fromPast(valid).as(none)
+          tracers.fromPast(valid) >>
+            counterRef.update(_.incPast).as(none)
 
         case Right(valid)
             if valid.message.viewNumber > state.viewNumber + maxEarlyViewNumberDiff =>
-          // TODO (PM-3063): Also collect these for the round so we can realise if we're out of sync.
-          tracers.fromFuture(valid).as(none)
+          tracers.fromFuture(valid) >>
+            counterRef.update(_.incFuture).as(none)
 
         case Right(valid) =>
           // We know that the message is to/from the leader and it's properly signed,
           // althought it may not match our current state, which we'll see later.
-          validated(valid).some.pure[F]
+          counterRef.update(_.incPresent).as(validated(valid).some)
       }
     }
 
@@ -161,25 +170,43 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
       sender: A#PKey,
       prepare: Message.Prepare[A]
   ): F[Unit] =
-    blockSyncPipe.send(
-      BlockSyncPipe.Request(sender, prepare)
-    )
+    syncPipe.send(SyncPipe.PrepareRequest(sender, prepare))
 
   /** Process the synchronization result queue. */
-  private def processBlockSyncPipe: F[Unit] =
-    blockSyncPipe.receive
-      .mapEval[Unit] { case BlockSyncPipe.Response(request, isValid) =>
-        if (isValid) {
-          enqueueEvent(
-            validated(Event.MessageReceived(request.sender, request.prepare))
-          )
-        } else {
-          protocolError(
-            ProtocolError.UnsafeExtension(request.sender, request.prepare)
-          )
-        }
+  private def processSyncPipe: F[Unit] =
+    syncPipe.receive
+      .mapEval[Unit] {
+        case SyncPipe.PrepareResponse(request, isValid) =>
+          if (isValid) {
+            enqueueEvent(
+              validated(Event.MessageReceived(request.sender, request.prepare))
+            )
+          } else {
+            protocolError(
+              ProtocolError.UnsafeExtension(request.sender, request.prepare)
+            )
+          }
+
+        case SyncPipe.StatusResponse(status) =>
+          fastForwardState(status)
       }
       .completedL
+
+  /** Replace the current protocol state based on what was synced with the federation. */
+  private def fastForwardState(status: Status[A]): F[Unit] = {
+    stateRef.get.flatMap { state =>
+      val forward = state.copy[A](
+        viewNumber = status.viewNumber,
+        prepareQC = status.prepareQC,
+        commitQC = status.commitQC
+      )
+      // Trigger the next view, so we get proper tracing and effect execution.
+      tracers.adoptView(status) >>
+        handleTransition(
+          forward.handleNextView(Event.NextView(status.viewNumber))
+        )
+    }
+  }
 
   /** Add a validated event to the queue for processing against the protocol state. */
   private def enqueueEvent(event: Validated[Event[A]]): F[Unit] =
@@ -200,9 +227,12 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
             ().pure[F]
 
           case e @ Event.NextView(viewNumber) =>
-            // TODO (PM-3063): Check whether we have timed out because we are out of sync
-            tracers.timeout(viewNumber) >>
-              handleTransition(state.handleNextView(e))
+            for {
+              counter <- counterRef.get
+              _       <- tracers.timeout(viewNumber -> counter)
+              _       <- maybeRequestStatusSync(viewNumber, counter)
+              _       <- handleTransition(state.handleNextView(e))
+            } yield ()
 
           case e @ Event.MessageReceived(_, _) =>
             handleTransitionAttempt(
@@ -216,6 +246,26 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
         handle >> processEvents
       }
     }
+  }
+
+  /** Request view state synchronisation if we timed out and it looks like we're out of sync. */
+  private def maybeRequestStatusSync(
+      viewNumber: ViewNumber,
+      counter: MessageCounter
+  ): F[Unit] = {
+    // Only requesting a state sync if we haven't received any message that looks to be in sync
+    // but we have received some from the future. If we have received messages from the past,
+    // then by the virtue of timeouts they should catch up with us at some point.
+    val isOutOfSync = counter.present == 0 && counter.future > 0
+
+    // In the case that there were two groups being in sync within group members, but not with
+    // each other, than there should be rounds when none of them are leaders and they shouldn't
+    // receive valid present messages.
+    val requestSync =
+      tracers.viewSync(viewNumber) >>
+        syncPipe.send(SyncPipe.StatusRequest(viewNumber))
+
+    requestSync.whenA(isOutOfSync)
   }
 
   /** Handle successful state transition:
@@ -248,7 +298,8 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
         f(next).whenA(prev != next)
       }
 
-      ifChanged(_.viewNumber)(updateViewNumber) >>
+      ifChanged(_.viewNumber)(_ => counterRef.set(MessageCounter.empty)) >>
+        ifChanged(_.viewNumber)(updateViewNumber) >>
         ifChanged(_.prepareQC)(updateQuorum) >>
         ifChanged(_.lockedQC)(updateQuorum) >>
         ifChanged(_.commitQC)(updateQuorum)
@@ -371,8 +422,15 @@ class ConsensusService[F[_]: Timer: Concurrent, N, A <: Agreement: Block](
 
       case CreateBlock(viewNumber, highQC) =>
         // Ask the application to create a block for us.
-        // TODO (PM-3109): Create block.
-        ???
+        appService.createBlock(highQC).flatMap {
+          case None =>
+            ().pure[F]
+
+          case Some(block) =>
+            enqueueEvent(
+              validated(Event.BlockCreated(viewNumber, block, highQC))
+            )
+        }
 
       case SaveBlock(preparedBlock) =>
         storeRunner.runReadWrite {
@@ -461,6 +519,22 @@ object ConsensusService {
     def empty[A <: Agreement] = MessageStash[A](Map.empty)
   }
 
+  /** Count the number of messages received from others in a round,
+    * to determine whether we're out of sync or not in case of a timeout.
+    */
+  case class MessageCounter(
+      past: Int,
+      present: Int,
+      future: Int
+  ) {
+    def incPast    = copy(past = past + 1)
+    def incPresent = copy(present = present + 1)
+    def incFuture  = copy(future = future + 1)
+  }
+  object MessageCounter {
+    val empty = MessageCounter(0, 0, 0)
+  }
+
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
@@ -468,12 +542,17 @@ object ConsensusService {
     * `initState` is expected to be restored from persistent storage
     * instances upon restart.
     */
-  def apply[F[_]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
+  def apply[
+      F[_]: Timer: Concurrent: ContextShift,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
-      blockSyncPipe: BlockSyncPipe[F, A]#Left,
+      syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int = 1
   )(implicit
@@ -486,30 +565,34 @@ object ConsensusService {
         build[F, N, A](
           publicKey,
           network,
+          appService,
           blockStorage,
           viewStateStorage,
-          blockSyncPipe,
+          syncPipe,
           initState,
           maxEarlyViewNumberDiff,
           fiberSet
         )
       )
       _ <- Concurrent[F].background(service.processNetworkMessages)
-      _ <- Concurrent[F].background(service.processBlockSyncPipe)
+      _ <- Concurrent[F].background(service.processSyncPipe)
       _ <- Concurrent[F].background(service.processEvents)
       _ <- Concurrent[F].background(service.executeBlocks)
       initEffects = ProtocolState.init(initState)
       _ <- Resource.liftF(service.scheduleEffects(initEffects))
     } yield service
 
-  private def build[F[
-      _
-  ]: Timer: Concurrent: ContextShift, N, A <: Agreement: Block](
+  private def build[
+      F[_]: Timer: Concurrent: ContextShift,
+      N,
+      A <: Agreement: Block: Signing
+  ](
       publicKey: A#PKey,
       network: Network[F, A, Message[A]],
+      appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
-      blockSyncPipe: BlockSyncPipe[F, A]#Left,
+      syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
       maxEarlyViewNumberDiff: Int,
       fiberSet: FiberSet[F]
@@ -521,6 +604,7 @@ object ConsensusService {
       stateRef   <- Ref[F].of(initState)
       stashRef   <- Ref[F].of(MessageStash.empty[A])
       fibersRef  <- Ref[F].of(Set.empty[Fiber[F, Unit]])
+      counterRef <- Ref[F].of(MessageCounter.empty)
       eventQueue <- ConcurrentQueue[F].unbounded[Event[A]](None)
       blockExecutionQueue <- ConcurrentQueue[F]
         .unbounded[Effect.ExecuteBlocks[A]](None)
@@ -528,11 +612,13 @@ object ConsensusService {
       service = new ConsensusService(
         publicKey,
         network,
+        appService,
         blockStorage,
         viewStateStorage,
         stateRef,
         stashRef,
-        blockSyncPipe,
+        counterRef,
+        syncPipe,
         eventQueue,
         blockExecutionQueue,
         fiberSet,

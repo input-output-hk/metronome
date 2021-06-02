@@ -7,13 +7,28 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   ProtocolError
 }
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.service.ConsensusService.MessageCounter
+import io.iohk.metronome.hotstuff.service.Status
 
 sealed trait ConsensusEvent[+A <: Agreement]
 
 object ConsensusEvent {
 
   /** The round ended without having reached decision. */
-  case class Timeout(viewNumber: ViewNumber) extends ConsensusEvent[Nothing]
+  case class Timeout(
+      viewNumber: ViewNumber,
+      messageCounter: MessageCounter
+  ) extends ConsensusEvent[Nothing]
+
+  /** A full view synchronization was requested after timing out without any in-sync messages. */
+  case class ViewSync(
+      viewNumber: ViewNumber
+  ) extends ConsensusEvent[Nothing]
+
+  /** Adopting the view of the federation after a sync. */
+  case class AdoptView[A <: Agreement](
+      status: Status[A]
+  ) extends ConsensusEvent[A]
 
   /** The state advanced to a new view. */
   case class NewView(viewNumber: ViewNumber) extends ConsensusEvent[Nothing]

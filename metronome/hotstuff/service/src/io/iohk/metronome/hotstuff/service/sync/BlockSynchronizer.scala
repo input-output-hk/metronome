@@ -1,6 +1,7 @@
 package io.iohk.metronome.hotstuff.service.sync
 
 import cats.implicits._
+import cats.data.NonEmptyVector
 import cats.effect.{Sync, Timer, Concurrent, ContextShift}
 import cats.effect.concurrent.Semaphore
 import io.iohk.metronome.hotstuff.consensus.Federation
@@ -13,6 +14,7 @@ import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.storage.{InMemoryKVStore, KVStoreRunner}
 import scala.concurrent.duration._
 import scala.util.Random
+import scala.util.control.NoStackTrace
 
 /** The job of the `BlockSynchronizer` is to procure missing blocks when a `Prepare`
   * message builds on a High Q.C. that we don't have.
@@ -39,6 +41,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     semaphore: Semaphore[F],
     retryTimeout: FiniteDuration = 5.seconds
 )(implicit storeRunner: KVStoreRunner[F, N]) {
+  import BlockSynchronizer.DownloadFailedException
 
   private val otherPublicKeys =
     federation.publicKeys.filterNot(_ == publicKey)
@@ -66,6 +69,55 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
       path <- download(sender, quorumCertificate.blockHash, Nil)
       _    <- persist(quorumCertificate.blockHash, path)
     } yield ()
+
+  /** Download the block in the Quorum Certificate without ancestors.
+    *
+    * Return it without being persisted.
+    *
+    * Unlike `sync`, which is expected to be canceled if consensus times out,
+    * or be satisfied by alternative downloads happening concurrently, this
+    * method returns and error if it cannot download the block after a certain
+    * number of attempts, from any of the sources. This is becuause its primary
+    * use is during state syncing where this is the only operation, and if for
+    * any reason the block would be gone from everyone honest members' storage,
+    * we have to try something else.
+    */
+  def getBlockFromQuorumCertificate(
+      sources: NonEmptyVector[A#PKey],
+      quorumCertificate: QuorumCertificate[A]
+  ): F[Either[DownloadFailedException[A], A#Block]] = {
+    val otherSources = sources.filterNot(_ == publicKey).toList
+
+    def loop(
+        alternatives: List[A#PKey]
+    ): F[Either[DownloadFailedException[A], A#Block]] = {
+      alternatives match {
+        case Nil =>
+          new DownloadFailedException(
+            quorumCertificate.blockHash,
+            sources.toVector
+          ).asLeft[A#Block].pure[F]
+
+        case source :: alternatives =>
+          getAndValidateBlock(source, quorumCertificate.blockHash, otherSources)
+            .flatMap {
+              case None =>
+                loop(alternatives)
+              case Some(block) =>
+                block.asRight[DownloadFailedException[A]].pure[F]
+            }
+      }
+    }
+
+    storeRunner
+      .runReadOnly {
+        blockStorage.get(quorumCertificate.blockHash)
+      }
+      .flatMap {
+        case None        => loop(Random.shuffle(otherSources))
+        case Some(block) => block.asRight[DownloadFailedException[A]].pure[F]
+      }
+  }
 
   /** Download a block and all of its ancestors into the in-memory block store.
     *
@@ -130,7 +182,8 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     */
   private def getAndValidateBlock(
       from: A#PKey,
-      blockHash: A#Hash
+      blockHash: A#Hash,
+      alternativeSources: Seq[A#PKey] = otherPublicKeys
   ): F[Option[A#Block]] = {
     def fetch(from: A#PKey) =
       getBlock(from, blockHash)
@@ -144,16 +197,16 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     def loop(sources: List[A#PKey]): F[Option[A#Block]] =
       sources match {
         case Nil => none.pure[F]
-        case from :: alternatives =>
+        case from :: sources =>
           fetch(from).flatMap {
-            case None  => loop(alternatives)
+            case None  => loop(sources)
             case block => block.pure[F]
           }
       }
 
     loop(List(from)).flatMap {
       case None =>
-        loop(Random.shuffle(otherPublicKeys.filterNot(_ == from).toList))
+        loop(Random.shuffle(alternativeSources.filterNot(_ == from).toList))
       case block =>
         block.pure[F]
     }
@@ -224,6 +277,14 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
 }
 
 object BlockSynchronizer {
+
+  class DownloadFailedException[A <: Agreement](
+      blockHash: A#Hash,
+      sources: Seq[A#PKey]
+  ) extends RuntimeException(
+        s"Failed to download block ${blockHash} from ${sources.size} sources."
+      )
+      with NoStackTrace
 
   /** Send a network request to get a block. */
   type GetBlock[F[_], A <: Agreement] = (A#PKey, A#Hash) => F[Option[A#Block]]
