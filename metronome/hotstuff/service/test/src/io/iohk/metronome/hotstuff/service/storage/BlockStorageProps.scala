@@ -256,7 +256,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
   }
 
   property("getDescendants delete") = forAll(genSubTree) {
-    case (data, block, subTree) =>
+    case (data, block, _) =>
       val ds = data.store.getDescendants(block.id)
 
       val (deleted, ok) = ds.foldLeft((data.store, true)) {

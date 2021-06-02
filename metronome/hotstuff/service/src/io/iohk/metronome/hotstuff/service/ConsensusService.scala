@@ -222,8 +222,7 @@ class ConsensusService[
     eventQueue.poll.flatMap { event =>
       stateRef.get.flatMap { state =>
         val handle: F[Unit] = event match {
-          case e @ Event.NextView(viewNumber)
-              if viewNumber < state.viewNumber =>
+          case Event.NextView(viewNumber) if viewNumber < state.viewNumber =>
             ().pure[F]
 
           case e @ Event.NextView(viewNumber) =>
@@ -360,11 +359,10 @@ class ConsensusService[
           effect match {
             case Effect.SendMessage(recipient, message)
                 if recipient == publicKey =>
-              val event =
-                Validated(Event.MessageReceived(recipient, message))
+              val event = Event.MessageReceived(recipient, message)
 
-              state.handleMessage(event) match {
-                case Left(error) =>
+              state.handleMessage(validated(event)) match {
+                case Left(_) =>
                   // This shouldn't happen, but let's just skip this event here and redeliver it later.
                   loop(state, effectQueue, effect :: asyncEffects)
 
@@ -437,7 +435,7 @@ class ConsensusService[
           blockStorage.put(preparedBlock)
         }
 
-      case effect @ ExecuteBlocks(_, commitQC) =>
+      case effect @ ExecuteBlocks(_, _) =>
         // Each node may be at a different point in the chain, so how
         // long the executions take can vary. We could execute it in
         // the forground here, but it may cause the node to lose its
@@ -456,16 +454,15 @@ class ConsensusService[
 
   /** Execute blocks in order, updating pesistent storage along the way. */
   private def executeBlocks: F[Unit] = {
-    blockExecutionQueue.poll.flatMap {
-      case Effect.ExecuteBlocks(lastExecutedBlockHash, commitQC) =>
-        // Retrieve the blocks from the storage from the last executed
-        // to the one in the Quorum Certificate and tell the application
-        // to execute them one by one. Update the persistent view state
-        // after reach execution to remember which blocks we have truly
-        // done.
+    blockExecutionQueue.poll.flatMap { case Effect.ExecuteBlocks(_, _) =>
+      // Retrieve the blocks from the storage from the last executed
+      // to the one in the Quorum Certificate and tell the application
+      // to execute them one by one. Update the persistent view state
+      // after reach execution to remember which blocks we have truly
+      // done.
 
-        // TODO (PM-3133): Execute block
-        ???
+      // TODO (PM-3133): Execute block
+      ???
     } >> executeBlocks
   }
 

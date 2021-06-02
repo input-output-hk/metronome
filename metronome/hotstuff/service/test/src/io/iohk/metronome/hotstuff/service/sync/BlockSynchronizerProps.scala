@@ -270,7 +270,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
         )
     } yield "fail with the right exception" |: {
       result match {
-        case Left(ex: BlockSynchronizer.DownloadFailedException[_]) =>
+        case Left(_: BlockSynchronizer.DownloadFailedException[_]) =>
           true
         case _ =>
           false

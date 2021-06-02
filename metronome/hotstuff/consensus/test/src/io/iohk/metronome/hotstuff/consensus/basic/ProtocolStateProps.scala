@@ -871,11 +871,7 @@ object ProtocolStateCommands extends Commands {
               "votes for the next phase" |: (state.phase == Phase.Decide ||
                 effects
                   .collectFirst {
-                    case Effect
-                          .SendMessage(
-                            recipient,
-                            Message.Vote(_, phase, _, _)
-                          ) =>
+                    case Effect.SendMessage(_, Message.Vote(_, phase, _, _)) =>
                       phase == state.phase
                   }
                   .getOrElse(false)),

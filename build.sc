@@ -103,6 +103,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
             "-Ywarn-inaccessible",
             "-Ywarn-unused-import",
             "-Ywarn-unused:locals",
+            "-Ywarn-unused:patvars",
             "-Ypartial-unification", // Required for the `>>` syntax.
             "-language:higherKinds",
             "-language:postfixOps"

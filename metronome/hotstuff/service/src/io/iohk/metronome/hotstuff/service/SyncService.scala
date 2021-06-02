@@ -195,7 +195,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
             // We have already synced higher than this old StatusRequest.
             loop(blockSync, lastSyncedViewNumber)
 
-          case Right(request @ SyncPipe.PrepareRequest(sender, prepare)) =>
+          case Right(request @ SyncPipe.PrepareRequest(_, _)) =>
             handlePrepareRequest(blockSync, request) >>
               loop(blockSync, lastSyncedViewNumber)
 

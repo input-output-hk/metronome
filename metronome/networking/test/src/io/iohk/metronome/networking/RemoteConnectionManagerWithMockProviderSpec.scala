@@ -168,7 +168,7 @@ class RemoteConnectionManagerWithMockProviderSpec
 
   it should "fail sending message to unknown peer" in customTestCaseResourceT(
     buildTestCaseWithNPeers(2)
-  ) { case (provider, manager, _) =>
+  ) { case (_, manager, _) =>
     val randomKey = getFakeRandomKey()
     for {
       sendResult <- manager.sendMessage(randomKey, MessageA(1))
