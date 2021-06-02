@@ -238,7 +238,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
   property("executeBlocks - from pruned") = forAll { (fixture: TestFixture) =>
     run {
-      fixture.resources.use { case (blockSychronizer, viewStateStorage) =>
+      fixture.resources.use { case (blockSychronizer, _) =>
         val lastBatch             = fixture.batches.last
         val lastExecutedBlockHash = lastBatch.lastExecutedBlockHash
         for {
