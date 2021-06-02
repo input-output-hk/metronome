@@ -89,9 +89,9 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     val otherSources = sources.filterNot(_ == publicKey).toList
 
     def loop(
-        alternatives: List[A#PKey]
+        sources: List[A#PKey]
     ): F[Either[DownloadFailedException[A], A#Block]] = {
-      alternatives match {
+      sources match {
         case Nil =>
           new DownloadFailedException(
             quorumCertificate.blockHash,
