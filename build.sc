@@ -102,6 +102,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
             "-Xlint:unsound-match",
             "-Ywarn-inaccessible",
             "-Ywarn-unused-import",
+            "-Ywarn-unused:locals",
             "-Ypartial-unification", // Required for the `>>` syntax.
             "-language:higherKinds",
             "-language:postfixOps"
