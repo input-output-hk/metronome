@@ -133,14 +133,14 @@ case class ProtocolState[A <: Agreement: Block: Signing](
       case _ if !federation.contains(e.sender) =>
         Left(NotFromFederation(e))
 
-      case m: LeaderMessage[_] if e.sender != currLeader =>
+      case _: LeaderMessage[_] if e.sender != currLeader =>
         Left(NotFromLeader(e, currLeader))
 
       case m: ReplicaMessage[_]
           if !m.isInstanceOf[NewView[_]] && publicKey != currLeader =>
         Left(NotToLeader(e, currLeader))
 
-      case m: NewView[_] if publicKey != nextLeader =>
+      case _: NewView[_] if publicKey != nextLeader =>
         Left(NotToLeader(e, nextLeader))
 
       case m: Vote[_] if !Signing[A].validate(e.sender, m) =>

@@ -266,7 +266,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       }
 
       invalidEventCount = {
-        events.collect { case x: SyncEvent.InvalidStatus[_] =>
+        events.collect { case _: SyncEvent.InvalidStatus[_] =>
         }.size
       }
 
@@ -277,7 +277,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
       responseCounter <- fixture.responseCounterRef.get
     } yield {
       val statusProps = status match {
-        case Right(FederationStatus(status, sources)) =>
+        case Right(FederationStatus(_, sources)) =>
           "status" |: all(
             "quorum" |: hasQuorum,
             "reports polls each round" |:
@@ -290,7 +290,7 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
             "returns sources" |: sources.toVector.size >= quorumSize
           )
 
-        case Left(ex: TimeoutException) =>
+        case Left(_: TimeoutException) =>
           "timeout" |: all(
             "no quorum" |: !hasQuorum,
             "empty polls" |: pollSizes.forall(_ < quorumSize),

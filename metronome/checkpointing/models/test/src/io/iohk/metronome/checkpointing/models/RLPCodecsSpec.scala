@@ -36,7 +36,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
           }
         case (a: RLPValue, b: RLPValue) =>
           a.bytes.sameElements(b.bytes)
-        case other =>
+        case _ =>
           false
       }
   }

@@ -53,7 +53,6 @@ object ViewStateStorageCommands extends Commands {
     def read[A](
         f: TestViewStateStorage => KVStoreRead[Namespace, A]
     ): A = {
-      val b = scodec.bits.ByteVector.empty
       TestKVStoreState.compile(f(viewStateStorage)).run(store)
     }
   }

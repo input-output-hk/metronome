@@ -43,7 +43,7 @@ class RemoteConnectionManagerWithScalanetProviderSpec
       reporter = UncaughtExceptionReporter {
         case ex: IllegalStateException
             if ex.getMessage.contains("executor not accepting a task") =>
-        case ex: PeerGroup.ChannelBrokenException[_] =>
+        case _: PeerGroup.ChannelBrokenException[_] =>
         // Probably test already closed with some task running in the background.
         case ex =>
           UncaughtExceptionReporter.default.reportFailure(ex)
@@ -291,7 +291,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     def closeAllNodes: Task[Unit] = {
       nodes.get.flatMap { nodes =>
         Task
-          .parTraverseUnordered(nodes.values) { case (node, _, _, release) =>
+          .parTraverseUnordered(nodes.values) { case (_, _, _, release) =>
             release
           }
           .void

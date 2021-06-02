@@ -74,9 +74,9 @@ object RocksDBStoreProps extends Properties("RocksDBStore") {
       val prop2 = prog2.postCondition(state, Success(result2))
       // The other should run second, on top of the changes from the first.
       val prop12 = prog12.postCondition(state, Success(result1 ++ result2))
-      val prope1 = prog21.postCondition(state, Success(result2 ++ result1))
+      val prop21 = prog21.postCondition(state, Success(result2 ++ result1))
 
-      (prop1 && prop12) || (prop2 && prop1)
+      (prop1 && prop12) || (prop2 && prop21)
     } finally {
       destroySut(sut)
     }
