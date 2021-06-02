@@ -27,28 +27,4 @@ case class QuorumCertificate[A <: Agreement, +P <: VotingPhase](
     )
     this.asInstanceOf[QuorumCertificate[A, V]]
   }
-
-  // The following methods are used in tests.
-
-  def withPhase[V <: VotingPhase](phase: V) =
-    copy[A, V](phase = phase)
-
-  def withViewNumber(viewNumber: ViewNumber) =
-    copy[A, P](viewNumber = viewNumber)
-
-  def withBlockHash(blockHash: A#Hash) =
-    copy[A, P](blockHash = blockHash)
-
-  def withSignature(
-      signature: GroupSignature[
-        A#PKey,
-        (VotingPhase, ViewNumber, A#Hash),
-        A#GSig
-      ]
-  ) =
-    copy[A, P](signature = signature)
-
-  // Sometimes when we have just `QuorumCertificate[A, _]` the compiler
-  // can't prove that `.phase` is a `VotingPhase` and not just `$1`.
-  def votingPhase: VotingPhase = phase
 }

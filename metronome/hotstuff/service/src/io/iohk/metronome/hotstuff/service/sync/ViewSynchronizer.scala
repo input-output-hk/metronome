@@ -107,7 +107,7 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
   private def check(cond: Boolean, hint: => String) =
     if (cond) none else hint.some
 
-  private def checkSignature(qc: QuorumCertificate[A, _]) =
+  private def checkSignature(qc: QuorumCertificate[A, VotingPhase]) =
     check(Signing[A].validate(federation, qc), "Invalid signature.")
 
   private def checkVisible(status: Status[A])(qc: QuorumCertificate[A, _]) =
@@ -128,7 +128,7 @@ class ViewSynchronizer[F[_]: Sync: Timer: Parallel, A <: Agreement: Signing](
       from: A#PKey,
       qc: QuorumCertificate[A, P]
   )(
-      checks: (QuorumCertificate[A, _] => Option[String])*
+      checks: (QuorumCertificate[A, VotingPhase] => Option[String])*
   ) =
     checks.toList.traverse { check =>
       check(qc)

@@ -319,7 +319,7 @@ object ProtocolStateCommands extends Commands {
     ): Gen[QuorumCertificate[TestAgreement, P]] = {
       Gen.oneOf(
         genLazy(
-          qc.withBlockHash(invalidateHash(qc.blockHash))
+          qc.copy[TestAgreement, P](blockHash = invalidateHash(qc.blockHash))
         ),
         // Now that the compiler (and codecs) check that we're getting the right message,
         // we shouldn't encounter an unexpected phase in a field like `highQC`,
@@ -329,12 +329,15 @@ object ProtocolStateCommands extends Commands {
         //   qc.withPhase[VotingPhase](nextVoting(qc.votingPhase))
         // ).suchThat(_.blockHash != genesisQC.blockHash),
         genLazy(
-          qc.withViewNumber(invalidateViewNumber(qc.viewNumber))
+          qc.copy[TestAgreement, P](viewNumber =
+            invalidateViewNumber(qc.viewNumber)
+          )
         ),
         genLazy(
-          qc.withSignature(
+          qc.copy[TestAgreement, P](
             // The quorum cert has no items, so add one to make it different.
-            qc.signature.copy(sig = 0L +: qc.signature.sig.map(invalidateSig))
+            signature =
+              qc.signature.copy(sig = 0L +: qc.signature.sig.map(invalidateSig))
           )
         )
       )

@@ -178,8 +178,8 @@ object ViewSynchronizerProps extends Properties("ViewSynchronizer") {
         // ),
         delay(
           status.copy(commitQC =
-            status.commitQC.withSignature(
-              status.commitQC.signature
+            status.commitQC.copy[TestAgreement, Phase.Commit](
+              signature = status.commitQC.signature
                 .copy(sig = status.commitQC.signature.sig.map(_ * 2))
             )
           ) -> "wrong commit signature"
