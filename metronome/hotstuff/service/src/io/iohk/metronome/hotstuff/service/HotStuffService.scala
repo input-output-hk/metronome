@@ -22,6 +22,7 @@ import io.iohk.metronome.hotstuff.service.tracing.{
   ConsensusTracers,
   SyncTracers
 }
+import io.iohk.metronome.networking.Network
 import io.iohk.metronome.storage.KVStoreRunner
 
 object HotStuffService {
@@ -32,7 +33,7 @@ object HotStuffService {
       N,
       A <: Agreement: Block: Signing
   ](
-      network: Network[F, A, HotStuffMessage[A]],
+      network: Network[F, A#PKey, HotStuffMessage[A]],
       appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
@@ -44,7 +45,7 @@ object HotStuffService {
   ): Resource[F, Unit] =
     for {
       (consensusNetwork, syncNetwork) <- Network
-        .splitter[F, A, HotStuffMessage[A], Message[A], SyncMessage[A]](
+        .splitter[F, A#PKey, HotStuffMessage[A], Message[A], SyncMessage[A]](
           network
         )(
           split = {

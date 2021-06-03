@@ -27,7 +27,7 @@ import io.iohk.metronome.hotstuff.service.sync.{
   ViewSynchronizer
 }
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
-import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.networking.{ConnectionHandler, Network}
 import io.iohk.metronome.storage.{KVStoreRunner, KVStore}
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
@@ -45,7 +45,7 @@ import scala.reflect.ClassTag
   */
 class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     publicKey: A#PKey,
-    network: Network[F, A, SyncMessage[A]],
+    network: Network[F, A#PKey, SyncMessage[A]],
     appService: ApplicationService[F, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
@@ -355,7 +355,7 @@ object SyncService {
   ](
       publicKey: A#PKey,
       federation: Federation[A#PKey],
-      network: Network[F, A, SyncMessage[A]],
+      network: Network[F, A#PKey, SyncMessage[A]],
       appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],

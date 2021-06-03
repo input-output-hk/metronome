@@ -1,19 +1,18 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.{Sync, Resource, Concurrent, ContextShift}
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
 import monix.tail.Iterant
 import monix.catnap.ConcurrentQueue
 
-/** Network adapter for specialising messages. */
-trait Network[F[_], A <: Agreement, M] {
+/** Network adapter for specializing messages. */
+trait Network[F[_], K, M] {
 
   /** Receive incoming messages from the network. */
-  def incomingMessages: Iterant[F, MessageReceived[A#PKey, M]]
+  def incomingMessages: Iterant[F, MessageReceived[K, M]]
 
   /** Try sending a message to a federation member, if we are connected. */
-  def sendMessage(recipient: A#PKey, message: M): F[Unit]
+  def sendMessage(recipient: K, message: M): F[Unit]
 }
 
 object Network {
@@ -21,15 +20,15 @@ object Network {
   /** Consume messges from a network and dispatch them either left or right,
     * based on a splitter function. Combine messages the other way.
     */
-  def splitter[F[_]: Concurrent: ContextShift, A <: Agreement, M, L, R](
-      network: Network[F, A, M]
+  def splitter[F[_]: Concurrent: ContextShift, K, M, L, R](
+      network: Network[F, K, M]
   )(
       split: M => Either[L, R],
       merge: Either[L, R] => M
-  ): Resource[F, (Network[F, A, L], Network[F, A, R])] =
+  ): Resource[F, (Network[F, K, L], Network[F, K, R])] =
     for {
-      leftQueue  <- makeQueue[F, A, L]
-      rightQueue <- makeQueue[F, A, R]
+      leftQueue  <- makeQueue[F, K, L]
+      rightQueue <- makeQueue[F, K, R]
 
       _ <- Concurrent[F].background {
         network.incomingMessages.mapEval {
@@ -43,31 +42,31 @@ object Network {
         }.completedL
       }
 
-      leftNetwork = new SplitNetwork[F, A, L](
+      leftNetwork = new SplitNetwork[F, K, L](
         leftQueue.poll,
         (r, m) => network.sendMessage(r, merge(Left(m)))
       )
 
-      rightNetwork = new SplitNetwork[F, A, R](
+      rightNetwork = new SplitNetwork[F, K, R](
         rightQueue.poll,
         (r, m) => network.sendMessage(r, merge(Right(m)))
       )
 
     } yield (leftNetwork, rightNetwork)
 
-  private def makeQueue[F[_]: Concurrent: ContextShift, A <: Agreement, M] =
+  private def makeQueue[F[_]: Concurrent: ContextShift, K, M] =
     Resource.liftF {
-      ConcurrentQueue.unbounded[F, MessageReceived[A#PKey, M]](None)
+      ConcurrentQueue.unbounded[F, MessageReceived[K, M]](None)
     }
 
-  private class SplitNetwork[F[_]: Sync, A <: Agreement, M](
-      poll: F[MessageReceived[A#PKey, M]],
-      send: (A#PKey, M) => F[Unit]
-  ) extends Network[F, A, M] {
-    override def incomingMessages: Iterant[F, MessageReceived[A#PKey, M]] =
+  private class SplitNetwork[F[_]: Sync, K, M](
+      poll: F[MessageReceived[K, M]],
+      send: (K, M) => F[Unit]
+  ) extends Network[F, K, M] {
+    override def incomingMessages: Iterant[F, MessageReceived[K, M]] =
       Iterant.repeatEvalF(poll)
 
-    def sendMessage(recipient: A#PKey, message: M) =
+    def sendMessage(recipient: K, message: M) =
       send(recipient, message)
   }
 }
