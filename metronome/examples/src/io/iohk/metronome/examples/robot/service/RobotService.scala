@@ -10,12 +10,12 @@ import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot}
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
-import io.iohk.metronome.hotstuff.service.{ApplicationService, Network}
+import io.iohk.metronome.hotstuff.service.ApplicationService
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
   ViewStateStorage
 }
-import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.networking.{ConnectionHandler, Network}
 import io.iohk.metronome.storage.{KVStoreRunner, KVRingBuffer}
 import io.iohk.metronome.storage.KVStoreRead
 import scala.util.Random
@@ -26,7 +26,7 @@ class RobotService[F[_]: Sync: Timer, N](
     maxRow: Int,
     maxCol: Int,
     publicKey: RobotAgreement.PKey,
-    network: Network[F, RobotAgreement, RobotMessage],
+    network: Network[F, RobotAgreement.PKey, RobotMessage],
     blockStorage: BlockStorage[N, RobotAgreement],
     viewStateStorage: ViewStateStorage[N, RobotAgreement],
     stateStorage: KVRingBuffer[N, Hash, Robot.State],
@@ -123,14 +123,16 @@ class RobotService[F[_]: Sync: Timer, N](
       state.position.col <= maxCol
 
   /** Validate a block by executing any pending changes and checking the post state. */
-  override def validateBlock(block: RobotBlock): F[Boolean] =
-    projectState(block.parentHash).map {
-      case None =>
-        false
-      case Some(preState) =>
-        val postState = preState.update(block.command)
-        postState.hash == block.postStateHash && isValid(postState)
-    }
+  override def validateBlock(block: RobotBlock): F[Option[Boolean]] =
+    projectState(block.parentHash)
+      .map {
+        case None =>
+          false
+        case Some(preState) =>
+          val postState = preState.update(block.command)
+          postState.hash == block.postStateHash && isValid(postState)
+      }
+      .map(_.some)
 
   /** Execute the next block in the queue, store the resulting state. */
   override def executeBlock(
@@ -153,7 +155,7 @@ class RobotService[F[_]: Sync: Timer, N](
           }
     }
 
-  def syncState(
+  override def syncState(
       sources: NonEmptyVector[ECPublicKey],
       block: RobotBlock
   ): F[Unit] = {
@@ -185,7 +187,7 @@ class RobotService[F[_]: Sync: Timer, N](
       .flatMap {
         case None =>
           loop(sources.toList.filterNot(_ == publicKey))
-        case Some(state) =>
+        case Some(_) =>
           ().pure[F]
       }
   }
@@ -242,7 +244,7 @@ object RobotService {
       maxRow: Int,
       maxCol: Int,
       publicKey: RobotAgreement.PKey,
-      network: Network[F, RobotAgreement, RobotMessage],
+      network: Network[F, RobotAgreement.PKey, RobotMessage],
       blockStorage: BlockStorage[N, RobotAgreement],
       viewStateStorage: ViewStateStorage[N, RobotAgreement],
       stateStorage: KVRingBuffer[N, Hash, Robot.State],

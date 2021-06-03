@@ -16,11 +16,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Phase,
   ProtocolState
 }
-import io.iohk.metronome.hotstuff.service.{
-  Network,
-  HotStuffService,
-  ConsensusService
-}
+import io.iohk.metronome.hotstuff.service.{HotStuffService, ConsensusService}
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
@@ -28,7 +24,8 @@ import io.iohk.metronome.hotstuff.service.messages.{
 import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
   ScalanetConnectionProvider,
-  RemoteConnectionManager
+  RemoteConnectionManager,
+  Network
 }
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
@@ -218,14 +215,14 @@ trait RobotComposition {
       ]
   ) = {
     val network = Network
-      .fromRemoteConnnectionManager[Task, RobotAgreement, NetworkMessage](
+      .fromRemoteConnnectionManager[Task, RobotAgreement.PKey, NetworkMessage](
         connectionManager
       )
 
     for {
       (hotstuffNetwork, applicationNetwork) <- Network.splitter[
         Task,
-        RobotAgreement,
+        RobotAgreement.PKey,
         NetworkMessage,
         HotStuffMessage[RobotAgreement],
         RobotMessage
@@ -314,7 +311,7 @@ trait RobotComposition {
   protected def makeApplicationService(
       config: RobotConfig,
       opts: RobotOptions,
-      applicationNetwork: Network[Task, RobotAgreement, RobotMessage],
+      applicationNetwork: Network[Task, RobotAgreement.PKey, RobotMessage],
       blockStorage: BlockStorage[NS, RobotAgreement],
       viewStateStorage: ViewStateStorage[NS, RobotAgreement],
       stateStorage: KVRingBuffer[NS, Hash, Robot.State]
@@ -339,7 +336,7 @@ trait RobotComposition {
       genesis: RobotBlock,
       hotstuffNetwork: Network[
         Task,
-        RobotAgreement,
+        RobotAgreement.PKey,
         HotStuffMessage[RobotAgreement]
       ],
       appService: RobotService[Task, NS],

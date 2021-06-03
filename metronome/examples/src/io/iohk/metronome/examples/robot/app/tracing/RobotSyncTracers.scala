@@ -8,7 +8,6 @@ import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.circe.{Encoder, JsonObject, Json}
 import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
-import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 import io.iohk.metronome.crypto.ECPublicKey
 
 object RobotSyncTracers {
@@ -24,9 +23,6 @@ object RobotSyncTracers {
 
     implicit val hashEncoder: Encoder[Hash] =
       Encoder[String].contramap[Hash](_.toHex)
-
-    implicit val phaseEncoder: Encoder[VotingPhase] =
-      Encoder[String].contramap[VotingPhase](_.toString)
 
     implicit val publicKeyEncoder: Encoder[ECPublicKey] =
       Encoder[String].contramap[ECPublicKey](_.bytes.toHex)

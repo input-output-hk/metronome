@@ -31,8 +31,8 @@ object RobotNetworkTracers {
 
     HybridLog.instance[RobotNetworkEvent](
       level = {
-        case e: ConnectionRegistered[_]   => HybridLogObject.Level.Info
-        case e: ConnectionDeregistered[_] => HybridLogObject.Level.Info
+        case _: ConnectionRegistered[_]   => HybridLogObject.Level.Info
+        case _: ConnectionDeregistered[_] => HybridLogObject.Level.Info
         case _                            => HybridLogObject.Level.Debug
       },
       message = _.getClass.getSimpleName,

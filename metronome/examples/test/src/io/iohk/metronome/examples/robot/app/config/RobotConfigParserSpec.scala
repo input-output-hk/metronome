@@ -7,7 +7,7 @@ class RobotConfigParserSpec extends AnyFlatSpec with Inside {
   behavior of "RobotConfigParser"
 
   it should "parse the default configuration" in {
-    inside(RobotConfigParser.parse) { case Right(config) =>
+    inside(RobotConfigParser.parse) { case Right(_) =>
       succeed
     }
   }
