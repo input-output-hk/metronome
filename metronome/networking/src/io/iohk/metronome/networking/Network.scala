@@ -1,5 +1,6 @@
 package io.iohk.metronome.networking
 
+import cats.implicits._
 import cats.effect.{Sync, Resource, Concurrent, ContextShift}
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
 import monix.tail.Iterant
@@ -16,6 +17,18 @@ trait Network[F[_], K, M] {
 }
 
 object Network {
+
+  def fromRemoteConnnectionManager[F[_]: Sync, K, M](
+      manager: RemoteConnectionManager[F, K, M]
+  ): Network[F, K, M] = new Network[F, K, M] {
+    override def incomingMessages =
+      manager.incomingMessages
+
+    override def sendMessage(recipient: K, message: M) =
+      // Not returning an error if we are trying to send to someone no longer connected,
+      // this should be handled transparently, delivery is best-effort.
+      manager.sendMessage(recipient, message).void
+  }
 
   /** Consume messges from a network and dispatch them either left or right,
     * based on a splitter function. Combine messages the other way.
