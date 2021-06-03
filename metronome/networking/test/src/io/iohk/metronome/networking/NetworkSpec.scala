@@ -1,14 +1,13 @@
-package io.iohk.metronome.hotstuff.service
+package io.iohk.metronome.networking
 
 import cats.effect.Resource
 import cats.effect.concurrent.Ref
 import monix.eval.Task
+import monix.tail.Iterant
 import monix.execution.Scheduler.Implicits.global
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
-import io.iohk.metronome.hotstuff.consensus.basic.Agreement
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
-import monix.tail.Iterant
 
 class NetworkSpec extends AsyncFlatSpec with Matchers {
 
@@ -16,25 +15,17 @@ class NetworkSpec extends AsyncFlatSpec with Matchers {
   case class TestFoo(foo: String) extends TestMessage
   case class TestBar(bar: Int)    extends TestMessage
 
-  object TestAgreement extends Agreement {
-    override type Block = Nothing
-    override type Hash  = Nothing
-    override type PSig  = Nothing
-    override type GSig  = Nothing
-    override type PKey  = String
-    override type SKey  = Nothing
-  }
-  type TestAgreement = TestAgreement.type
+  type TestKey = String
 
-  type TestKeyAndMessage   = (TestAgreement.PKey, TestMessage)
-  type TestMessageReceived = MessageReceived[TestAgreement.PKey, TestMessage]
+  type TestKeyAndMessage   = (TestKey, TestMessage)
+  type TestMessageReceived = MessageReceived[TestKey, TestMessage]
 
   class TestNetwork(
       outbox: Vector[TestKeyAndMessage],
       val inbox: Ref[Task, Vector[
-        MessageReceived[TestAgreement.PKey, TestMessage]
+        MessageReceived[TestKey, TestMessage]
       ]]
-  ) extends Network[Task, TestAgreement, TestMessage] {
+  ) extends Network[Task, TestKey, TestMessage] {
 
     override def incomingMessages: Iterant[Task, TestMessageReceived] =
       Iterant.fromIndexedSeq {
@@ -44,7 +35,7 @@ class NetworkSpec extends AsyncFlatSpec with Matchers {
       }
 
     override def sendMessage(
-        recipient: TestAgreement.PKey,
+        recipient: TestKey,
         message: TestMessage
     ): Task[Unit] =
       inbox.update(_ :+ MessageReceived(recipient, message))
@@ -68,7 +59,7 @@ class NetworkSpec extends AsyncFlatSpec with Matchers {
     val resources = for {
       network <- Resource.liftF(TestNetwork(messages))
       (fooNetwork, barNetwork) <- Network
-        .splitter[Task, TestAgreement, TestMessage, String, Int](network)(
+        .splitter[Task, TestKey, TestMessage, String, Int](network)(
           split = {
             case TestFoo(msg) => Left(msg)
             case TestBar(msg) => Right(msg)

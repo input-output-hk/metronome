@@ -24,7 +24,7 @@ import io.iohk.metronome.hotstuff.service.storage.{
   ViewStateStorage
 }
 import io.iohk.metronome.hotstuff.service.tracing.ConsensusTracers
-import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.networking.{ConnectionHandler, Network}
 import io.iohk.metronome.storage.KVStoreRunner
 import monix.catnap.ConcurrentQueue
 import scala.annotation.tailrec
@@ -41,7 +41,7 @@ class ConsensusService[
     A <: Agreement: Block: Signing
 ](
     publicKey: A#PKey,
-    network: Network[F, A, Message[A]],
+    network: Network[F, A#PKey, Message[A]],
     appService: ApplicationService[F, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
@@ -545,7 +545,7 @@ object ConsensusService {
       A <: Agreement: Block: Signing
   ](
       publicKey: A#PKey,
-      network: Network[F, A, Message[A]],
+      network: Network[F, A#PKey, Message[A]],
       appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
@@ -585,7 +585,7 @@ object ConsensusService {
       A <: Agreement: Block: Signing
   ](
       publicKey: A#PKey,
-      network: Network[F, A, Message[A]],
+      network: Network[F, A#PKey, Message[A]],
       appService: ApplicationService[F, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
