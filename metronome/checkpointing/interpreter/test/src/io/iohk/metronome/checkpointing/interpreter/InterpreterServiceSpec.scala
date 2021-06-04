@@ -23,11 +23,9 @@ import org.scalatest.compatible.Assertion
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import io.iohk.metronome.checkpointing.models.{Block, Ledger, Transaction}
-import io.iohk.metronome.checkpointing.models.{Block, Ledger}
 import io.iohk.metronome.checkpointing.models.CheckpointCertificate
 import io.iohk.metronome.checkpointing.interpreter.tracing.InterpreterEvent
 import org.scalatest.matchers.should.Matchers
-import java.time.Instant
 
 class InterpreterServiceSpec extends AsyncFlatSpec with Matchers {
   import InterpreterServiceSpec.Fixture
@@ -53,6 +51,10 @@ class InterpreterServiceSpec extends AsyncFlatSpec with Matchers {
 }
 
 object InterpreterServiceSpec {
+
+  val retryConfig = RemoteConnectionManager.RetryConfig.default.copy(
+    maxDelay = 5.seconds
+  )
 
   class MockInterpreterRPC extends InterpreterRPC[Task] {
     override def createBlockBody(
@@ -122,13 +124,15 @@ object InterpreterServiceSpec {
 
         _ <- Resource.liftF {
           for {
-            // Wait some time for initial registration conflicts to be resolved.
-            _ <- Task.sleep(1.second)
-            _ <- serviceConnection.isConnected
-              .restartUntil(identity)
-              .timeout(5.seconds)
-            _ <- interpreterConnection.isConnected
-              .restartUntil(identity)
+            // Allow some time for connections to be sorted out.
+            _ <- Task.sleep(retryConfig.oppositeConnectionOverlap)
+            _ <- Task
+              .parSequence(
+                List(
+                  serviceConnection.isConnected.restartUntil(identity),
+                  interpreterConnection.isConnected.restartUntil(identity)
+                )
+              )
               .timeout(5.seconds)
           } yield ()
         }
@@ -172,20 +176,8 @@ object InterpreterServiceSpec {
   ]] = {
     import DefaultInterpreterCodecs.interpreterMessageCodec
 
-    val retryConfig = RemoteConnectionManager.RetryConfig.default.copy(
-      initialDelay = 500.millis,
-      maxDelay = 5.seconds
-    )
-
     implicit val networkTracers = NetworkTracers(
-      //Tracer.noOpTracer[Task, NetworkEvent[ECPublicKey, InterpreterMessage]]
-      Tracer.instance[Task, NetworkEvent[ECPublicKey, InterpreterMessage]] {
-        event =>
-          Task {
-            val now = Instant.now()
-            println(s"$localAddress - $now: $event")
-          }
-      }
+      Tracer.noOpTracer[Task, NetworkEvent[ECPublicKey, InterpreterMessage]]
     )
 
     for {
