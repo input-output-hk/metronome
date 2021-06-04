@@ -23,7 +23,7 @@ object VersionOf {
   val rocksdb              = "6.15.2"
   val scalacheck           = "1.15.2"
   val scalatest            = "3.2.5"
-  val scalanet             = "0.7.0"
+  val scalanet             = "0.8.0"
   val shapeless            = "2.3.3"
   val slf4j                = "1.7.30"
   val `scodec-core`        = "1.11.7"

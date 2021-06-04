@@ -70,7 +70,8 @@ object RemoteConnectionManager {
       initialDelay: FiniteDuration,
       backOffFactor: Long,
       maxDelay: FiniteDuration,
-      randomJitterConfig: RandomJitterConfig
+      randomJitterConfig: RandomJitterConfig,
+      oppositeConnectionOverlap: FiniteDuration
   )
 
   object RetryConfig {
@@ -124,10 +125,11 @@ object RemoteConnectionManager {
     import scala.concurrent.duration._
     def default: RetryConfig = {
       RetryConfig(
-        500.milliseconds,
-        2,
-        30.seconds,
-        RandomJitterConfig.defaultConfig
+        initialDelay = 500.milliseconds,
+        backOffFactor = 2,
+        maxDelay = 30.seconds,
+        randomJitterConfig = RandomJitterConfig.defaultConfig,
+        oppositeConnectionOverlap = 1.second
       )
     }
 
@@ -327,9 +329,15 @@ object RemoteConnectionManager {
       )
 
       connectionsHandler <- ConnectionHandler.apply[F, K, M](
-        // when each connection will finished it the callback will be called, and connection will be put to connections to acquire
-        // queue
-        handledConnectionFinisher.finish
+        // when each connection will finished it the callback will be called,
+        // and connection will be put to connections to acquire queue
+        handledConnectionFinisher.finish,
+        // A duration where we consider the possibilty that both nodes opened
+        // connections against each other at the same time, and they should try
+        // to determinstically pick the same one to close. After this time,
+        // we interpret duplicate connections as repairing a failure the other
+        // side has detected, but we haven't yet.
+        oppositeConnectionOverlap = retryConfig.oppositeConnectionOverlap
       )
 
       _ <- acquireConnections(

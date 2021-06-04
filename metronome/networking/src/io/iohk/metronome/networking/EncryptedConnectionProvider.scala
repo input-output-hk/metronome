@@ -8,6 +8,7 @@ import io.iohk.metronome.networking.EncryptedConnectionProvider.{
 import java.net.InetSocketAddress
 
 trait EncryptedConnection[F[_], K, M] {
+  def localAddress: InetSocketAddress
   def remotePeerInfo: (K, InetSocketAddress)
   def sendMessage(m: M): F[Unit]
   def incomingMessage: F[Option[Either[ConnectionError, M]]]

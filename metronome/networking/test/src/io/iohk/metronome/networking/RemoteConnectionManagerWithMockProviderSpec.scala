@@ -298,9 +298,9 @@ object RemoteConnectionManagerWithMockProviderSpec {
 
   val noJitterConfig = RandomJitterConfig.buildJitterConfig(0).get
   val quickRetryConfig =
-    RetryConfig(50.milliseconds, 2, 2.seconds, noJitterConfig)
+    RetryConfig(50.milliseconds, 2, 2.seconds, noJitterConfig, Duration.Zero)
   val longRetryConfig: RetryConfig =
-    RetryConfig(5.seconds, 2, 20.seconds, noJitterConfig)
+    RetryConfig(5.seconds, 2, 20.seconds, noJitterConfig, Duration.Zero)
 
   def buildTestCaseWithNPeers(
       n: Int,
