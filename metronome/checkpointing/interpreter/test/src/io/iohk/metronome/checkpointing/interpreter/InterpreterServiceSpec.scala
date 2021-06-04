@@ -1,5 +1,6 @@
 package io.iohk.metronome.checkpointing.interpreter
 
+import cats.implicits._
 import cats.effect.Resource
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey}
 import io.iohk.metronome.networking.{
@@ -11,8 +12,11 @@ import io.iohk.metronome.networking.{
 }
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.interpreter.codecs.DefaultInterpreterCodecs
-import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
+import io.iohk.metronome.checkpointing.models.{Block, Ledger, Transaction}
+import io.iohk.metronome.checkpointing.models.CheckpointCertificate
+import io.iohk.metronome.checkpointing.interpreter.tracing.InterpreterEvent
 import io.iohk.metronome.tracer.Tracer
+import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
 import java.net.{InetSocketAddress, ServerSocket}
 import java.security.SecureRandom
 import monix.eval.Task
@@ -22,17 +26,17 @@ import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.compatible.Assertion
 import scala.concurrent.Future
 import scala.concurrent.duration._
-import io.iohk.metronome.checkpointing.models.{Block, Ledger, Transaction}
-import io.iohk.metronome.checkpointing.models.CheckpointCertificate
-import io.iohk.metronome.checkpointing.interpreter.tracing.InterpreterEvent
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.Inside
+import scodec.bits.BitVector
 
-class InterpreterServiceSpec extends AsyncFlatSpec with Matchers {
-  import InterpreterServiceSpec.Fixture
+class InterpreterServiceSpec extends AsyncFlatSpec with Matchers with Inside {
+  import InterpreterServiceSpec.{Fixture, MockInterpreterRPC}
+  import InterpreterMessage._
 
   def test(fixture: Fixture): Future[Assertion] = {
     import Scheduler.Implicits.global
-    fixture.resources.use(fixture.test).timeout(20.seconds).runToFuture
+    fixture.resources.use(fixture.test).timeout(10.seconds).runToFuture
   }
 
   behavior of "InterpreterService"
@@ -42,9 +46,48 @@ class InterpreterServiceSpec extends AsyncFlatSpec with Matchers {
       override def test(input: Input): Task[Assertion] =
         for {
           _ <- input.serviceRpc.newCheckpointCandidate
-          m <- input.nextServiceMessage
+          pb = Transaction.ProposerBlock(BitVector.fromInt(1))
+          _  <- input.serviceRpc.newProposerBlock(pb)
+          m1 <- input.nextServiceMessage
+          m2 <- input.nextServiceMessage
         } yield {
-          m shouldBe an[InterpreterMessage.NewCheckpointCandidateRequest]
+          m1 shouldBe an[NewCheckpointCandidateRequest]
+          inside(m2) { case NewProposerBlockRequest(_, txn) =>
+            txn shouldBe pb
+          }
+        }
+    }
+  }
+
+  it should "send messages from the Service to the Interpreter" in test {
+    new Fixture {
+      val mockValidationResult = true
+
+      override lazy val interpreterRpc: InterpreterRPC[Task] =
+        new MockInterpreterRPC() {
+          override def validateBlockBody(
+              blockBody: Block.Body,
+              ledger: Ledger
+          ) =
+            mockValidationResult.some.pure[Task]
+        }
+
+      override def test(input: Input): Task[Assertion] =
+        for {
+          requestId <- RequestId[Task]
+          request = ValidateBlockBodyRequest(
+            requestId,
+            blockBody = Block.Body(transactions = Vector.empty),
+            ledger = Ledger.empty
+          )
+          _        <- input.sendServiceMessage(request)
+          response <- input.nextServiceMessage
+        } yield {
+          inside(response) {
+            case ValidateBlockBodyResponse(responseId, isValid) =>
+              responseId shouldBe requestId
+              isValid shouldBe mockValidationResult
+          }
         }
     }
   }
@@ -74,9 +117,14 @@ object InterpreterServiceSpec {
   }
 
   abstract class Fixture {
-    case class Input(
-        serviceConsumer: Iterant.Consumer[Task, InterpreterMessage],
-        serviceRpc: ServiceRPC[Task]
+    class Input(
+        val serviceRpc: ServiceRPC[Task],
+        serviceConnection: LocalConnectionManager[
+          Task,
+          ECPublicKey,
+          InterpreterMessage
+        ],
+        serviceConsumer: Iterant.Consumer[Task, InterpreterMessage]
     ) {
       def nextServiceMessage: Task[InterpreterMessage] =
         serviceConsumer.pull.flatMap {
@@ -89,6 +137,9 @@ object InterpreterServiceSpec {
           case Right(msg) =>
             Task.pure(msg)
         }
+
+      def sendServiceMessage(message: InterpreterMessage): Task[Unit] =
+        serviceConnection.sendMessage(message).rethrow
     }
 
     def test(input: Input): Task[Assertion]
@@ -122,6 +173,7 @@ object InterpreterServiceSpec {
           targetAddress = serviceAddress
         )
 
+        // Wait until the two connection managers are establish 1 connection.
         _ <- Resource.liftF {
           for {
             // Allow some time for connections to be sorted out.
@@ -137,6 +189,7 @@ object InterpreterServiceSpec {
           } yield ()
         }
 
+        // Start processing messages going from the Service to the Interpreter.
         serviceRpc <- InterpreterService[Task](
           interpreterConnection,
           interpreterRpc,
@@ -145,7 +198,7 @@ object InterpreterServiceSpec {
 
         serviceConsumer <- serviceConnection.incomingMessages.consume
 
-      } yield Input(serviceConsumer, serviceRpc)
+      } yield new Input(serviceRpc, serviceConnection, serviceConsumer)
   }
 
   val randomAddressPair: Task[(InetSocketAddress, InetSocketAddress)] = Task {
@@ -178,6 +231,9 @@ object InterpreterServiceSpec {
 
     implicit val networkTracers = NetworkTracers(
       Tracer.noOpTracer[Task, NetworkEvent[ECPublicKey, InterpreterMessage]]
+      // Tracer.instance[Task, NetworkEvent[ECPublicKey, InterpreterMessage]](e =>
+      //   Task(println(e))
+      // )
     )
 
     for {

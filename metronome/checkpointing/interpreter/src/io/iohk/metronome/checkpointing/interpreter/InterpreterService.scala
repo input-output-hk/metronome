@@ -26,6 +26,8 @@ object InterpreterService {
   private class ServiceImpl[F[_]: Concurrent: Timer](
       localConnectionManager: InterpreterConnection[F],
       interpreterRpc: InterpreterRPC[F],
+      // Internal timeout to prevent memory leaks. The service must have its own
+      // `RPCTracker` instance with a suitable timeout to handle non-responses.
       timeout: FiniteDuration
   )(implicit tracer: Tracer[F, InterpreterEvent])
       extends ServiceRPC[F] {
@@ -87,6 +89,9 @@ object InterpreterService {
             case Left(_) =>
               tracer(InterpreterTimeout(request))
             case Right(None) =>
+              // The response types contain non-optional values.
+              // The optional semantics on the Service side are
+              // to be achieved using an `RPCTracker`.
               ().pure[F]
             case Right(Some(result)) =>
               sendMessage(toResponse(result))
