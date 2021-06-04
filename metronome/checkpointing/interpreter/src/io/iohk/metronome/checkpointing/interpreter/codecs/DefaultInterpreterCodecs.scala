@@ -4,7 +4,7 @@ import io.iohk.ethereum.rlp
 import io.iohk.ethereum.rlp.RLPCodec
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.models.RLPCodecs
-import scodec.{Codec, Attempt, DecodeResult}
+import scodec.{Codec, Attempt}
 import scodec.bits.BitVector
 import scala.util.Try
 
@@ -14,15 +14,17 @@ trait DefaultInterpreterCodecs {
   import InterpreterMessage._
   import RLPCodecs._
 
+  // Piggibacking on `Codec[BitVector]` so that the length of each RLP
+  // encoded field is properly carried over to the scodec derived data.
   private implicit def codecFromRLPCodec[T: RLPCodec]: Codec[T] =
-    Codec[T](
+    Codec[BitVector].exmap[T](
+      (bits: BitVector) => {
+        val tryDecode = Try(rlp.decode[T](bits.toByteArray))
+        Attempt.fromTry(tryDecode)
+      },
       (value: T) => {
         val bytes = rlp.encode(value)
         Attempt.successful(BitVector(bytes))
-      },
-      (bits: BitVector) => {
-        val tryDecode = Try(rlp.decode[T](bits.toByteArray))
-        Attempt.fromTry(tryDecode.map(DecodeResult(_, BitVector.empty)))
       }
     )
 
