@@ -317,6 +317,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
       override def moduleDeps: Seq[PublishModule] =
         Seq(tracing, crypto, networking, checkpointing.models)
+
+      object test extends TestModule
     }
 
     /** Implements the checkpointing functionality, validation rules,
