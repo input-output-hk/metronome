@@ -10,6 +10,7 @@ import io.iohk.metronome.networking.LocalConnectionManager
 import io.iohk.metronome.tracer.Tracer
 import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
+import io.iohk.metronome.core.messages.RPCPair
 
 /** The `InterpreterService` is to be used on the Interpreter side to
   * manage the behind-the-scenes messaging with the Service.
@@ -66,19 +67,24 @@ object InterpreterService {
               ValidateBlockBodyResponse(requestId, _)
             )
 
-          case NewCheckpointCertificateRequest(_, checkpointCertificate) =>
-            noResponse {
-              interpreterRpc.newCheckpointCertificate(checkpointCertificate)
-            }
+          case req @ NewCheckpointCertificateRequest(_, cert) =>
+            noResponse(
+              req,
+              interpreterRpc.newCheckpointCertificate(cert)
+            )
         }
         .completedL
     }
 
-    private def respondWith[A](
-        request: InterpreterMessage with Request with FromService,
+    private def respondWith[
+        Req <: InterpreterMessage with Request with FromService,
+        Res <: InterpreterMessage with Response with FromInterpreter,
+        A
+    ](
+        request: Req,
         maybeResult: F[Option[A]],
-        toResponse: A => InterpreterMessage with Response with FromInterpreter
-    ): F[Unit] =
+        toResponse: A => Res
+    )(implicit ev: RPCPair.Aux[Req, Res]): F[Unit] =
       Concurrent[F].start {
         Concurrent[F]
           .race(
@@ -101,10 +107,17 @@ object InterpreterService {
           }
       }.void
 
-    private def noResponse(command: F[Unit]): F[Unit] =
+    private def noResponse(
+        request: InterpreterMessage
+          with Request
+          with FromService
+          with NoResponse,
+        command: F[Unit]
+    ): F[Unit] =
       Concurrent[F].start {
         command.handleErrorWith { case NonFatal(ex) =>
-          tracer(Error(ex))
+          val err = new RuntimeException(s"Error handling request $request", ex)
+          tracer(Error(err))
         }
       }.void
 
