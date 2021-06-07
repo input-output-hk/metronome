@@ -178,7 +178,14 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
             // likely be doing  the same to the _other_ connection, symmetrically.
             // Instead, let's try to establish some ordering between the two, so the same connection
             // is chosen as the victim on both sides.
-            if (newConnection.ephemeralPort < oldConnection.ephemeralPort) {
+            val (newPort, oldPort) = (
+              newConnection.ephemeralAddress.getPort,
+              oldConnection.ephemeralAddress.getPort
+            )
+            val replace = newPort < oldPort || newPort == oldPort &&
+              newConnection.ephemeralAddress.getHostName < oldConnection.ephemeralAddress.getHostName
+
+            if (replace) {
               replaceConnection(newConnection, oldConnection)
             } else {
               tracers.discarded(newConnection) >> newConnection.close.as(none)
@@ -382,11 +389,12 @@ object ConnectionHandler {
       */
     def localAddress: InetSocketAddress = underlyingConnection.localAddress
 
-    /** The client side port of the TCP socket. */
-    def ephemeralPort: Int = connectionDirection match {
-      case IncomingConnection => remoteAddress.getPort()
-      case OutgoingConnection => localAddress.getPort()
-    }
+    /** The client side address of the TCP socket. */
+    def ephemeralAddress: InetSocketAddress =
+      connectionDirection match {
+        case IncomingConnection => remoteAddress
+        case OutgoingConnection => localAddress
+      }
 
     def sendMessage(m: M): F[Unit] = {
       underlyingConnection.sendMessage(m)
