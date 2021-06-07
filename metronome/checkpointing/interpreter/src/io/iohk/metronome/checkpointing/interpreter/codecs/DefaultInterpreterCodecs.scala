@@ -14,7 +14,7 @@ trait DefaultInterpreterCodecs {
   import InterpreterMessage._
   import RLPCodecs._
 
-  // Piggibacking on `Codec[BitVector]` so that the length of each RLP
+  // Piggybacking on `Codec[BitVector]` so that the length of each RLP
   // encoded field is properly carried over to the scodec derived data.
   private implicit def codecFromRLPCodec[T: RLPCodec]: Codec[T] =
     Codec[BitVector].exmap[T](

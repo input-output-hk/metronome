@@ -173,7 +173,7 @@ object InterpreterServiceSpec {
           targetAddress = serviceAddress
         )
 
-        // Wait until the two connection managers are establish 1 connection.
+        // Wait until the two connection managers establish and settle a single connection.
         _ <- Resource.liftF {
           for {
             // Allow some time for connections to be sorted out.
