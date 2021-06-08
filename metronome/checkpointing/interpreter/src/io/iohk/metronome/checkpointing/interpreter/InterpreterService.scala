@@ -103,7 +103,7 @@ object InterpreterService {
               sendMessage(toResponse(result))
           }
           .handleErrorWith { case NonFatal(ex) =>
-            tracer(Error(ex))
+            tracer(InterpreterError(request, ex))
           }
       }.void
 
@@ -116,8 +116,7 @@ object InterpreterService {
     ): F[Unit] =
       Concurrent[F].start {
         command.handleErrorWith { case NonFatal(ex) =>
-          val err = new RuntimeException(s"Error handling request $request", ex)
-          tracer(Error(err))
+          tracer(InterpreterError(request, ex))
         }
       }.void
 

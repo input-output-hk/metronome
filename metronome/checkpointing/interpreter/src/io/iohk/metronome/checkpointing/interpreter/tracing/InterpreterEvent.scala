@@ -17,6 +17,12 @@ object InterpreterEvent {
       message: InterpreterMessage with FromInterpreter
   ) extends InterpreterEvent
 
+  /** Error handling a Service message by the Interpreter. */
+  case class InterpreterError(
+      message: InterpreterMessage with Request with FromService,
+      error: Throwable
+  ) extends InterpreterEvent
+
   /** An unexpected error. */
   case class Error(error: Throwable) extends InterpreterEvent
 }
