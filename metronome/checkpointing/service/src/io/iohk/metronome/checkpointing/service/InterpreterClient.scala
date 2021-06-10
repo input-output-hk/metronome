@@ -72,7 +72,7 @@ object InterpreterClient {
     )(implicit ev: RPCPair.Aux[Req, Res], ct: ClassTag[Res]): F[Option[Res]] =
       for {
         join <- rpcTracker.register[Req, Res](request)
-        _    <- localConnectionManager.sendMessage(request)
+        _    <- sendMessage(request)
         res  <- join
         _    <- tracer(InterpreterTimeout(request)).whenA(res.isEmpty)
       } yield res
