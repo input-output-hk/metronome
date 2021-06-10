@@ -140,13 +140,13 @@ class RocksDBStore[F[_]: Sync: ContextShift](
             for {
               kbs <- encode(k)(op.keyEncoder)
               vbs <- encode(v)(op.valueEncoder)
-              _   <- db.put(handles(n), kbs, vbs)
+              _   <- lock.withLockUpgrade(db.put(handles(n), kbs, vbs))
             } yield ()
 
           case op @ Delete(n, k) =>
             for {
               kbs <- encode(k)(op.keyEncoder)
-              _   <- db.delete(handles(n), kbs)
+              _   <- lock.withLockUpgrade(db.delete(handles(n), kbs))
             } yield ()
         }
     }
