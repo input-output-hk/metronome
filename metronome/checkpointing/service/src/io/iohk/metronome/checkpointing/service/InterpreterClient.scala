@@ -148,11 +148,11 @@ object InterpreterClient {
       rpcTracker <- Resource.liftF {
         RPCTracker[F, InterpreterMessage](timeout)
       }
-      interpreterRPC = new ClientImpl[F](
+      interpreterRpc = new ClientImpl[F](
         localConnectionManager,
         serviceRpc,
         rpcTracker
       )
-      _ <- Concurrent[F].background(interpreterRPC.processMessages)
-    } yield interpreterRPC
+      _ <- Concurrent[F].background(interpreterRpc.processMessages)
+    } yield interpreterRpc
 }
