@@ -43,7 +43,7 @@ object InterpreterService {
     override def newCheckpointCandidate: F[Unit] =
       notify(NewCheckpointCandidateRequest(_))
 
-    def processMessages: F[Unit] = {
+    def processMessages: F[Unit] =
       localConnectionManager.incomingMessages
         .mapEval[Unit] {
           case m: InterpreterMessage.FromInterpreter =>
@@ -74,7 +74,6 @@ object InterpreterService {
             )
         }
         .completedL
-    }
 
     private def respondWith[
         Req <: InterpreterMessage with Request with FromService,
