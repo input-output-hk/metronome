@@ -297,7 +297,7 @@ object RemoteConnectionManager {
     * @param retryConfig retry configuration for outgoing connections (incoming connections are not retried)
     */
   def apply[
-      F[_]: Concurrent: TaskLift: TaskLike: Timer,
+      F[_]: Concurrent: TaskLift: TaskLike: Timer: ContextShift,
       K: Codec,
       M: Codec
   ](
@@ -305,7 +305,6 @@ object RemoteConnectionManager {
       clusterConfig: ClusterConfig[K],
       retryConfig: RetryConfig
   )(implicit
-      cs: ContextShift[F],
       tracers: NetworkTracers[F, K, M]
   ): Resource[F, RemoteConnectionManager[F, K, M]] = {
     for {
