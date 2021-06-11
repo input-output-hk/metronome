@@ -5,12 +5,17 @@ import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, Resource, Sync}
 import cats.implicits._
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
+import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
 import io.iohk.metronome.checkpointing.models.{
   Block,
   CheckpointCertificate,
   Ledger
 }
-import io.iohk.metronome.checkpointing.service.CheckpointingService.LedgerTree
+import io.iohk.metronome.checkpointing.service.CheckpointingService.{
+  CheckpointData,
+  LedgerNode,
+  LedgerTree
+}
 import io.iohk.metronome.checkpointing.service.storage.LedgerStorage
 import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.hotstuff.consensus.basic.{Phase, QuorumCertificate}
@@ -24,8 +29,12 @@ import io.iohk.metronome.storage.KVStoreRunner
 import scala.annotation.tailrec
 
 class CheckpointingService[F[_]: Sync, N](
-    ledgerTree: Ref[F, LedgerTree],
-    lastExecutedHeader: Ref[F, Block.Header],
+    ledgerTreeRef: Ref[F, LedgerTree],
+    lastCommittedHeaderRef: Ref[F, Block.Header],
+    checkpointDataRef: Ref[F, Option[CheckpointData]],
+    //TODO: PM-3137, this is used for testing that a certificate was created correctly
+    //      replace with proper means of pushing the certificate to the Interpreter
+    pushCheckpointFn: CheckpointCertificate => F[Unit],
     ledgerStorage: LedgerStorage[N],
     blockStorage: BlockStorage[N, CheckpointingAgreement]
 )(implicit storeRunner: KVStoreRunner[F, N])
@@ -38,8 +47,8 @@ class CheckpointingService[F[_]: Sync, N](
   override def validateBlock(block: Block): F[Option[Boolean]] = {
     val ledgers = for {
       nextLedger <- OptionT(projectLedger(block))
-      tree       <- OptionT.liftF(ledgerTree.get)
-      prevLedger <- tree.get(block.header.parentHash).map(_._1).toOptionT[F]
+      tree       <- OptionT.liftF(ledgerTreeRef.get)
+      prevLedger <- tree.get(block.header.parentHash).map(_.ledger).toOptionT[F]
     } yield (prevLedger, nextLedger)
 
     ledgers.value.flatMap {
@@ -67,16 +76,22 @@ class CheckpointingService[F[_]: Sync, N](
     require(commitQC.phase == Phase.Commit, "Commit QC required")
     projectLedger(block).flatMap {
       case Some(ledger) =>
-        if (block.hash != commitQC.blockHash)
-          saveLedger(block.header, ledger).as(true)
-        else
-          for {
-            //TODO: PM-3110:
-            // chkpOpt <- constructCheckpoint(ledger, commitQC)
-            _ <- saveLedger(block.header, ledger)
-            //TODO: PM-3110:
-            // _ <- chkpOpt.map(pushCheckpoint).getOrElse(().pure[F])
-          } yield true
+        updateCheckpointData(block).flatMap { checkpointDataOpt =>
+          if (block.hash != commitQC.blockHash)
+            false.pure[F]
+          else {
+            val certificateOpt = checkpointDataOpt
+              .flatMap { cd =>
+                CheckpointCertificate
+                  .construct(cd.block, cd.headers.toNonEmptyList, commitQC)
+              }
+              .toOptionT[F]
+
+            saveLedger(block.header, ledger) >>
+              certificateOpt.cataF(().pure[F], pushCheckpoint) >>
+              true.pure[F]
+          }
+        }
 
       case None =>
         Sync[F].raiseError(
@@ -85,20 +100,27 @@ class CheckpointingService[F[_]: Sync, N](
     }
   }
 
+  /** Computes and saves the intermediate ledgers leading up to and including
+    * the one resulting from the `block` transactions, either by looking up
+    * already computed ledgers in the `ledgerTree` or fetching ancestor blocks
+    * from `blockStorage`.
+    * Only descendants of the root of the `ledgerTree` (last committed ledger)
+    * will be evaluated
+    */
   private def projectLedger(block: Block): F[Option[Ledger]] = {
     (for {
-      ledgers    <- ledgerTree.get
-      execHeight <- lastExecutedHeader.get.map(_.height)
+      ledgerTree   <- ledgerTreeRef.get
+      commitHeight <- lastCommittedHeaderRef.get.map(_.height)
     } yield {
       def loop(block: Block): OptionT[F, Ledger] = {
         def doUpdate(ledger: Ledger) =
           OptionT.liftF(updateLedgerByBlock(ledger, block))
 
-        ledgers.get(block.header.parentHash) match {
-          case Some((oldLedger, _)) =>
-            doUpdate(oldLedger)
+        ledgerTree.get(block.header.parentHash) match {
+          case Some(oldLedger) =>
+            doUpdate(oldLedger.ledger)
 
-          case None if block.header.height <= execHeight =>
+          case None if block.header.height <= commitHeight =>
             OptionT.none
 
           case None =>
@@ -110,28 +132,50 @@ class CheckpointingService[F[_]: Sync, N](
         }
       }
 
-      ledgers
+      ledgerTree
         .get(block.hash)
-        .map(_._1)
+        .map(_.ledger)
         .toOptionT[F]
         .orElse(loop(block))
         .value
     }).flatten
   }
 
+  /** Computes a new ledger from the `block` and saves it in the ledger tree only if
+    * a parent state exists.
+    *
+    * Because we're only adding to the tree no locking around it is necessary
+    */
   private def updateLedgerByBlock(
       oldLedger: Ledger,
       block: Block
   ): F[Ledger] = {
     val newLedger = oldLedger.update(block.body.transactions)
-    ledgerTree
+
+    ledgerTreeRef
       .update { tree =>
         if (tree.contains(block.header.parentHash))
-          tree + (block.hash -> (newLedger, block.header))
+          tree + (block.hash -> LedgerNode(newLedger, block.header))
         else
           tree
       }
       .as(newLedger)
+  }
+
+  private def updateCheckpointData(
+      block: Block
+  ): F[Option[CheckpointData]] = {
+    val containsCheckpoint = block.body.transactions.exists {
+      case _: CheckpointCandidate => true
+      case _                      => false
+    }
+
+    checkpointDataRef.updateAndGet { cd =>
+      if (containsCheckpoint)
+        CheckpointData(block).some
+      else
+        cd.map(_.extend(block.header))
+    }
   }
 
   private def getBlock(hash: Block.Hash): F[Option[Block]] =
@@ -141,8 +185,9 @@ class CheckpointingService[F[_]: Sync, N](
     storeRunner.runReadWrite {
       ledgerStorage.put(ledger)
     } >>
-      ledgerTree.update(clearLedgerTree(header, ledger)) >>
-      lastExecutedHeader.set(header)
+      ledgerTreeRef.update(clearLedgerTree(header, ledger)) >>
+      lastCommittedHeaderRef.set(header) >>
+      checkpointDataRef.set(None)
   }
 
   /** Makes the `commitHeader` and the associated 'ledger' the root of the tree,
@@ -160,32 +205,24 @@ class CheckpointingService[F[_]: Sync, N](
     ): LedgerTree =
       if (oldTree.isEmpty) newTree
       else {
-        val (higherLevels, currentLevel) = oldTree.partition {
-          case (_, (_, hd)) => hd.height > height
+        val (higherLevels, currentLevel) = oldTree.partition { case (_, ln) =>
+          ln.height > height
         }
-        val children = currentLevel.filter { case (_, (_, hd)) =>
-          newTree.contains(hd.parentHash)
+        val children = currentLevel.filter { case (_, ln) =>
+          newTree.contains(ln.parentHash)
         }
         loop(higherLevels, newTree ++ children, height + 1)
       }
 
     loop(
-      ledgerTree.filter { case (_, (_, hd)) =>
-        hd.height > commitHeader.height
-      },
-      Map(commitHeader.hash -> (ledger, commitHeader)),
+      ledgerTree.filter { case (_, ln) => ln.height > commitHeader.height },
+      LedgerTree.root(ledger, commitHeader),
       commitHeader.height + 1
     )
   }
 
-  private def constructCheckpoint(
-      ledger: Ledger,
-      commitQC: QuorumCertificate[CheckpointingAgreement]
-  ): F[Option[CheckpointCertificate]] =
-    ??? //TODO: PM-3110
-
   private def pushCheckpoint(checkpoint: CheckpointCertificate): F[Unit] =
-    ??? //TODO: PM-3137
+    pushCheckpointFn(checkpoint) //TODO: PM-3137
 
   override def syncState(
       sources: NonEmptyVector[ECPublicKey],
@@ -194,12 +231,56 @@ class CheckpointingService[F[_]: Sync, N](
 }
 
 object CheckpointingService {
-  type LedgerTree = Map[Block.Hash, (Ledger, Block.Header)]
+
+  /** A node in LedgerTree
+    *  `parentHash` and `height` are helpful when resetting the tree
+    */
+  case class LedgerNode(
+      ledger: Ledger,
+      parentHash: Block.Hash,
+      height: Long
+  )
+
+  object LedgerNode {
+    def apply(ledger: Ledger, header: Block.Header): LedgerNode =
+      LedgerNode(ledger, header.parentHash, header.height)
+  }
+
+  /** The internal structure used to represent intermediate ledgers resulting
+    * from execution and validation
+    */
+  type LedgerTree = Map[Block.Hash, LedgerNode]
+
+  object LedgerTree {
+    def root(ledger: Ledger, header: Block.Header): LedgerTree =
+      Map(header.hash -> LedgerNode(ledger, header))
+  }
+
+  /** Used to track the most recent checkpoint candidate
+    * `block` - last containing a checkpoint candidate
+    * `headers` - path from the `block` to the last executed one
+    *
+    * These values along with Commit QC can be used to construct
+    * a `CheckpointCertificate`
+    */
+  case class CheckpointData(
+      block: Block,
+      headers: NonEmptyVector[Block.Header]
+  ) {
+    def extend(header: Block.Header): CheckpointData =
+      copy(headers = headers :+ header)
+  }
+
+  object CheckpointData {
+    def apply(block: Block): CheckpointData =
+      CheckpointData(block, NonEmptyVector.of(block.header))
+  }
 
   def apply[F[_]: Concurrent, N](
       ledgerStorage: LedgerStorage[N],
       blockStorage: BlockStorage[N, CheckpointingAgreement],
-      viewStateStorage: ViewStateStorage[N, CheckpointingAgreement]
+      viewStateStorage: ViewStateStorage[N, CheckpointingAgreement],
+      pushCheckpointFn: CheckpointCertificate => F[Unit]
   )(implicit
       storeRunner: KVStoreRunner[F, N]
   ): Resource[F, CheckpointingService[F, N]] = {
@@ -224,11 +305,14 @@ object CheckpointingService {
 
     val service = for {
       (block, ledger) <- lastExecuted
-      ledgerTree      <- Ref.of(Map(block.hash -> (ledger, block.header)))
+      ledgerTree      <- Ref.of(LedgerTree.root(ledger, block.header))
       lastExec        <- Ref.of(block.header)
+      checkpointData  <- Ref.of(None: Option[CheckpointData])
     } yield new CheckpointingService[F, N](
       ledgerTree,
       lastExec,
+      checkpointData,
+      pushCheckpointFn,
       ledgerStorage,
       blockStorage
     )

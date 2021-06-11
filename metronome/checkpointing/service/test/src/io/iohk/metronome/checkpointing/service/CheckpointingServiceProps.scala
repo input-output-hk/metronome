@@ -6,12 +6,18 @@ import cats.effect.concurrent.Ref
 import cats.implicits._
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.models.Block.{Hash, Header}
+import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
 import io.iohk.metronome.checkpointing.models.{
   ArbitraryInstances,
   Block,
+  CheckpointCertificate,
   Ledger
 }
-import io.iohk.metronome.checkpointing.service.CheckpointingService.LedgerTree
+import io.iohk.metronome.checkpointing.service.CheckpointingService.{
+  CheckpointData,
+  LedgerNode,
+  LedgerTree
+}
 import io.iohk.metronome.checkpointing.service.storage.LedgerStorage
 import io.iohk.metronome.checkpointing.service.storage.LedgerStorageProps.{
   neverUsedCodec,
@@ -39,6 +45,13 @@ import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration._
 import scala.util.Random
 
+/** Props for Checkpointing service
+  *
+  * Do take note of tests that use `classify` to report whether parallelism
+  * was achieved. This is not a hard requirement because it may fail on CI,
+  * but one should make sure to achieve 100% parallelism locally when making
+  * changes to this tests or the service
+  */
 class CheckpointingServiceProps extends Properties("CheckpointingService") {
 
   type Namespace = String
@@ -48,14 +61,17 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
       ledgerStorage: LedgerStorage[Namespace],
       blockStorage: BlockStorage[Namespace, CheckpointingAgreement],
       store: KVStoreRunner[Task, Namespace],
-      ledgerTreeRef: Ref[Task, LedgerTree]
+      ledgerTreeRef: Ref[Task, LedgerTree],
+      checkpointDataRef: Ref[Task, Option[CheckpointData]],
+      lastCheckpointCertRef: Ref[Task, Option[CheckpointCertificate]]
   )
 
   case class TestFixture(
       initialBlock: Block,
       initialLedger: Ledger,
       batch: List[Block],
-      commitQC: QuorumCertificate[CheckpointingAgreement]
+      commitQC: QuorumCertificate[CheckpointingAgreement],
+      randomSeed: Long
   ) {
     val resources: Resource[Task, TestResources] = {
       val ledgerStorage =
@@ -89,13 +105,17 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
           }
 
           ledgerTree <- Ref.of[Task, LedgerTree](
-            Map(initialBlock.hash -> (initialLedger, initialBlock.header))
+            LedgerTree.root(initialLedger, initialBlock.header)
           )
           lastExec <- Ref.of[Task, Header](initialBlock.header)
+          chkpData <- Ref.of[Task, Option[CheckpointData]](None)
+          lastCert <- Ref.of[Task, Option[CheckpointCertificate]](None)
 
           service = new CheckpointingService[Task, Namespace](
             ledgerTree,
             lastExec,
+            chkpData,
+            cc => lastCert.set(cc.some),
             ledgerStorage,
             blockStorage
           )
@@ -105,7 +125,9 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
           ledgerStorage,
           blockStorage,
           store,
-          ledgerTree
+          ledgerTree,
+          chkpData,
+          lastCert
         )
       }
     }
@@ -113,8 +135,20 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
     // not used in the impl so a senseless value
     val commitPath = NonEmptyList.one(initialBlock.header.parentHash)
 
-    val allTransactions = batch.flatMap(_.body.transactions)
-    val finalLedger     = initialLedger.update(allTransactions)
+    lazy val allTransactions = batch.flatMap(_.body.transactions)
+    lazy val finalLedger =
+      initialLedger.update(batch.flatMap(_.body.transactions))
+
+    lazy val expectedCheckpointCert = allTransactions.reverse.collectFirst {
+      case candidate: CheckpointCandidate =>
+        //apparently identical checkpoints can be generated in different blocks
+        val blockPath = batch.drop(
+          batch.lastIndexWhere(_.body.transactions.contains(candidate))
+        )
+        val headerPath = NonEmptyList.fromListUnsafe(blockPath.map(_.header))
+
+        CheckpointCertificate.construct(blockPath.head, headerPath, commitQC)
+    }.flatten
   }
 
   object TestFixture {
@@ -126,7 +160,8 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         ledger = Ledger.empty.update(block.body.transactions)
         batch    <- genBlockChain(block, ledger, min = minChain)
         commitQC <- genCommitQC(batch.last)
-      } yield TestFixture(block, ledger, batch, commitQC)
+        seed     <- Gen.posNum[Long]
+      } yield TestFixture(block, ledger, batch, commitQC, seed)
     }
 
     def genBlockChain(
@@ -192,18 +227,55 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         results         <- execution
         persistedLedger <- ledgerStorageCheck
         ledgerTree      <- ledgerTreeRef.get
+        lastCheckpoint  <- lastCheckpointCertRef.get
+        checkpointData  <- checkpointDataRef.get
       } yield {
-        val ledgerTreeUpdated = ledgerTree == Map(
-          batch.last.hash -> (finalLedger, batch.last.header)
-        )
+        val ledgerTreeUpdated =
+          ledgerTree == LedgerTree.root(finalLedger, batch.last.header)
+
+        val executionSuccessful = results.reverse match {
+          case true :: rest => !rest.exists(identity)
+          case _            => false
+        }
 
         all(
-          "execution successful" |: results.reduce(_ && _),
+          "execution successful" |: executionSuccessful,
           "ledger persisted" |: persistedLedger.contains(finalLedger),
-          "ledgerTree updated" |: ledgerTreeUpdated
+          "ledgerTree updated" |: ledgerTreeUpdated,
+          "checkpoint constructed correctly" |: lastCheckpoint == expectedCheckpointCert,
+          "checkpoint data cleared" |: checkpointData.isEmpty
         )
       }
     }
+  }
+
+  property("interrupted execution") = forAll(TestFixture.gen(minChain = 2)) {
+    fixture =>
+      run(fixture) { res =>
+        import fixture._
+        import res._
+
+        // not executing the committed block
+        val execution = batch.init
+          .map(checkpointingService.executeBlock(_, commitQC, commitPath))
+          .sequence
+
+        for {
+          results        <- execution
+          ledgerTree     <- ledgerTreeRef.get
+          lastCheckpoint <- lastCheckpointCertRef.get
+        } yield {
+          val ledgerTreeUpdated =
+            batch.init.map(_.hash).forall(ledgerTree.contains)
+          val executionSuccessful = !results.exists(identity)
+
+          all(
+            "executed correctly" |: executionSuccessful,
+            "ledgerTree updated" |: ledgerTreeUpdated,
+            "checkpoint constructed correctly" |: lastCheckpoint.isEmpty
+          )
+        }
+      }
   }
 
   property("failed execution - no parent") =
@@ -264,7 +336,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
             achievedPar: Ref[Task, Boolean]
         ) =
           Task.parSequence {
-            Random
+            new Random(randomSeed)
               .shuffle(batch)
               .map(b =>
                 for {
@@ -320,8 +392,8 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
           validating: Ref[Task, Boolean],
           executing: Ref[Task, Boolean],
           achievedPar: Ref[Task, Boolean]
-      ) =
-        Random
+      ) = {
+        new Random(randomSeed)
           .shuffle(validationBatch)
           .map(b =>
             for {
@@ -333,6 +405,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
             } yield (r.getOrElse(false), b.header.height)
           )
           .sequence
+      }
 
       def execution(
           validating: Ref[Task, Boolean],
@@ -371,16 +444,23 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         par             <- achievedPar.get
         persistedLedger <- ledgerStorageCheck
         ledgerTree      <- ledgerTreeRef.get
+        lastCheckpoint  <- lastCheckpointCertRef.get
+        checkpointData  <- checkpointDataRef.get
       } yield {
         val validationsAfterExec = validationRes.collect {
           case (r, h) if h > batch.last.header.height => r
+        }
+
+        val executionSuccessful = executionRes.reverse match {
+          case true :: rest => !rest.exists(identity)
+          case _            => false
         }
 
         val ledgerTreeReset = batch.reverse match {
           case committed :: rest =>
             ledgerTree
               .get(committed.hash)
-              .contains((finalLedger, committed.header)) &&
+              .contains(LedgerNode(finalLedger, committed.header)) &&
               rest.forall(b => !ledgerTree.contains(b.hash))
 
           case _ => false
@@ -392,10 +472,12 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         classify(par, "parallelism achieved") {
           all(
             "validation successful" |: validationsAfterExec.forall(identity),
-            "execution successful" |: executionRes.forall(identity),
+            "execution successful" |: executionSuccessful,
             "ledger persisted" |: persistedLedger.contains(finalLedger),
             "ledgerTree reset" |: ledgerTreeReset,
-            "ledgerTree contains validations" |: validationsSaved
+            "ledgerTree contains validations" |: validationsSaved,
+            "checkpoint constructed correctly" |: lastCheckpoint == expectedCheckpointCert,
+            "checkpoint data cleared" |: checkpointData.isEmpty
           )
         }
       }
