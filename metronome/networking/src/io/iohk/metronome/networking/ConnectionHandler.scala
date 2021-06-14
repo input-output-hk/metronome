@@ -171,38 +171,14 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     if (conflictHappened) {
       connectionsRegister.registerIfAbsent(newConnection).flatMap {
         case Some(oldConnection) =>
-          if (oldConnection.age() < oppositeConnectionOverlap) {
-            // The old connection has just been created recently, yet we have a new connection already.
-            // Most likely the two nodes opened connections to each other around the same time, and if
-            // we close one of the connections connection based on direction, the node opposite will
-            // likely be doing  the same to the _other_ connection, symmetrically.
-            // Instead, let's try to establish some ordering between the two, so the same connection
-            // is chosen as the victim on both sides.
-            val (newPort, oldPort) = (
-              newConnection.ephemeralAddress.getPort,
-              oldConnection.ephemeralAddress.getPort
-            )
-            val replace = newPort < oldPort || newPort == oldPort &&
-              newConnection.ephemeralAddress.getHostName < oldConnection.ephemeralAddress.getHostName
-
-            if (replace) {
-              replaceConnection(newConnection, oldConnection)
-            } else {
-              tracers.discarded(newConnection) >> newConnection.close.as(none)
-            }
-
+          val replace = shouldReplaceConnection(
+            newConnection = newConnection,
+            oldConnection = oldConnection
+          )
+          if (replace) {
+            replaceConnection(newConnection, oldConnection)
           } else {
-            newConnection.connectionDirection match {
-              case HandledConnection.IncomingConnection =>
-                // Even though we have connection to this peer, they are calling us. One of the reason may be
-                // that they failed and we did not notice. Lets try to replace old connection with new one.
-                replaceConnection(newConnection, oldConnection)
-
-              case HandledConnection.OutgoingConnection =>
-                // For some reason we were calling while we already have connection, most probably we have
-                // received incoming connection during call. Close this new connection, and keep the old one.
-                tracers.discarded(newConnection) >> newConnection.close.as(none)
-            }
+            tracers.discarded(newConnection) >> newConnection.close.as(none)
           }
         case None =>
           // in the meantime between detection of conflict, and processing it old connection has dropped. Register new one
@@ -210,6 +186,39 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       }
     } else {
       tracers.registered(newConnection) >> newConnection.some.pure[F]
+    }
+  }
+
+  /** Decide whether a new connection to/from a peer should replace an old connection from/to the same peer in case of a conflict. */
+  private def shouldReplaceConnection(
+      newConnection: HandledConnection[F, K, M],
+      oldConnection: HandledConnection[F, K, M]
+  ): Boolean = {
+    if (oldConnection.age() < oppositeConnectionOverlap) {
+      // The old connection has just been created recently, yet we have a new connection already.
+      // Most likely the two nodes opened connections to each other around the same time, and if
+      // we close one of the connections connection based on direction, the node opposite will
+      // likely be doing  the same to the _other_ connection, symmetrically.
+      // Instead, let's try to establish some ordering between the two, so the same connection
+      // is chosen as the victim on both sides.
+      val (newPort, oldPort) = (
+        newConnection.ephemeralAddress.getPort,
+        oldConnection.ephemeralAddress.getPort
+      )
+      newPort < oldPort || newPort == oldPort &&
+      newConnection.ephemeralAddress.getHostName < oldConnection.ephemeralAddress.getHostName
+    } else {
+      newConnection.connectionDirection match {
+        case HandledConnection.IncomingConnection =>
+          // Even though we have connection to this peer, they are calling us. One of the reason may be
+          // that they failed and we did not notice. Lets try to replace old connection with new one.
+          true
+
+        case HandledConnection.OutgoingConnection =>
+          // For some reason we were calling while we already have connection, most probably we have
+          // received incoming connection during call. Close this new connection, and keep the old one.
+          false
+      }
     }
   }
 
