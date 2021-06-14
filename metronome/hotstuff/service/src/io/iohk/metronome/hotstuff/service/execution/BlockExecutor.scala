@@ -150,14 +150,14 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
               tracers
                 .error(s"Error executing block $blockHash", ex)
 
-            case Right(false) =>
+            case Right(None) =>
               // Either the block couldn't be found, or the last executed
               // hash changed, but something suggests that we should not
               // try to execute more of this batch.
               newBlockHashes.traverse(tracers.executionSkipped(_)).void
 
-            case Right(true) =>
-              loop(newBlockHashes, blockHash)
+            case Right(Some(nextLastExecutedBlockHash)) =>
+              loop(newBlockHashes, nextLastExecutedBlockHash)
           }
       }
 
@@ -168,15 +168,18 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     * Be prepared that it may not exist, if execution took so long that
     * the `SyncService` skipped ahead to the latest Commit Q.C.
     *
-    * Return a flag to indicate whether the block has been executed,
-    * and we can carry on executing the batch.
+    * The last executed block hash is only updated if the application
+    * indicates that it has persisted the results, and if no other
+    * changes have been made to it outside this loop. The execution
+    * result carries the new last executed block hash to use in the
+    * next iteration, or `None` if we should abandon the execution.
     */
   private def executeBlock(
       blockHash: A#Hash,
       commitQC: QuorumCertificate[A],
       commitPath: NonEmptyList[A#Hash],
       lastExecutedBlockHash: A#Hash
-  ): F[Boolean] = {
+  ): F[Option[A#Hash]] = {
     assert(commitPath.head == blockHash)
     assert(commitPath.last == commitQC.blockHash)
 
@@ -184,12 +187,24 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
       blockStorage.get(blockHash)
     } flatMap {
       case None =>
-        tracers.executionSkipped(blockHash).as(false)
+        tracers.executionSkipped(blockHash).as(none)
 
       case Some(block) =>
-        appService.executeBlock(block, commitQC, commitPath) >>
-          tracers.blockExecuted(blockHash) >>
-          setLastExecutedBlockHash(blockHash, lastExecutedBlockHash)
+        for {
+          isPersisted <- appService.executeBlock(block, commitQC, commitPath)
+          _           <- tracers.blockExecuted(blockHash)
+
+          maybeLastExecutedBlockHash <-
+            if (!isPersisted) {
+              // Keep the last for the next compare and set below.
+              lastExecutedBlockHash.some.pure[F]
+            } else {
+              setLastExecutedBlockHash(blockHash, lastExecutedBlockHash).map {
+                case true  => blockHash.some
+                case false => none
+              }
+            }
+        } yield maybeLastExecutedBlockHash
     }
   }
 }

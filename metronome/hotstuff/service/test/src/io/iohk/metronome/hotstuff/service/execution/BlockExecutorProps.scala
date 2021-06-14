@@ -79,13 +79,13 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
           block: TestBlock,
           commitQC: QuorumCertificate[TestAgreement],
           commitPath: NonEmptyList[TestAgreement.Hash]
-      ): Task[Unit] =
+      ): Task[Boolean] =
         for {
           fail <- failNextRef.modify(failNext => (false, failNext))
           _ <- Task
             .raiseError(new RuntimeException("The application failed!"))
             .whenA(fail)
-        } yield ()
+        } yield true
     }
 
     val resources =

@@ -20,11 +20,13 @@ trait ApplicationService[F[_], A <: Agreement] {
   // and the path of block hashes from the block being executed to the one committed.
   // Perhaps the application service can cache the headers if it needs to produce a
   // proof of the BFT agreement at the end.
+  // Returns a flag to indicate whether the block execution results have been persisted,
+  // whether the block and any corresponding state can be used as a starting point after a restart.
   def executeBlock(
       block: A#Block,
       commitQC: QuorumCertificate[A],
       commitPath: NonEmptyList[A#Hash]
-  ): F[Unit]
+  ): F[Boolean]
 
   // TODO (PM-3135): Tell the application to sync any state of the block, i.e. the Ledger.
   // The `sources` are peers who most probably have this state.
