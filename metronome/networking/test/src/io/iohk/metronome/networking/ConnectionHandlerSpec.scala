@@ -316,7 +316,10 @@ object ConnectionHandlerSpec {
       cb: FinishedConnection[ECPublicKey] => Task[Unit] = _ => Task(())
   ): Resource[Task, ConnectionHandler[Task, ECPublicKey, TestMessage]] = {
     ConnectionHandler
-      .apply[Task, ECPublicKey, TestMessage](cb)
+      .apply[Task, ECPublicKey, TestMessage](
+        cb,
+        oppositeConnectionOverlap = Duration.Zero
+      )
   }
 
   def buildHandlerResourceWithCallbackCounter: Resource[

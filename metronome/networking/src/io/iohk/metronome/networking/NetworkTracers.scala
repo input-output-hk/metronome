@@ -36,13 +36,22 @@ object NetworkTracers {
         ConnectionUnknown((Peer.apply[K] _).tupled(conn.remotePeerInfo))
       },
       registered = tracer.contramap[HandledConnection[F, K, M]] { conn =>
-        ConnectionRegistered(Peer(conn.key, conn.serverAddress))
+        ConnectionRegistered(
+          Peer(conn.key, conn.serverAddress),
+          conn.connectionDirection
+        )
       },
       deregistered = tracer.contramap[HandledConnection[F, K, M]] { conn =>
-        ConnectionDeregistered(Peer(conn.key, conn.serverAddress))
+        ConnectionDeregistered(
+          Peer(conn.key, conn.serverAddress),
+          conn.connectionDirection
+        )
       },
       discarded = tracer.contramap[HandledConnection[F, K, M]] { conn =>
-        ConnectionDiscarded(Peer(conn.key, conn.serverAddress))
+        ConnectionDiscarded(
+          Peer(conn.key, conn.serverAddress),
+          conn.connectionDirection
+        )
       },
       failed =
         tracer.contramap[RemoteConnectionManager.ConnectionFailure[K]] { fail =>

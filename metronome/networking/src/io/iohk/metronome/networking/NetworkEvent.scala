@@ -6,20 +6,27 @@ import java.net.InetSocketAddress
 sealed trait NetworkEvent[K, +M]
 
 object NetworkEvent {
+  import ConnectionHandler.HandledConnection.HandledConnectionDirection
 
   case class Peer[K](key: K, address: InetSocketAddress)
 
   /** The connection to/from the peer has been added to the register. */
-  case class ConnectionRegistered[K](peer: Peer[K])
-      extends NetworkEvent[K, Nothing]
+  case class ConnectionRegistered[K](
+      peer: Peer[K],
+      direction: HandledConnectionDirection
+  ) extends NetworkEvent[K, Nothing]
 
   /** The connection to/from the peer has been closed and removed from the register. */
-  case class ConnectionDeregistered[K](peer: Peer[K])
-      extends NetworkEvent[K, Nothing]
+  case class ConnectionDeregistered[K](
+      peer: Peer[K],
+      direction: HandledConnectionDirection
+  ) extends NetworkEvent[K, Nothing]
 
   /** We had two connections to/from the peer and discarded one of them. */
-  case class ConnectionDiscarded[K](peer: Peer[K])
-      extends NetworkEvent[K, Nothing]
+  case class ConnectionDiscarded[K](
+      peer: Peer[K],
+      direction: HandledConnectionDirection
+  ) extends NetworkEvent[K, Nothing]
 
   /** Failed to establish connection to remote peer. */
   case class ConnectionFailed[K](

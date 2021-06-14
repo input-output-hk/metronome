@@ -196,7 +196,8 @@ object MockEncryptedConnectionProvider {
       private val closeToken: TryableDeferred[Task, Unit],
       private val sentMessages: Ref[Task, List[TestMessage]],
       val remotePeerInfo: (ECPublicKey, InetSocketAddress) =
-        (getFakeRandomKey(), fakeLocalAddress)
+        (getFakeRandomKey(), fakeLocalAddress),
+      val localAddress: InetSocketAddress = fakeLocalAddress
   ) extends EncryptedConnection[Task, ECPublicKey, TestMessage] {
 
     override def close: Task[Unit] = {

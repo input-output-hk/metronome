@@ -22,13 +22,16 @@ import monix.tail.Iterant
 
 import java.net.InetSocketAddress
 import scala.util.control.NoStackTrace
+import scala.concurrent.duration._
+import java.time.Instant
 
 class ConnectionHandler[F[_]: Concurrent, K, M](
     connectionQueue: ConcurrentQueue[F, ConnectionWithConflictFlag[F, K, M]],
     connectionsRegister: ConnectionsRegister[F, K, M],
     messageQueue: ConcurrentQueue[F, MessageReceived[K, M]],
     cancelToken: Deferred[F, Unit],
-    connectionFinishCallback: FinishedConnection[K] => F[Unit]
+    connectionFinishCallback: FinishedConnection[K] => F[Unit],
+    oppositeConnectionOverlap: FiniteDuration
 )(implicit tracers: NetworkTracers[F, K, M]) {
 
   private val numberOfRunningConnections = AtomicInt(0)
@@ -168,16 +171,14 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
     if (conflictHappened) {
       connectionsRegister.registerIfAbsent(newConnection).flatMap {
         case Some(oldConnection) =>
-          newConnection.connectionDirection match {
-            case HandledConnection.IncomingConnection =>
-              // even though we have connection to this peer, they are calling us. One of the reason may be, that they failed and
-              // we did not notice. Lets try to replace old connection with new one.
-              replaceConnection(newConnection, oldConnection)
-
-            case HandledConnection.OutgoingConnection =>
-              // for some reason we were calling while we already have connection, most probably we have received incoming
-              // connection during call. Close this new connection, and keep the old one
-              tracers.discarded(newConnection) >> newConnection.close.as(none)
+          val replace = shouldReplaceConnection(
+            newConnection = newConnection,
+            oldConnection = oldConnection
+          )
+          if (replace) {
+            replaceConnection(newConnection, oldConnection)
+          } else {
+            tracers.discarded(newConnection) >> newConnection.close.as(none)
           }
         case None =>
           // in the meantime between detection of conflict, and processing it old connection has dropped. Register new one
@@ -185,6 +186,39 @@ class ConnectionHandler[F[_]: Concurrent, K, M](
       }
     } else {
       tracers.registered(newConnection) >> newConnection.some.pure[F]
+    }
+  }
+
+  /** Decide whether a new connection to/from a peer should replace an old connection from/to the same peer in case of a conflict. */
+  private def shouldReplaceConnection(
+      newConnection: HandledConnection[F, K, M],
+      oldConnection: HandledConnection[F, K, M]
+  ): Boolean = {
+    if (oldConnection.age() < oppositeConnectionOverlap) {
+      // The old connection has just been created recently, yet we have a new connection already.
+      // Most likely the two nodes opened connections to each other around the same time, and if
+      // we close one of the connections connection based on direction, the node opposite will
+      // likely be doing  the same to the _other_ connection, symmetrically.
+      // Instead, let's try to establish some ordering between the two, so the same connection
+      // is chosen as the victim on both sides.
+      val (newPort, oldPort) = (
+        newConnection.ephemeralAddress.getPort,
+        oldConnection.ephemeralAddress.getPort
+      )
+      newPort < oldPort || newPort == oldPort &&
+      newConnection.ephemeralAddress.getHostName < oldConnection.ephemeralAddress.getHostName
+    } else {
+      newConnection.connectionDirection match {
+        case HandledConnection.IncomingConnection =>
+          // Even though we have connection to this peer, they are calling us. One of the reason may be
+          // that they failed and we did not notice. Lets try to replace old connection with new one.
+          true
+
+        case HandledConnection.OutgoingConnection =>
+          // For some reason we were calling while we already have connection, most probably we have
+          // received incoming connection during call. Close this new connection, and keep the old one.
+          false
+      }
     }
   }
 
@@ -335,8 +369,9 @@ object ConnectionHandler {
     * for incoming messages of that connection
     *
     * @param key, key of remote node
-    * @param serverAddress, address of the server of remote node. In case of incoming connection it will be diffrent that
-    *                       underlyingConnection remoteAddress
+    * @param serverAddress, address of the server of remote node. In case of incoming connection it will be different than
+    *                       the underlyingConnection remoteAddress, because we will look up the remote address based on the
+    *                       `key` in the cluster configuration.
     * @param underlyingConnection, encrypted connection to send and receive messages
     */
   class HandledConnection[F[_]: Concurrent, K, M] private (
@@ -347,6 +382,29 @@ object ConnectionHandler {
       underlyingConnection: EncryptedConnection[F, K, M],
       closeReason: Deferred[F, HandledConnectionCloseReason]
   ) {
+    private val createdAt = Instant.now()
+
+    def age(): FiniteDuration =
+      (Instant.now().toEpochMilli() - createdAt.toEpochMilli()).millis
+
+    /** For an incoming connection, this is the remote ephemeral address of the socket
+      * for an outgoing connection, it is the remote server address.
+      */
+    def remoteAddress: InetSocketAddress =
+      underlyingConnection.remotePeerInfo._2
+
+    /** For an incoming connection, this is the local server address;
+      * for an outgoing connection, it is the local ephemeral address of the socket.
+      */
+    def localAddress: InetSocketAddress = underlyingConnection.localAddress
+
+    /** The client side address of the TCP socket. */
+    def ephemeralAddress: InetSocketAddress =
+      connectionDirection match {
+        case IncomingConnection => remoteAddress
+        case OutgoingConnection => localAddress
+      }
+
     def sendMessage(m: M): F[Unit] = {
       underlyingConnection.sendMessage(m)
     }
@@ -368,8 +426,7 @@ object ConnectionHandler {
             (ConnectionAlreadyDisconnected: ReplaceResult).pure[F]
           case Right(_) =>
             underlyingConnection.close >>
-              request.waitForReplaceToFinish >> (ReplaceFinished: ReplaceResult)
-                .pure[F]
+              request.waitForReplaceToFinish.as(ReplaceFinished: ReplaceResult)
         }
       }
     }
@@ -470,7 +527,8 @@ object ConnectionHandler {
   }
 
   private def buildHandler[F[_]: Concurrent: ContextShift, K, M](
-      connectionFinishCallback: FinishedConnection[K] => F[Unit]
+      connectionFinishCallback: FinishedConnection[K] => F[Unit],
+      oppositeConnectionOverlap: FiniteDuration
   )(implicit
       tracers: NetworkTracers[F, K, M]
   ): F[ConnectionHandler[F, K, M]] = {
@@ -485,7 +543,8 @@ object ConnectionHandler {
       acquiredConnections,
       messageQueue,
       cancelToken,
-      connectionFinishCallback
+      connectionFinishCallback,
+      oppositeConnectionOverlap
     )
   }
 
@@ -499,12 +558,18 @@ object ConnectionHandler {
     * @param connectionFinishCallback, callback to be called when connection is finished and get de-registered
     */
   def apply[F[_]: Concurrent: ContextShift, K, M](
-      connectionFinishCallback: FinishedConnection[K] => F[Unit]
+      connectionFinishCallback: FinishedConnection[K] => F[Unit],
+      oppositeConnectionOverlap: FiniteDuration
   )(implicit
       tracers: NetworkTracers[F, K, M]
   ): Resource[F, ConnectionHandler[F, K, M]] = {
     Resource
-      .make(buildHandler[F, K, M](connectionFinishCallback)) { handler =>
+      .make(
+        buildHandler[F, K, M](
+          connectionFinishCallback,
+          oppositeConnectionOverlap
+        )
+      ) { handler =>
         handler.shutdown
       }
       .flatMap { handler =>

@@ -36,6 +36,10 @@ object ScalanetConnectionProvider {
 
     override def close: F[Unit] = underlyingChannelRelease
 
+    override val localAddress: InetSocketAddress = (
+      underlyingChannel.from.address.inetSocketAddress
+    )
+
     override val remotePeerInfo: (K, InetSocketAddress) = (
       channelKey,
       underlyingChannel.to.address.inetSocketAddress
@@ -52,16 +56,25 @@ object ScalanetConnectionProvider {
       })
     }
 
-    override def incomingMessage: F[Option[Either[ConnectionError, M]]] = {
-      TaskLift[F].apply(underlyingChannel.nextChannelEvent.map {
+    override def incomingMessage: F[Option[Either[ConnectionError, M]]] =
+      TaskLift[F].apply(nextNonIdleMessage)
+
+    private val nextNonIdleMessage: Task[Option[Either[ConnectionError, M]]] = {
+      underlyingChannel.nextChannelEvent.flatMap {
         case Some(event) =>
           event match {
-            case Channel.MessageReceived(m) => Some(Right(m))
-            case Channel.UnexpectedError(e) => Some(Left(UnexpectedError(e)))
-            case Channel.DecodingError      => Some(Left(DecodingError))
+            case Channel.MessageReceived(m) =>
+              Task.pure(Some(Right(m)))
+            case Channel.UnexpectedError(e) =>
+              Task.pure(Some(Left(UnexpectedError(e))))
+            case Channel.DecodingError =>
+              Task.pure(Some(Left(DecodingError)))
+            case Channel.ChannelIdle(_, _) =>
+              nextNonIdleMessage
           }
-        case None => None
-      })
+        case None =>
+          Task.pure(None)
+      }
     }
   }
 
@@ -111,7 +124,8 @@ object ScalanetConnectionProvider {
               useNativeTlsImplementation,
               framingConfig,
               maxIncomingQueueSizePerPeer,
-              None
+              incomingConnectionsThrottling = None,
+              stalePeerDetectionConfig = None
             )
         )
       )
