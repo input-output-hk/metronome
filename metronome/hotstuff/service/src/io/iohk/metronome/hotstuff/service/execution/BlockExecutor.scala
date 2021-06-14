@@ -119,20 +119,22 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
 
   /** Try to execute a batch of newly committed blocks.
     *
-    * Return the last successfully executed hash, if any.
+    * The last executed block hash is used to track that it hasn't
+    * been modified by the jump-ahead state sync mechanism while
+    * we were executing blocks.
     */
   private def tryExecuteBatch(
       newBlockHashes: List[A#Hash],
       commitQC: QuorumCertificate[A],
       lastExecutedBlockHash: A#Hash
-  ): F[A#Hash] = {
+  ): F[Unit] = {
     def loop(
         newBlockHashes: List[A#Hash],
         lastExecutedBlockHash: A#Hash
-    ): F[A#Hash] =
+    ): F[Unit] =
       newBlockHashes match {
         case Nil =>
-          lastExecutedBlockHash.pure[F]
+          ().pure[F]
 
         case blockHash :: newBlockHashes =>
           executeBlock(
@@ -147,9 +149,14 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
               // available in the storage.
               tracers
                 .error(s"Error executing block $blockHash", ex)
-                .as(lastExecutedBlockHash)
 
-            case Right(()) =>
+            case Right(false) =>
+              // Either the block couldn't be found, or the last executed
+              // hash changed, but something suggests that we should not
+              // try to execute more of this batch.
+              newBlockHashes.traverse(tracers.executionSkipped(_)).void
+
+            case Right(true) =>
               loop(newBlockHashes, blockHash)
           }
       }
@@ -160,13 +167,16 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
   /** Execute the next block in line and update the view state.
     * Be prepared that it may not exist, if execution took so long that
     * the `SyncService` skipped ahead to the latest Commit Q.C.
+    *
+    * Return a flag to indicate whether the block has been executed,
+    * and we can carry on executing the batch.
     */
   private def executeBlock(
       blockHash: A#Hash,
       commitQC: QuorumCertificate[A],
       commitPath: NonEmptyList[A#Hash],
       lastExecutedBlockHash: A#Hash
-  ): F[Unit] = {
+  ): F[Boolean] = {
     assert(commitPath.head == blockHash)
     assert(commitPath.last == commitQC.blockHash)
 
@@ -174,12 +184,12 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
       blockStorage.get(blockHash)
     } flatMap {
       case None =>
-        tracers.executionSkipped(blockHash)
+        tracers.executionSkipped(blockHash).as(false)
 
       case Some(block) =>
         appService.executeBlock(block, commitQC, commitPath) >>
-          setLastExecutedBlockHash(blockHash, lastExecutedBlockHash) >>
-          tracers.blockExecuted(blockHash)
+          tracers.blockExecuted(blockHash) >>
+          setLastExecutedBlockHash(blockHash, lastExecutedBlockHash)
     }
   }
 }
