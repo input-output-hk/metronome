@@ -35,6 +35,8 @@ object CheckpointingAgreement extends Secp256k1Agreement {
         b.hash
       override def parentBlockHash(b: models.Block) =
         b.header.parentHash
+      override def height(b: Block): Long =
+        b.header.height
       override def isValid(b: models.Block) =
         models.Block.isValid(b)
     }

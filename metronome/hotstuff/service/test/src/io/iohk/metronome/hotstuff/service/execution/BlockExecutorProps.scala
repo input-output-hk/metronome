@@ -152,7 +152,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
           val extension = for {
             viewNumber <- Gen.posNum[Int].map(ViewNumber(_))
             ancestor = tree.last
-            descendantTree <- genNonEmptyBlockTree(parentId = ancestor.id)
+            descendantTree <- genNonEmptyBlockTree(parent = ancestor)
             descendant = descendantTree.last
             commitQC = QuorumCertificate[TestAgreement](
               phase = Phase.Commit,
