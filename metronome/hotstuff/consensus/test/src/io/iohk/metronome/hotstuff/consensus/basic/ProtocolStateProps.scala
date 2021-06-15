@@ -28,7 +28,11 @@ object ProtocolStateProps extends Properties("Basic HotStuff") {
   */
 object ProtocolStateCommands extends Commands {
 
-  case class TestBlock(blockHash: Int, parentBlockHash: Int, command: String)
+  case class TestBlock(
+      blockHash: Int,
+      parentBlockHash: Int,
+      command: String
+  )
 
   object TestAgreement extends Agreement {
     type Block = TestBlock
@@ -40,7 +44,8 @@ object ProtocolStateCommands extends Commands {
   }
   type TestAgreement = TestAgreement.type
 
-  val genesis = TestBlock(blockHash = 0, parentBlockHash = -1, command = "")
+  val genesis =
+    TestBlock(blockHash = 0, parentBlockHash = -1, command = "")
 
   val genesisQC = QuorumCertificate[TestAgreement](
     phase = Phase.Prepare,
@@ -52,6 +57,7 @@ object ProtocolStateCommands extends Commands {
   implicit val block: Block[TestAgreement] = new Block[TestAgreement] {
     override def blockHash(b: TestBlock)       = b.blockHash
     override def parentBlockHash(b: TestBlock) = b.parentBlockHash
+    override def height(b: TestBlock): Long    = 0 // Not used by this model.
     override def isValid(b: TestBlock)         = true
   }
 
