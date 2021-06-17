@@ -110,6 +110,11 @@ class ConfigParserSpec
           maxPacketSize = TestConfig.Size(512000),
           clientId = None
         ),
+        TestConfig
+          .Blockchain(
+            maxBlockSize = TestConfig.Size(10000000),
+            viewTimeout = 15.seconds
+          ),
         chainId = Some("test-chain")
       )
     }
@@ -122,9 +127,13 @@ object ConfigParserSpec {
   case class TestConfig(
       metrics: TestConfig.Metrics,
       network: TestConfig.Network,
+      blockchain: TestConfig.Blockchain,
       chainId: Option[String]
   )
   object TestConfig {
+    implicit val durationDecoder: Decoder[FiniteDuration] =
+      ConfigDecoders.durationDecoder
+
     case class Metrics(enabled: Boolean)
     object Metrics {
       implicit val decoder: Decoder[Metrics] =
@@ -138,9 +147,6 @@ object ConfigParserSpec {
         clientId: Option[String]
     )
     object Network {
-      implicit val durationDecoder: Decoder[FiniteDuration] =
-        ConfigDecoders.durationDecoder
-
       implicit val decoder: Decoder[Network] =
         deriveDecoder
     }
@@ -149,6 +155,15 @@ object ConfigParserSpec {
     object Size {
       implicit val decoder: Decoder[Size] =
         ConfigDecoders.bytesDecoder.map(Size(_))
+    }
+
+    case class Blockchain(
+        maxBlockSize: Size,
+        viewTimeout: FiniteDuration
+    )
+    object Blockchain {
+      implicit val decoder: Decoder[Blockchain] =
+        ConfigDecoders.strategyDecoder[Blockchain]("consensus", deriveDecoder)
     }
 
     implicit val decoder: Decoder[TestConfig] =
