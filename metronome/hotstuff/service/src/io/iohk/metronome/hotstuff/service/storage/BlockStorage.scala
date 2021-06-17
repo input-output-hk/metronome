@@ -155,7 +155,7 @@ class BlockStorage[N, A <: Agreement: Block](
     ): KVStoreRead[N, List[A#Hash]] = {
       if (blockHash == ancestorBlockHash) {
         KVStoreRead[N].pure(blockHash :: acc)
-      } else if (maxDistance == 0) {
+      } else if (maxDistance <= 0) {
         KVStoreRead[N].pure(Nil)
       } else {
         blockMetaColl.read(blockHash).flatMap {
