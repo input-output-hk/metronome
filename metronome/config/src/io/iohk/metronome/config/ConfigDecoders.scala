@@ -42,6 +42,7 @@ object ConfigDecoders {
     *     r = 1.4
     *   }
     * }
+    * ```
     *
     * It should deserialize into a class that matches a sub-key:
     * ```
@@ -59,19 +60,22 @@ object ConfigDecoders {
       discriminant: String,
       decoder: Decoder[T]
   ): Decoder[T] = {
+    // This parser is applied after the fields have been transformed to camelCase.
+    import ConfigParser.toCamelCase
     // Not passing the decoder implicitly so the compiler doesn't pass
     // the one we are constructing here.
     implicit val inner: Decoder[T] = decoder
 
     Decoder.instance[T] { (c: HCursor) =>
       for {
-        obj      <- c.value.as[JsonObject]
-        selected <- c.downField(discriminant).as[String]
+        obj <- c.value.as[JsonObject]
+        ccd = toCamelCase(discriminant)
+        selected <- c.downField(ccd).as[String].map(toCamelCase)
         value    <- c.downField(selected).as[T]
         // Making sure that everything else is valid. We could pick the value from the result,
         // but it's more difficult to provide the right `DecodingFailure` with a list of operations
         // if the selected key is not present in the map.
-        _ <- Json.fromJsonObject(obj.remove(discriminant)).as[Map[String, T]]
+        _ <- Json.fromJsonObject(obj.remove(ccd)).as[Map[String, T]]
       } yield value
     }
   }
