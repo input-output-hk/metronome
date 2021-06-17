@@ -2,7 +2,7 @@ package io.iohk.metronome.hotstuff.service.execution
 
 import cats.implicits._
 import cats.effect.Resource
-import cats.effect.concurrent.Ref
+import cats.effect.concurrent.{Ref, Semaphore}
 import cats.data.{NonEmptyVector, NonEmptyList}
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
@@ -40,6 +40,12 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
   }
   import ViewStateStorageCommands.neverUsedCodec
 
+  case class TestResources(
+      blockExecutor: BlockExecutor[Task, Namespace, TestAgreement],
+      viewStateStorage: ViewStateStorage[Namespace, TestAgreement],
+      executionSemaphore: Semaphore[Task]
+  )
+
   case class TestFixture(
       blocks: List[TestBlock],
       batches: Vector[Effect.ExecuteBlocks[TestAgreement]]
@@ -61,34 +67,43 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
     implicit val consensusTracers = ConsensusTracers(eventTracer)
 
-    val failNextRef = Ref.unsafe[Task, Boolean](false)
+    val failNextRef    = Ref.unsafe[Task, Boolean](false)
+    val isExecutingRef = Ref.unsafe[Task, Boolean](false)
 
-    val appService = new ApplicationService[Task, TestAgreement] {
-      def createBlock(
-          highQC: QuorumCertificate[TestAgreement]
-      ): Task[Option[TestBlock]] = ???
+    private def appService(semaphore: Semaphore[Task]) =
+      new ApplicationService[Task, TestAgreement] {
+        def createBlock(
+            highQC: QuorumCertificate[TestAgreement]
+        ): Task[Option[TestBlock]] = ???
 
-      def validateBlock(block: TestBlock): Task[Option[Boolean]] = ???
+        def validateBlock(block: TestBlock): Task[Option[Boolean]] = ???
 
-      def syncState(
-          sources: NonEmptyVector[Int],
-          block: TestBlock
-      ): Task[Unit] = ???
+        def syncState(
+            sources: NonEmptyVector[Int],
+            block: TestBlock
+        ): Task[Unit] = ???
 
-      def executeBlock(
-          block: TestBlock,
-          commitQC: QuorumCertificate[TestAgreement],
-          commitPath: NonEmptyList[TestAgreement.Hash]
-      ): Task[Boolean] =
-        for {
-          fail <- failNextRef.modify(failNext => (false, failNext))
-          _ <- Task
-            .raiseError(new RuntimeException("The application failed!"))
-            .whenA(fail)
-        } yield true
-    }
+        def executeBlock(
+            block: TestBlock,
+            commitQC: QuorumCertificate[TestAgreement],
+            commitPath: NonEmptyList[TestAgreement.Hash]
+        ): Task[Boolean] =
+          isExecutingRef
+            .set(true)
+            .bracket(_ =>
+              semaphore.withPermit {
+                for {
+                  fail <- failNextRef.modify(failNext => (false, failNext))
+                  _ <- Task
+                    .raiseError(new RuntimeException("The application failed!"))
+                    .whenA(fail)
+                } yield true
+              }
+            )(_ => isExecutingRef.set(false))
 
-    val resources =
+      }
+
+    val resources: Resource[Task, TestResources] =
       for {
         viewStateStorage <- Resource.liftF {
           storeRunner.runReadWrite {
@@ -106,12 +121,13 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
             )
           }
         }
+        semaphore <- Resource.liftF(Semaphore[Task](1))
         blockExecutor <- BlockExecutor[Task, Namespace, TestAgreement](
-          appService,
+          appService(semaphore),
           TestBlockStorage,
           viewStateStorage
         )
-      } yield (blockExecutor, viewStateStorage)
+      } yield TestResources(blockExecutor, viewStateStorage, semaphore)
 
     val executedBlockHashes =
       eventsRef.get
@@ -187,9 +203,9 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
   property("executeBlocks - from root") = forAll { (fixture: TestFixture) =>
     run {
-      fixture.resources.use { case (blockSychronizer, _) =>
+      fixture.resources.use { res =>
         for {
-          _ <- fixture.batches.traverse(blockSychronizer.enqueue)
+          _ <- fixture.batches.traverse(res.blockExecutor.enqueue)
 
           executedBlockHashes <- fixture.awaitBlockExecution(
             fixture.lastBatchCommitedBlockHash
@@ -209,14 +225,14 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
   property("executeBlocks - from last") = forAll { (fixture: TestFixture) =>
     run {
-      fixture.resources.use { case (blockSychronizer, viewStateStorage) =>
+      fixture.resources.use { res =>
         val lastBatch             = fixture.batches.last
         val lastExecutedBlockHash = lastBatch.lastExecutedBlockHash
         for {
           _ <- fixture.storeRunner.runReadWrite {
-            viewStateStorage.setLastExecutedBlockHash(lastExecutedBlockHash)
+            res.viewStateStorage.setLastExecutedBlockHash(lastExecutedBlockHash)
           }
-          _ <- blockSychronizer.enqueue(lastBatch)
+          _ <- res.blockExecutor.enqueue(lastBatch)
 
           executedBlockHashes <- fixture.awaitBlockExecution(
             fixture.lastBatchCommitedBlockHash
@@ -238,14 +254,14 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
 
   property("executeBlocks - from pruned") = forAll { (fixture: TestFixture) =>
     run {
-      fixture.resources.use { case (blockSychronizer, _) =>
+      fixture.resources.use { res =>
         val lastBatch             = fixture.batches.last
         val lastExecutedBlockHash = lastBatch.lastExecutedBlockHash
         for {
           _ <- fixture.storeRunner.runReadWrite {
             TestBlockStorage.pruneNonDescendants(lastExecutedBlockHash)
           }
-          _ <- blockSychronizer.enqueue(lastBatch)
+          _ <- res.blockExecutor.enqueue(lastBatch)
 
           executedBlockHashes <- fixture.awaitBlockExecution(
             fixture.lastBatchCommitedBlockHash
@@ -269,10 +285,10 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
     // Only the next commit batch triggers re-execution, so we need at least 2.
     forAll(TestFixture.gen(minBatches = 2)) { (fixture: TestFixture) =>
       run {
-        fixture.resources.use { case (blockSychronizer, _) =>
+        fixture.resources.use { res =>
           for {
             _      <- fixture.failNextRef.set(true)
-            _      <- fixture.batches.traverse(blockSychronizer.enqueue)
+            _      <- fixture.batches.traverse(res.blockExecutor.enqueue)
             _      <- fixture.awaitBlockExecution(fixture.lastBatchCommitedBlockHash)
             events <- fixture.eventsRef.get
           } yield {
@@ -280,6 +296,61 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
               case _: ConsensusEvent.Error => true
               case _                       => false
             }
+          }
+        }
+      }
+    }
+
+  property("executeBlocks - skipped") =
+    // Using 4 batches so the 2nd batch definitely doesn't start with the last executed block,
+    // which will be the root initially, and it's distinct from the last batch as well.
+    forAll(TestFixture.gen(minBatches = 4)) { (fixture: TestFixture) =>
+      run {
+        fixture.resources.use { res =>
+          val execBatch = fixture.batches.tail.head
+          val lastBatch = fixture.batches.last
+          for {
+            // Make the execution wait until we update the view state.
+            _ <- res.executionSemaphore.acquire
+            _ <- res.blockExecutor.enqueue(execBatch)
+
+            // Wait until the execution has started before updating the view state
+            // so that all the blocks are definitely enqueued already.
+            _ <- fixture.isExecutingRef.get.restartUntil(identity)
+
+            // Now skip ahead, like if we did a fast-forward sync.
+            _ <- fixture.storeRunner.runReadWrite {
+              res.viewStateStorage.setLastExecutedBlockHash(
+                lastBatch.lastExecutedBlockHash
+              )
+            }
+            _ <- res.executionSemaphore.release
+
+            // Easiest indicator of everything being finished is to execute the last batch.
+            _ <- res.blockExecutor.enqueue(lastBatch)
+            _ <- fixture.awaitBlockExecution(
+              lastBatch.quorumCertificate.blockHash
+            )
+
+            events <- fixture.eventsRef.get
+            executedBlockHashes = events.collect {
+              case ConsensusEvent.BlockExecuted(blockHash) => blockHash
+            }
+            skippedBlockHashes = events.collect {
+              case ConsensusEvent.ExecutionSkipped(blockHash) => blockHash
+            }
+
+            path <- fixture.storeRunner.runReadOnly {
+              TestBlockStorage.getPathFromRoot(
+                execBatch.quorumCertificate.blockHash
+              )
+            }
+          } yield {
+            all(
+              // The first block after the root will be executed, only then do we skip the rest.
+              "executes the first block" |: executedBlockHashes.head == path.tail.head,
+              "skips rest of the blocks" |: skippedBlockHashes == path.drop(2)
+            )
           }
         }
       }

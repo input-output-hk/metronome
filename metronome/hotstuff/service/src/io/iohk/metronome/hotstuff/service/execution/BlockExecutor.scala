@@ -136,11 +136,11 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
         case Nil =>
           ().pure[F]
 
-        case blockHash :: newBlockHashes =>
+        case blockHash :: nextBlockHashes =>
           executeBlock(
             blockHash,
             commitQC,
-            NonEmptyList(blockHash, newBlockHashes),
+            NonEmptyList(blockHash, nextBlockHashes),
             lastExecutedBlockHash
           ).attempt.flatMap {
             case Left(ex) =>
@@ -154,10 +154,10 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
               // Either the block couldn't be found, or the last executed
               // hash changed, but something suggests that we should not
               // try to execute more of this batch.
-              newBlockHashes.traverse(tracers.executionSkipped(_)).void
+              nextBlockHashes.traverse(tracers.executionSkipped(_)).void
 
             case Right(Some(nextLastExecutedBlockHash)) =>
-              loop(newBlockHashes, nextLastExecutedBlockHash)
+              loop(nextBlockHashes, nextLastExecutedBlockHash)
           }
       }
 
