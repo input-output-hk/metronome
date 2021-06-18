@@ -81,7 +81,8 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
         def syncState(
             sources: NonEmptyVector[Int],
             block: TestBlock
-        ): Task[Boolean] = ???
+        ): Task[Boolean] =
+          Task.pure(true)
 
         def executeBlock(
             block: TestBlock,
@@ -355,4 +356,38 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
         }
       }
     }
+
+  property("syncState") = forAll { (fixture: TestFixture) =>
+    run {
+      fixture.resources.use { res =>
+        val lastBatch = fixture.batches.last
+        for {
+          block <- fixture.storeRunner.runReadOnly {
+            TestBlockStorage.get(lastBatch.lastExecutedBlockHash).map(_.get)
+          }
+          _ <- res.blockExecutor.syncState(
+            sources = NonEmptyVector.one(0),
+            block = block
+          )
+          _ <- fixture.batches.traverse(res.blockExecutor.enqueue)
+
+          executedBlockHashes <- fixture.awaitBlockExecution(
+            fixture.lastBatchCommitedBlockHash
+          )
+
+          // The last executed block should be the new root after pruning away old blocks.
+          pathFromRoot <- fixture.storeRunner.runReadOnly {
+            TestBlockStorage.getPathFromRoot(
+              fixture.lastBatchCommitedBlockHash
+            )
+          }
+        } yield {
+          all(
+            "prunes to the fast forwared block" |: pathFromRoot.head == lastBatch.lastExecutedBlockHash,
+            "executes from the fast forwarded block" |: executedBlockHashes == pathFromRoot.tail
+          )
+        }
+      }
+    }
+  }
 }
