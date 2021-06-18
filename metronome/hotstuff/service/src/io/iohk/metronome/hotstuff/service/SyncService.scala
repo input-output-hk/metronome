@@ -2,6 +2,7 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.Parallel
+import cats.data.OptionT
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.core.messages.{
@@ -242,7 +243,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
       blockSync.fiberMap
         .submit(sender) {
           blockSync.synchronizer.sync(sender, prepare.highQC) >>
-            appService.validateBlock(prepare.block) >>= {
+            validateBlock(prepare.block).value >>= {
             case Some(isValid) =>
               syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
             case None =>
@@ -252,6 +253,25 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
         }
         .void
   }
+
+  /** Validate the prepared block after the parent has been downloaded. */
+  private def validateBlock(block: A#Block): OptionT[F, Boolean] =
+    for {
+      parent <- OptionT {
+        storeRunner.runReadOnly {
+          blockStorage.get(Block[A].parentBlockHash(block))
+        }
+      }
+      // Reject the block straight away if it doesn't pass basic validation.
+      isFormallyValid =
+        Block[A].height(block) == Block[A].height(parent) + 1 &&
+          Block[A].isValid(block)
+      // Pass it to the application for content validation, only if it looks valid so far.
+      // This may not produce a result, if the application is not in a position to decide.
+      isValid <-
+        if (isFormallyValid) OptionT(appService.validateBlock(block))
+        else OptionT.pure[F](false)
+    } yield isValid
 
   /** Shut down the any outstanding block downloads, sync the view,
     * then create another block synchronizer instance to resume with.

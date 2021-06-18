@@ -12,6 +12,7 @@ package io.iohk.metronome.hotstuff.consensus.basic
 trait Block[A <: Agreement] {
   def blockHash(b: A#Block): A#Hash
   def parentBlockHash(b: A#Block): A#Hash
+  def height(b: A#Block): Long
 
   /** Perform simple content validation. */
   def isValid(b: A#Block): Boolean

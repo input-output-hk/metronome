@@ -14,9 +14,11 @@ import scala.collection.immutable.Queue
   */
 class BlockStorage[N, A <: Agreement: Block](
     blockColl: KVCollection[N, A#Hash, A#Block],
-    childToParentColl: KVCollection[N, A#Hash, A#Hash],
+    blockMetaColl: KVCollection[N, A#Hash, BlockStorage.BlockMeta[A]],
     parentToChildrenColl: KVCollection[N, A#Hash, Set[A#Hash]]
 ) {
+  import BlockStorage.BlockMeta
+
   private implicit val kvn  = KVStore.instance[N]
   private implicit val kvrn = KVStoreRead.instance[N]
 
@@ -24,12 +26,13 @@ class BlockStorage[N, A <: Agreement: Block](
     * then add this block to its children.
     */
   def put(block: A#Block): KVStore[N, Unit] = {
-    val blockHash  = Block[A].blockHash(block)
-    val parentHash = Block[A].parentBlockHash(block)
+    val blockHash = Block[A].blockHash(block)
+    val meta =
+      BlockMeta(Block[A].parentBlockHash(block), Block[A].height(block))
 
     blockColl.put(blockHash, block) >>
-      childToParentColl.put(blockHash, parentHash) >>
-      parentToChildrenColl.alter(parentHash) { maybeChildren =>
+      blockMetaColl.put(blockHash, meta) >>
+      parentToChildrenColl.alter(meta.parentBlockHash) { maybeChildren =>
         maybeChildren orElse Set.empty.some map (_ + blockHash)
       }
 
@@ -41,7 +44,7 @@ class BlockStorage[N, A <: Agreement: Block](
 
   /** Check whether a block is present in the tree. */
   def contains(blockHash: A#Hash): KVStoreRead[N, Boolean] =
-    childToParentColl.read(blockHash).map(_.isDefined)
+    blockMetaColl.read(blockHash).map(_.isDefined)
 
   /** Check how many children the block has in the tree. */
   private def childCount(blockHash: A#Hash): KVStoreRead[N, Int] =
@@ -49,10 +52,15 @@ class BlockStorage[N, A <: Agreement: Block](
 
   /** Check whether the parent of the block is present in the tree. */
   private def hasParent(blockHash: A#Hash): KVStoreRead[N, Boolean] =
-    childToParentColl.read(blockHash).flatMap {
-      case None             => KVStoreRead[N].pure(false)
-      case Some(parentHash) => contains(parentHash)
+    blockMetaColl.read(blockHash).flatMap {
+      case None       => KVStoreRead[N].pure(false)
+      case Some(meta) => contains(meta.parentBlockHash)
     }
+
+  private def getParentBlockHash(
+      blockHash: A#Hash
+  ): KVStoreRead[N, Option[A#Hash]] =
+    blockMetaColl.read(blockHash).map(_.map(_.parentBlockHash))
 
   /** Check whether it's safe to delete a block.
     *
@@ -92,7 +100,7 @@ class BlockStorage[N, A <: Agreement: Block](
     def deleteIfEmpty(maybeChildren: Option[Set[A#Hash]]) =
       maybeChildren.filter(_.nonEmpty)
 
-    childToParentColl.get(blockHash).flatMap {
+    getParentBlockHash(blockHash).lift.flatMap {
       case None =>
         KVStore[N].unit
       case Some(parentHash) =>
@@ -101,7 +109,7 @@ class BlockStorage[N, A <: Agreement: Block](
         }
     } >>
       blockColl.delete(blockHash) >>
-      childToParentColl.delete(blockHash) >>
+      blockMetaColl.delete(blockHash) >>
       // Keep the association from existing children, until they last one is deleted.
       parentToChildrenColl.alter(blockHash)(deleteIfEmpty)
   }
@@ -118,7 +126,7 @@ class BlockStorage[N, A <: Agreement: Block](
         blockHash: A#Hash,
         acc: List[A#Hash]
     ): KVStoreRead[N, List[A#Hash]] = {
-      childToParentColl.read(blockHash).flatMap {
+      getParentBlockHash(blockHash).flatMap {
         case None =>
           // This block doesn't exist in the tree, so our ancestry is whatever we collected so far.
           KVStoreRead[N].pure(acc)
@@ -135,41 +143,42 @@ class BlockStorage[N, A <: Agreement: Block](
     *
     * If either of the blocks are not in the tree, or there's no path between them,
     * return an empty list. This can happen if we have already pruned away the ancestry as well.
-    *
-    * The `maxDistance` parameter can be used to limit the maximum traversal depth;
-    * it's useful with blocks that have a `height` field, where we know up front that
-    * if we have ascended more than N blocks from the descendant and haven't encountered
-    * the ancestor, then we must be on a different branch.
     */
   def getPathFromAncestor(
       ancestorBlockHash: A#Hash,
-      descendantBlockHash: A#Hash,
-      maxDistance: Int = Int.MaxValue
+      descendantBlockHash: A#Hash
   ): KVStoreRead[N, List[A#Hash]] = {
     def loop(
         blockHash: A#Hash,
         acc: List[A#Hash],
-        maxDistance: Int
+        maxDistance: Long
     ): KVStoreRead[N, List[A#Hash]] = {
       if (blockHash == ancestorBlockHash) {
         KVStoreRead[N].pure(blockHash :: acc)
-      } else if (maxDistance == 0) {
+      } else if (maxDistance <= 0) {
         KVStoreRead[N].pure(Nil)
       } else {
-        childToParentColl.read(blockHash).flatMap {
+        blockMetaColl.read(blockHash).flatMap {
           case None =>
             KVStoreRead[N].pure(Nil)
-          case Some(parentBlockHash) =>
-            loop(parentBlockHash, blockHash :: acc, maxDistance - 1)
+          case Some(meta) =>
+            loop(meta.parentBlockHash, blockHash :: acc, maxDistance - 1)
         }
       }
     }
 
-    (contains(ancestorBlockHash), contains(descendantBlockHash))
-      .mapN((_, _))
+    (
+      blockMetaColl.read(ancestorBlockHash),
+      blockMetaColl.read(descendantBlockHash)
+    ).mapN((_, _))
       .flatMap {
-        case (true, true) => loop(descendantBlockHash, Nil, maxDistance)
-        case _            => KVStoreRead[N].pure(Nil)
+        case (Some(ameta), Some(dmeta)) =>
+          loop(
+            descendantBlockHash,
+            Nil,
+            maxDistance = dmeta.height - ameta.height
+          )
+        case _ => KVStoreRead[N].pure(Nil)
       }
   }
 
@@ -246,4 +255,13 @@ class BlockStorage[N, A <: Agreement: Block](
           _           <- path.init.traverse(deleteUnsafe(_))
         } yield deleteables
     }
+}
+
+object BlockStorage {
+
+  /** Properties about the block that we frequently need for traversal. */
+  case class BlockMeta[A <: Agreement](
+      parentBlockHash: A#Hash,
+      height: Long
+  )
 }

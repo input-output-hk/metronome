@@ -186,11 +186,21 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
           RLPList(   // NonEmptyList
             RLPList( // BlockHeader
               RLPValue(decoded.headers.head.parentHash.toArray),
+              RLPValue(
+                rlp.RLPImplicits.longEncDec
+                  .encode(decoded.headers.head.height)
+                  .bytes
+              ),
               RLPValue(decoded.headers.head.postStateHash.toArray),
               RLPValue(decoded.headers.head.contentMerkleRoot.toArray)
             ),
             RLPList( // BlockHeader
               RLPValue(decoded.headers.last.parentHash.toArray),
+              RLPValue(
+                rlp.RLPImplicits.longEncDec
+                  .encode(decoded.headers.last.height)
+                  .bytes
+              ),
               RLPValue(decoded.headers.last.postStateHash.toArray),
               RLPValue(decoded.headers.last.contentMerkleRoot.toArray)
             )

@@ -112,7 +112,7 @@ object BlockSynchronizerProps extends Properties("BlockSynchronizer") {
       for {
         ancestorTree <- genNonEmptyBlockTree
         leaf = ancestorTree.last
-        descendantTree <- genNonEmptyBlockTree(parentId = leaf.id)
+        descendantTree <- genNonEmptyBlockTree(parent = leaf)
 
         federationSize <- Gen.choose(3, 10)
         federationKeys = Range(0, federationSize).toVector

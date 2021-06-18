@@ -68,12 +68,14 @@ object ArbitraryInstances
     Arbitrary {
       for {
         parentHash        <- arbitrary[Block.Header.Hash]
+        height            <- Gen.posNum[Long]
         postStateHash     <- arbitrary[Ledger.Hash]
         transactions      <- arbitrary[Vector[Transaction]]
         contentMerkleRoot <- arbitrary[MerkleTree.Hash]
         body = Block.Body(transactions)
         header = Block.Header(
           parentHash,
+          height,
           postStateHash,
           contentMerkleRoot
         )
