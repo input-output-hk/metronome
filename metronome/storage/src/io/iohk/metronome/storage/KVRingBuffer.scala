@@ -3,7 +3,10 @@ package io.iohk.metronome.storage
 import cats.implicits._
 import scodec.{Decoder, Encoder, Codec}
 
-/** Storing the last N items inserted into a collection. */
+/** Storing the last N items inserted into a collection.
+  *
+  * This component is currently tested through `LedgerStorage`.
+  */
 class KVRingBuffer[N, K, V](
     coll: KVCollection[N, K, V],
     metaNamespace: N,
