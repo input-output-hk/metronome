@@ -82,6 +82,22 @@ object BlockStorageProps extends Properties("BlockStorage") {
         .compile(TestBlockStorage.getPathFromRoot(blockHash))
         .run(store)
 
+    def getPathFromAncestor(
+        ancestorBlockHash: Hash,
+        descendantBlockHash: Hash,
+        maxDistance: Int = Int.MaxValue
+    ) =
+      TestKVStore
+        .compile(
+          TestBlockStorage
+            .getPathFromAncestor(
+              ancestorBlockHash,
+              descendantBlockHash,
+              maxDistance
+            )
+        )
+        .run(store)
+
     def getDescendants(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.getDescendants(blockHash))
@@ -236,6 +252,53 @@ object BlockStorageProps extends Properties("BlockStorage") {
   property("getPathFromRoot non-existing") = forAll(genNonExisting) {
     case (data, nonExisting) =>
       data.store.getPathFromRoot(nonExisting.id).isEmpty
+  }
+
+  property("getPathFromAncestor") = forAll(
+    for {
+      prefix <- genNonEmptyBlockTree
+      ancestor = prefix.last
+      postfix    <- genNonEmptyBlockTree(ancestor.id)
+      descendant <- Gen.oneOf(postfix)
+      data = TestData(prefix ++ postfix)
+      nonExisting <- genBlock
+    } yield (data, ancestor, descendant, nonExisting)
+  ) { case (data, ancestor, descendant, nonExisting) =>
+    def getPath(a: TestBlock, d: TestBlock, maxDistance: Int = Int.MaxValue) =
+      data.store.getPathFromAncestor(a.id, d.id, maxDistance)
+
+    def pathExists(a: TestBlock, d: TestBlock) = {
+      val path = getPath(a, d)
+      path.nonEmpty &&
+      path.distinct.size == path.size &&
+      path.head == a.id &&
+      path.last == d.id &&
+      (path.init zip path.tail).forall { case (parentHash, childHash) =>
+        data.store.getBlock(childHash).get.parentId == parentHash
+      }
+    }
+
+    def pathNotExists(a: TestBlock, d: TestBlock) =
+      getPath(a, d).isEmpty
+
+    all(
+      "fromAtoD" |: pathExists(ancestor, descendant),
+      "fromDtoA" |: pathNotExists(descendant, ancestor),
+      "fromAtoA" |: pathExists(ancestor, ancestor),
+      "fromDtoD" |: pathExists(descendant, descendant),
+      "fromAtoN" |: pathNotExists(ancestor, nonExisting),
+      "fromNtoD" |: pathNotExists(nonExisting, descendant),
+      "maxDistance" |: {
+        val (a, d, n) = (ancestor, descendant, nonExisting)
+        val dist      = getPath(ancestor, descendant).length - 1
+        all(
+          "fromAtoD maxDistance=dist" |: getPath(a, d, dist).nonEmpty,
+          "fromAtoD maxDistance=dist-1" |: getPath(a, d, dist - 1).isEmpty,
+          "fromDtoD maxDistance=0" |: getPath(d, d, 0).nonEmpty,
+          "fromNtoN maxDistance=0" |: getPath(n, n, 0).isEmpty
+        )
+      }
+    )
   }
 
   property("getDescendants existing") = forAll(genSubTree) {

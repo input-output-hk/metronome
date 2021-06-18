@@ -9,6 +9,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Block,
   Signing
 }
+import io.iohk.metronome.hotstuff.service.execution.BlockExecutor
 import io.iohk.metronome.hotstuff.service.messages.{
   HotStuffMessage,
   SyncMessage
@@ -60,10 +61,17 @@ object HotStuffService {
 
       syncPipe <- Resource.liftF { SyncPipe[F, A] }
 
+      blockExecutor <- BlockExecutor[F, N, A](
+        appService,
+        blockStorage,
+        viewStateStorage
+      )
+
       consensusService <- ConsensusService(
         initState.publicKey,
         consensusNetwork,
         appService,
+        blockExecutor,
         blockStorage,
         viewStateStorage,
         syncPipe.left,
@@ -75,6 +83,7 @@ object HotStuffService {
         initState.federation,
         syncNetwork,
         appService,
+        blockExecutor,
         blockStorage,
         viewStateStorage,
         syncPipe.right,
