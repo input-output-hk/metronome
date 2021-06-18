@@ -122,6 +122,20 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement](
     * The last executed block hash is used to track that it hasn't
     * been modified by the jump-ahead state sync mechanism while
     * we were executing blocks.
+    *
+    * In general we cannot expect to be able to cancel an ongoing execution,
+    * it may be in the middle of carrying out some real-world effects that
+    * don't support cancellation. To protect against race conditions between
+    * executing blocks here and the fast-forward synchroniser making changes
+    * to state, the `ApplicationService` implementation can use an exclusive
+    * lock in `executeBlock` and `syncState`.
+    *
+    * The `BlockExecutor` may not detect perfectly that it should stop executing
+    * a batch because the `lastExecutedBlockHash` changed, it might try to execute
+    * one extra block. If that is unacceptable, the `ApplicationService` can
+    * track in memory what the last executed/synced block was and check that
+    * it was indeed the parent of the next block it's asked to execute, raise
+    * an error if it's not, to stop the batch.
     */
   private def tryExecuteBatch(
       newBlockHashes: List[A#Hash],
