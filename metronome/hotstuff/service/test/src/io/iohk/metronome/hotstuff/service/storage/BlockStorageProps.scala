@@ -82,6 +82,22 @@ object BlockStorageProps extends Properties("BlockStorage") {
         .compile(TestBlockStorage.getPathFromRoot(blockHash))
         .run(store)
 
+    def getPathFromAncestor(
+        ancestorBlockHash: Hash,
+        descendantBlockHash: Hash,
+        maxDistance: Int = Int.MaxValue
+    ) =
+      TestKVStore
+        .compile(
+          TestBlockStorage
+            .getPathFromAncestor(
+              ancestorBlockHash,
+              descendantBlockHash,
+              maxDistance
+            )
+        )
+        .run(store)
+
     def getDescendants(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.getDescendants(blockHash))
@@ -90,6 +106,12 @@ object BlockStorageProps extends Properties("BlockStorage") {
     def pruneNonDescendants(blockHash: Hash) =
       TestKVStore
         .compile(TestBlockStorage.pruneNonDescendants(blockHash))
+        .run(store)
+        .value
+
+    def purgeTree(blockHash: Hash, keep: Option[Hash]) =
+      TestKVStore
+        .compile(TestBlockStorage.purgeTree(blockHash, keep))
         .run(store)
         .value
   }
@@ -238,6 +260,53 @@ object BlockStorageProps extends Properties("BlockStorage") {
       data.store.getPathFromRoot(nonExisting.id).isEmpty
   }
 
+  property("getPathFromAncestor") = forAll(
+    for {
+      prefix <- genNonEmptyBlockTree
+      ancestor = prefix.last
+      postfix    <- genNonEmptyBlockTree(ancestor.id)
+      descendant <- Gen.oneOf(postfix)
+      data = TestData(prefix ++ postfix)
+      nonExisting <- genBlock
+    } yield (data, ancestor, descendant, nonExisting)
+  ) { case (data, ancestor, descendant, nonExisting) =>
+    def getPath(a: TestBlock, d: TestBlock, maxDistance: Int = Int.MaxValue) =
+      data.store.getPathFromAncestor(a.id, d.id, maxDistance)
+
+    def pathExists(a: TestBlock, d: TestBlock) = {
+      val path = getPath(a, d)
+      path.nonEmpty &&
+      path.distinct.size == path.size &&
+      path.head == a.id &&
+      path.last == d.id &&
+      (path.init zip path.tail).forall { case (parentHash, childHash) =>
+        data.store.getBlock(childHash).get.parentId == parentHash
+      }
+    }
+
+    def pathNotExists(a: TestBlock, d: TestBlock) =
+      getPath(a, d).isEmpty
+
+    all(
+      "fromAtoD" |: pathExists(ancestor, descendant),
+      "fromDtoA" |: pathNotExists(descendant, ancestor),
+      "fromAtoA" |: pathExists(ancestor, ancestor),
+      "fromDtoD" |: pathExists(descendant, descendant),
+      "fromAtoN" |: pathNotExists(ancestor, nonExisting),
+      "fromNtoD" |: pathNotExists(nonExisting, descendant),
+      "maxDistance" |: {
+        val (a, d, n) = (ancestor, descendant, nonExisting)
+        val dist      = getPath(ancestor, descendant).length - 1
+        all(
+          "fromAtoD maxDistance=dist" |: getPath(a, d, dist).nonEmpty,
+          "fromAtoD maxDistance=dist-1" |: getPath(a, d, dist - 1).isEmpty,
+          "fromDtoD maxDistance=0" |: getPath(d, d, 0).nonEmpty,
+          "fromNtoN maxDistance=0" |: getPath(n, n, 0).isEmpty
+        )
+      }
+    )
+  }
+
   property("getDescendants existing") = forAll(genSubTree) {
     case (data, block, subTree) =>
       val ds  = data.store.getDescendants(block.id)
@@ -298,5 +367,41 @@ object BlockStorageProps extends Properties("BlockStorage") {
   property("pruneNonDescendants non-existing") = forAll(genNonExisting) {
     case (data, nonExisting) =>
       data.store.pruneNonDescendants(nonExisting.id)._2.isEmpty
+  }
+
+  property("purgeTree keep block") = forAll(
+    for {
+      (data, keepBlock, subTree) <- genSubTree
+      refBlock                   <- Gen.oneOf(data.tree)
+    } yield (data, refBlock, keepBlock, subTree)
+  ) { case (data, refBlock, keepBlock, subTree) =>
+    val (s, ps) = data.store.purgeTree(
+      blockHash = refBlock.id,
+      keep = Some(keepBlock.id)
+    )
+    val pss         = ps.toSet
+    val descendants = subTree.map(_.id).toSet
+    val nonDescendants =
+      data.tree.map(_.id).filterNot(descendants).filterNot(_ == keepBlock.id)
+    all(
+      "size" |: ps.size == nonDescendants.size,
+      "pruned" |: nonDescendants.forall(pss),
+      "deleted" |: nonDescendants.forall(!s.containsBlock(_)),
+      "kept-block" |: s.containsBlock(keepBlock.id),
+      "kept-descendants" |: descendants.forall(s.containsBlock(_))
+    )
+  }
+
+  property("purgeTree keep nothing") = forAll(genSubTree) {
+    case (data, block, _) =>
+      val (s, ps) = data.store.purgeTree(
+        blockHash = block.id,
+        keep = None
+      )
+      val pss = ps.toSet
+      all(
+        "pruned all" |: pss.size == data.tree.size,
+        "kept nothing" |: s.isEmpty
+      )
   }
 }

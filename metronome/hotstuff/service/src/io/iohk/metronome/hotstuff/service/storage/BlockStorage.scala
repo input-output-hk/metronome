@@ -131,6 +131,48 @@ class BlockStorage[N, A <: Agreement: Block](
     loop(blockHash, Nil)
   }
 
+  /** Get the ancestor chain between two hashes in the chain, if there is one.
+    *
+    * If either of the blocks are not in the tree, or there's no path between them,
+    * return an empty list. This can happen if we have already pruned away the ancestry as well.
+    *
+    * The `maxDistance` parameter can be used to limit the maximum traversal depth;
+    * it's useful with blocks that have a `height` field, where we know up front that
+    * if we have ascended more than N blocks from the descendant and haven't encountered
+    * the ancestor, then we must be on a different branch.
+    */
+  def getPathFromAncestor(
+      ancestorBlockHash: A#Hash,
+      descendantBlockHash: A#Hash,
+      maxDistance: Int = Int.MaxValue
+  ): KVStoreRead[N, List[A#Hash]] = {
+    def loop(
+        blockHash: A#Hash,
+        acc: List[A#Hash],
+        maxDistance: Int
+    ): KVStoreRead[N, List[A#Hash]] = {
+      if (blockHash == ancestorBlockHash) {
+        KVStoreRead[N].pure(blockHash :: acc)
+      } else if (maxDistance == 0) {
+        KVStoreRead[N].pure(Nil)
+      } else {
+        childToParentColl.read(blockHash).flatMap {
+          case None =>
+            KVStoreRead[N].pure(Nil)
+          case Some(parentBlockHash) =>
+            loop(parentBlockHash, blockHash :: acc, maxDistance - 1)
+        }
+      }
+    }
+
+    (contains(ancestorBlockHash), contains(descendantBlockHash))
+      .mapN((_, _))
+      .flatMap {
+        case (true, true) => loop(descendantBlockHash, Nil, maxDistance)
+        case _            => KVStoreRead[N].pure(Nil)
+      }
+  }
+
   /** Collect all descendants of a block,
     * including the block itself.
     *
@@ -203,5 +245,27 @@ class BlockStorage[N, A <: Agreement: Block](
           _           <- deleteables.filterNot(isMainChain).traverse(deleteUnsafe(_))
           _           <- path.init.traverse(deleteUnsafe(_))
         } yield deleteables
+    }
+
+  /** Remove all blocks in a tree, given by a `blockHash` that's in the tree,
+    * except perhaps a new root (and its descendants) we want to keep.
+    *
+    * This is used to delete an old tree when starting a new that's most likely
+    * not connected to it, and would otherwise result in a forest.
+    */
+  def purgeTree(
+      blockHash: A#Hash,
+      keep: Option[A#Hash]
+  ): KVStore[N, List[A#Hash]] =
+    getPathFromRoot(blockHash).lift.flatMap {
+      case Nil =>
+        KVStore[N].pure(Nil)
+
+      case rootHash :: _ =>
+        for {
+          ds <- getDescendants(rootHash, skip = keep.toSet).lift
+          // Going from the leaves towards the root.
+          _ <- ds.reverse.traverse(deleteUnsafe(_))
+        } yield ds
     }
 }

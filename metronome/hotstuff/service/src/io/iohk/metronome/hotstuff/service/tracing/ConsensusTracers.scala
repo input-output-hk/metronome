@@ -22,7 +22,9 @@ case class ConsensusTracers[F[_], A <: Agreement](
     fromFuture: Tracer[F, Event.MessageReceived[A]],
     stashed: Tracer[F, ProtocolError.TooEarly[A]],
     rejected: Tracer[F, ProtocolError[A]],
-    error: Tracer[F, Throwable]
+    executionSkipped: Tracer[F, A#Hash],
+    blockExecuted: Tracer[F, A#Hash],
+    error: Tracer[F, (String, Throwable)]
 )
 
 object ConsensusTracers {
@@ -43,6 +45,8 @@ object ConsensusTracers {
       fromFuture = tracer.contramap[Event.MessageReceived[A]](FromFuture(_)),
       stashed = tracer.contramap[ProtocolError.TooEarly[A]](Stashed(_)),
       rejected = tracer.contramap[ProtocolError[A]](Rejected(_)),
-      error = tracer.contramap[Throwable](Error(_))
+      executionSkipped = tracer.contramap[A#Hash](ExecutionSkipped(_)),
+      blockExecuted = tracer.contramap[A#Hash](BlockExecuted(_)),
+      error = tracer.contramap[(String, Throwable)]((Error.apply _).tupled)
     )
 }

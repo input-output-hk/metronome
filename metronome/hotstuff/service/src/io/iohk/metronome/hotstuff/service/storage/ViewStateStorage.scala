@@ -44,10 +44,23 @@ class ViewStateStorage[N, A <: Agreement] private (
   def setLastExecutedBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
     put(Key.LastExecutedBlockHash, blockHash)
 
+  /** Set `LastExecutedBlockHash` to `blockHash` if it's still what it was before. */
+  def compareAndSetLastExecutedBlockHash(
+      blockHash: A#Hash,
+      lastExecutedBlockHash: A#Hash
+  ): KVStore[N, Boolean] =
+    read(Key.LastExecutedBlockHash).lift.flatMap { current =>
+      if (current == lastExecutedBlockHash) {
+        setLastExecutedBlockHash(blockHash).as(true)
+      } else {
+        KVStore[N].pure(false)
+      }
+    }
+
   def setRootBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
     put(Key.RootBlockHash, blockHash)
 
-  def getBundle: KVStoreRead[N, ViewStateStorage.Bundle[A]] =
+  val getBundle: KVStoreRead[N, ViewStateStorage.Bundle[A]] =
     (
       read(Key.ViewNumber),
       read(Key.PrepareQC),
@@ -57,6 +70,8 @@ class ViewStateStorage[N, A <: Agreement] private (
       read(Key.RootBlockHash)
     ).mapN(ViewStateStorage.Bundle.apply[A] _)
 
+  val getLastExecutedBlockHash: KVStoreRead[N, A#Hash] =
+    read(Key.LastExecutedBlockHash)
 }
 
 object ViewStateStorage {
