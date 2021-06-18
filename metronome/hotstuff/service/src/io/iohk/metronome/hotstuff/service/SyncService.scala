@@ -262,16 +262,18 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
           blockStorage.get(Block[A].parentBlockHash(block))
         }
       }
-      // Reject the block straight away if it doesn't pass basic validation.
-      isFormallyValid =
-        Block[A].height(block) == Block[A].height(parent) + 1 &&
-          Block[A].isValid(block)
-      // Pass it to the application for content validation, only if it looks valid so far.
-      // This may not produce a result, if the application is not in a position to decide.
-      isValid <-
-        if (isFormallyValid) OptionT(appService.validateBlock(block))
-        else OptionT.pure[F](false)
-    } yield isValid
+      // Syntactic validation.
+      parentOk = Block[A].isParentOf(parent, block)
+      blockOk  = Block[A].isValid(block)
+
+      ok <-
+        // Reject the block straight away if it /doesn't pass basic validation.
+        if (!(parentOk && blockOk)) OptionT.pure[F](false)
+        // Pass it to the application for content validation if it looks valid so far.
+        // This may not produce a result if the application is not in a position to decide.
+        else OptionT(appService.validateBlock(block))
+
+    } yield ok
 
   /** Shut down the any outstanding block downloads, sync the view,
     * then create another block synchronizer instance to resume with.

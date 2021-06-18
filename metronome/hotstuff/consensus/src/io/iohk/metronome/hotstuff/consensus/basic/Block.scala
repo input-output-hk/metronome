@@ -14,8 +14,16 @@ trait Block[A <: Agreement] {
   def parentBlockHash(b: A#Block): A#Hash
   def height(b: A#Block): Long
 
-  /** Perform simple content validation. */
+  /** Perform simple content validation, e.g.
+    * whether the block hash matches the header
+    * and the header content matches the body.
+    */
   def isValid(b: A#Block): Boolean
+
+  def isParentOf(parent: A#Block, child: A#Block): Boolean = {
+    parentBlockHash(child) == blockHash(parent) &&
+    height(child) == height(parent) + 1
+  }
 }
 
 object Block {
