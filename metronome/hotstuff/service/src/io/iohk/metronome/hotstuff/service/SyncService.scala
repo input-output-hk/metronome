@@ -16,6 +16,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Block,
   Signing
 }
+import io.iohk.metronome.hotstuff.service.execution.BlockExecutor
 import io.iohk.metronome.hotstuff.service.messages.SyncMessage
 import io.iohk.metronome.hotstuff.service.pipes.SyncPipe
 import io.iohk.metronome.hotstuff.service.storage.{
@@ -28,7 +29,7 @@ import io.iohk.metronome.hotstuff.service.sync.{
 }
 import io.iohk.metronome.hotstuff.service.tracing.SyncTracers
 import io.iohk.metronome.networking.{ConnectionHandler, Network}
-import io.iohk.metronome.storage.{KVStoreRunner, KVStore}
+import io.iohk.metronome.storage.KVStoreRunner
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
@@ -47,6 +48,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     publicKey: A#PKey,
     network: Network[F, A#PKey, SyncMessage[A]],
     appService: ApplicationService[F, A],
+    blockExecutor: BlockExecutor[F, N, A],
     blockStorage: BlockStorage[N, A],
     viewStateStorage: ViewStateStorage[N, A],
     syncPipe: SyncPipe[F, A]#Right,
@@ -298,48 +300,13 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
         )
         .rethrow
 
-      // Sync any application specific state, e.g. a ledger.
-      // Do this before we prune the existing blocks and set the new root.
-      _ <- appService.syncState(federationStatus.sources, block)
-
-      // Prune the block store from earlier blocks that are no longer traversable.
-      _ <- fastForwardStorage(status, block)
+      // Sync any application specific state, e.g. a ledger,
+      // then potentially prune old blocks from the storage.
+      _ <- blockExecutor.syncState(federationStatus.sources, block)
 
       // Tell the ConsensusService about the new Status.
       _ <- syncPipe.send(SyncPipe.StatusResponse(status))
     } yield status.viewNumber
-
-  /** Replace the state we have persisted with what we synced with the federation.
-    *
-    * Prunes old blocks, the Commit Q.C. will be the new root.
-    */
-  private def fastForwardStorage(status: Status[A], block: A#Block): F[Unit] = {
-    val blockHash = Block[A].blockHash(block)
-    assert(blockHash == status.commitQC.blockHash)
-
-    val query: KVStore[N, Unit] =
-      for {
-        viewState <- viewStateStorage.getBundle.lift
-        // Insert the new block.
-        _ <- blockStorage.put(block)
-
-        // Prune old data, but keep the new block.
-        ds <- blockStorage
-          .getDescendants(
-            viewState.rootBlockHash,
-            skip = Set(blockHash)
-          )
-          .lift
-        _ <- ds.traverse(blockStorage.deleteUnsafe(_))
-
-        // Considering the committed block as executed, we have its state already.
-        _ <- viewStateStorage.setLastExecutedBlockHash(blockHash)
-        _ <- viewStateStorage.setRootBlockHash(blockHash)
-        // The rest of the fields will be set by the ConsensusService.
-      } yield ()
-
-    storeRunner.runReadWrite(query)
-  }
 }
 
 object SyncService {
@@ -357,6 +324,7 @@ object SyncService {
       federation: Federation[A#PKey],
       network: Network[F, A#PKey, SyncMessage[A]],
       appService: ApplicationService[F, A],
+      blockExecutor: BlockExecutor[F, N, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Right,
@@ -376,6 +344,7 @@ object SyncService {
         publicKey,
         network,
         appService,
+        blockExecutor,
         blockStorage,
         viewStateStorage,
         syncPipe,

@@ -535,6 +535,7 @@ object ConsensusService {
       publicKey: A#PKey,
       network: Network[F, A#PKey, Message[A]],
       appService: ApplicationService[F, A],
+      blockExecutor: BlockExecutor[F, N, A],
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
@@ -546,12 +547,6 @@ object ConsensusService {
   ): Resource[F, ConsensusService[F, N, A]] =
     for {
       fiberSet <- FiberSet[F]
-
-      blockExecutor <- BlockExecutor[F, N, A](
-        appService,
-        blockStorage,
-        viewStateStorage
-      )
 
       service <- Resource.liftF(
         build[F, N, A](

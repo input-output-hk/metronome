@@ -31,5 +31,7 @@ trait ApplicationService[F[_], A <: Agreement] {
   // TODO (PM-3135): Tell the application to sync any state of the block, i.e. the Ledger.
   // The `sources` are peers who most probably have this state.
   // The full `block` is given because it may not be persisted yet.
-  def syncState(sources: NonEmptyVector[A#PKey], block: A#Block): F[Unit]
+  // Return `true` if the block storage can be pruned after this operation from earlier blocks,
+  // which may not be the case if the application syncs by downloading all the blocks.
+  def syncState(sources: NonEmptyVector[A#PKey], block: A#Block): F[Boolean]
 }

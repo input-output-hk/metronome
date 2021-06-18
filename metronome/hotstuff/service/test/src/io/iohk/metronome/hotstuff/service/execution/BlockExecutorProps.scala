@@ -81,7 +81,7 @@ object BlockExecutorProps extends Properties("BlockExecutor") {
         def syncState(
             sources: NonEmptyVector[Int],
             block: TestBlock
-        ): Task[Unit] = ???
+        ): Task[Boolean] = ???
 
         def executeBlock(
             block: TestBlock,
