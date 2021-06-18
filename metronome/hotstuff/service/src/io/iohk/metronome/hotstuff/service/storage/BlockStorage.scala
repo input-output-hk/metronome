@@ -246,4 +246,26 @@ class BlockStorage[N, A <: Agreement: Block](
           _           <- path.init.traverse(deleteUnsafe(_))
         } yield deleteables
     }
+
+  /** Remove all blocks in a tree, given by a `blockHash` that's in the tree,
+    * except perhaps a new root (and its descendants) we want to keep.
+    *
+    * This is used to delete an old tree when starting a new that's most likely
+    * not connected to it, and would otherwise result in a forest.
+    */
+  def purgeTree(
+      blockHash: A#Hash,
+      keep: Option[A#Hash]
+  ): KVStore[N, List[A#Hash]] =
+    getPathFromRoot(blockHash).lift.flatMap {
+      case Nil =>
+        KVStore[N].pure(Nil)
+
+      case rootHash :: _ =>
+        for {
+          ds <- getDescendants(rootHash, skip = keep.toSet).lift
+          // Going from the leaves towards the root.
+          _ <- ds.reverse.traverse(deleteUnsafe(_))
+        } yield ds
+    }
 }

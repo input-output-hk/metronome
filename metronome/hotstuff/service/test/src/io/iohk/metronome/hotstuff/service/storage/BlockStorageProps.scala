@@ -108,6 +108,12 @@ object BlockStorageProps extends Properties("BlockStorage") {
         .compile(TestBlockStorage.pruneNonDescendants(blockHash))
         .run(store)
         .value
+
+    def purgeTree(blockHash: Hash, keep: Option[Hash]) =
+      TestKVStore
+        .compile(TestBlockStorage.purgeTree(blockHash, keep))
+        .run(store)
+        .value
   }
 
   def genBlockId: Gen[Hash] =
@@ -361,5 +367,41 @@ object BlockStorageProps extends Properties("BlockStorage") {
   property("pruneNonDescendants non-existing") = forAll(genNonExisting) {
     case (data, nonExisting) =>
       data.store.pruneNonDescendants(nonExisting.id)._2.isEmpty
+  }
+
+  property("purgeTree keep block") = forAll(
+    for {
+      (data, keepBlock, subTree) <- genSubTree
+      refBlock                   <- Gen.oneOf(data.tree)
+    } yield (data, refBlock, keepBlock, subTree)
+  ) { case (data, refBlock, keepBlock, subTree) =>
+    val (s, ps) = data.store.purgeTree(
+      blockHash = refBlock.id,
+      keep = Some(keepBlock.id)
+    )
+    val pss         = ps.toSet
+    val descendants = subTree.map(_.id).toSet
+    val nonDescendants =
+      data.tree.map(_.id).filterNot(descendants).filterNot(_ == keepBlock.id)
+    all(
+      "size" |: ps.size == nonDescendants.size,
+      "pruned" |: nonDescendants.forall(pss),
+      "deleted" |: nonDescendants.forall(!s.containsBlock(_)),
+      "kept-block" |: s.containsBlock(keepBlock.id),
+      "kept-descendants" |: descendants.forall(s.containsBlock(_))
+    )
+  }
+
+  property("purgeTree keep nothing") = forAll(genSubTree) {
+    case (data, block, _) =>
+      val (s, ps) = data.store.purgeTree(
+        blockHash = block.id,
+        keep = None
+      )
+      val pss = ps.toSet
+      all(
+        "pruned all" |: pss.size == data.tree.size,
+        "kept nothing" |: s.isEmpty
+      )
   }
 }

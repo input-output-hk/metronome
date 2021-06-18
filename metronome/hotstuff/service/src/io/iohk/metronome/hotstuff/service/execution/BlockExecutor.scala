@@ -255,13 +255,12 @@ class BlockExecutor[F[_]: Sync, N, A <: Agreement: Block](
     val prune = for {
       viewState <- viewStateStorage.getBundle.lift
       // Prune old data, but keep the new block.
-      ds <- blockStorage
-        .getDescendants(
-          viewState.rootBlockHash,
-          skip = Set(blockHash)
-        )
-        .lift
-      _ <- ds.traverse(blockStorage.deleteUnsafe(_))
+      // Traversing from the old root, because the
+      // new block is probably not connected to it.
+      _ <- blockStorage.purgeTree(
+        viewState.rootBlockHash,
+        keep = blockHash.some
+      )
       _ <- viewStateStorage.setRootBlockHash(blockHash)
     } yield ()
 
