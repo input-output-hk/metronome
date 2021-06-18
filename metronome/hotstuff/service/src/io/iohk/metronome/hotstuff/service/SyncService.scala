@@ -2,7 +2,6 @@ package io.iohk.metronome.hotstuff.service
 
 import cats.implicits._
 import cats.Parallel
-import cats.data.OptionT
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import io.iohk.metronome.core.fibers.FiberMap
 import io.iohk.metronome.core.messages.{
@@ -243,7 +242,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
       blockSync.fiberMap
         .submit(sender) {
           blockSync.synchronizer.sync(sender, prepare.highQC) >>
-            validateBlock(prepare.block).value >>= {
+            validateBlock(prepare.block) >>= {
             case Some(isValid) =>
               syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
             case None =>
@@ -255,25 +254,26 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
   }
 
   /** Validate the prepared block after the parent has been downloaded. */
-  private def validateBlock(block: A#Block): OptionT[F, Boolean] =
-    for {
-      parent <- OptionT {
-        storeRunner.runReadOnly {
-          blockStorage.get(Block[A].parentBlockHash(block))
+  private def validateBlock(block: A#Block): F[Option[Boolean]] = {
+    // Short circuiting validation.
+    def runChecks(checks: F[Option[Boolean]]*) =
+      checks.reduce[F[Option[Boolean]]] { case (a, b) =>
+        a.flatMap {
+          case Some(true) => b
+          case other      => other.pure[F]
         }
       }
-      // Syntactic validation.
-      parentOk = Block[A].isParentOf(parent, block)
-      blockOk  = Block[A].isValid(block)
 
-      ok <-
-        // Reject the block straight away if it /doesn't pass basic validation.
-        if (!(parentOk && blockOk)) OptionT.pure[F](false)
-        // Pass it to the application for content validation if it looks valid so far.
-        // This may not produce a result if the application is not in a position to decide.
-        else OptionT(appService.validateBlock(block))
-
-    } yield ok
+    runChecks(
+      storeRunner.runReadOnly {
+        blockStorage
+          .get(Block[A].parentBlockHash(block))
+          .map(_.map(Block[A].isParentOf(_, block)))
+      },
+      Block[A].isValid(block).some.pure[F],
+      appService.validateBlock(block)
+    )
+  }
 
   /** Shut down the any outstanding block downloads, sync the view,
     * then create another block synchronizer instance to resume with.
