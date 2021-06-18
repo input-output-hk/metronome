@@ -242,7 +242,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
       blockSync.fiberMap
         .submit(sender) {
           blockSync.synchronizer.sync(sender, prepare.highQC) >>
-            appService.validateBlock(prepare.block) >>= {
+            validateBlock(prepare.block) >>= {
             case Some(isValid) =>
               syncPipe.send(SyncPipe.PrepareResponse(request, isValid))
             case None =>
@@ -251,6 +251,28 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
           }
         }
         .void
+  }
+
+  /** Validate the prepared block after the parent has been downloaded. */
+  private def validateBlock(block: A#Block): F[Option[Boolean]] = {
+    // Short circuiting validation.
+    def runChecks(checks: F[Option[Boolean]]*) =
+      checks.reduce[F[Option[Boolean]]] { case (a, b) =>
+        a.flatMap {
+          case Some(true) => b
+          case other      => other.pure[F]
+        }
+      }
+
+    runChecks(
+      storeRunner.runReadOnly {
+        blockStorage
+          .get(Block[A].parentBlockHash(block))
+          .map(_.map(Block[A].isParentOf(_, block)))
+      },
+      Block[A].isValid(block).some.pure[F],
+      appService.validateBlock(block)
+    )
   }
 
   /** Shut down the any outstanding block downloads, sync the view,

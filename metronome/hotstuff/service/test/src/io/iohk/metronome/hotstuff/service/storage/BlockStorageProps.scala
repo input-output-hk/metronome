@@ -12,7 +12,7 @@ import scala.util.Random
 
 object BlockStorageProps extends Properties("BlockStorage") {
 
-  case class TestBlock(id: String, parentId: String) {
+  case class TestBlock(id: String, parentId: String, height: Long) {
     def isGenesis = parentId.isEmpty
   }
 
@@ -27,6 +27,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
     implicit val block = new BlockOps[TestAgreement] {
       override def blockHash(b: TestBlock)       = b.id
       override def parentBlockHash(b: TestBlock) = b.parentId
+      override def height(b: Block): Long        = b.height
       override def isValid(b: Block)             = true
     }
   }
@@ -39,14 +40,16 @@ object BlockStorageProps extends Properties("BlockStorage") {
   type Namespace = String
   object Namespace {
     val Blocks          = "blocks"
-    val BlockToParent   = "block-to-parent"
+    val BlockMetas      = "block-metas"
     val BlockToChildren = "block-to-children"
   }
 
   object TestBlockStorage
       extends BlockStorage[Namespace, TestAgreement](
         new KVCollection[Namespace, Hash, TestBlock](Namespace.Blocks),
-        new KVCollection[Namespace, Hash, Hash](Namespace.BlockToParent),
+        new KVCollection[Namespace, Hash, BlockStorage.BlockMeta[
+          TestAgreement
+        ]](Namespace.BlockMetas),
         new KVCollection[Namespace, Hash, Set[Hash]](Namespace.BlockToChildren)
       )
 
@@ -84,16 +87,14 @@ object BlockStorageProps extends Properties("BlockStorage") {
 
     def getPathFromAncestor(
         ancestorBlockHash: Hash,
-        descendantBlockHash: Hash,
-        maxDistance: Int = Int.MaxValue
+        descendantBlockHash: Hash
     ) =
       TestKVStore
         .compile(
           TestBlockStorage
             .getPathFromAncestor(
               ancestorBlockHash,
-              descendantBlockHash,
-              maxDistance
+              descendantBlockHash
             )
         )
         .run(store)
@@ -120,16 +121,24 @@ object BlockStorageProps extends Properties("BlockStorage") {
     Gen.uuid.map(_.toString)
 
   /** Generate a block with a given parent, using the next available ID. */
-  def genBlock(parentId: Hash): Gen[TestBlock] =
+  def genBlock(parent: TestBlock): Gen[TestBlock] =
     genBlockId.map { uuid =>
-      TestBlock(uuid, parentId)
+      TestBlock(uuid, parentId = parent.id, height = parent.height + 1)
     }
 
   def genBlock: Gen[TestBlock] =
-    genBlockId.flatMap(genBlock)
+    for {
+      id       <- genBlockId
+      parentId <- genBlockId
+      height   <- Gen.posNum[Long]
+    } yield TestBlock(id, parentId, height)
+
+  // A block we can pass as parent to tree generators so the first block is a
+  // genesis block with height = 0 and parentId = "".
+  val preGenesisParent = TestBlock(id = "", parentId = "", height = -1)
 
   /** Generate a (possibly empty) block tree. */
-  def genBlockTree(parentId: Hash): Gen[List[TestBlock]] =
+  def genBlockTree(parent: TestBlock): Gen[List[TestBlock]] =
     for {
       childCount <- Gen.frequency(
         3 -> 0,
@@ -139,23 +148,23 @@ object BlockStorageProps extends Properties("BlockStorage") {
       children <- Gen.listOfN(
         childCount, {
           for {
-            block <- genBlock(parentId)
-            tree  <- genBlockTree(block.id)
+            block <- genBlock(parent)
+            tree  <- genBlockTree(block)
           } yield block +: tree
         }
       )
     } yield children.flatten
 
   def genBlockTree: Gen[List[TestBlock]] =
-    genBlockTree(parentId = "")
+    genBlockTree(preGenesisParent)
 
-  def genNonEmptyBlockTree(parentId: Hash): Gen[List[TestBlock]] = for {
-    genesis <- genBlock(parentId = parentId)
-    tree    <- genBlockTree(genesis.id)
-  } yield genesis +: tree
+  def genNonEmptyBlockTree(parent: TestBlock): Gen[List[TestBlock]] = for {
+    child <- genBlock(parent)
+    tree  <- genBlockTree(child)
+  } yield child +: tree
 
   def genNonEmptyBlockTree: Gen[List[TestBlock]] =
-    genNonEmptyBlockTree(parentId = "")
+    genNonEmptyBlockTree(preGenesisParent)
 
   case class TestData(
       tree: List[TestBlock],
@@ -183,14 +192,16 @@ object BlockStorageProps extends Properties("BlockStorage") {
   def genSubTree = for {
     tree <- genNonEmptyBlockTree
     leaf = tree.last
-    subTree <- genBlockTree(parentId = leaf.id)
+    subTree <- genBlockTree(parent = leaf)
     data = TestData(tree ++ subTree)
   } yield (data, leaf, subTree)
 
   property("put") = forAll(genNonExisting) { case (data, block) =>
     val s = data.store.putBlock(block)
     s(Namespace.Blocks)(block.id) == block
-    s(Namespace.BlockToParent)(block.id) == block.parentId
+    s(Namespace.BlockMetas)(block.id)
+      .asInstanceOf[BlockStorage.BlockMeta[TestAgreement]]
+      .parentBlockHash == block.parentId
   }
 
   property("put unordered") = forAll {
@@ -264,14 +275,14 @@ object BlockStorageProps extends Properties("BlockStorage") {
     for {
       prefix <- genNonEmptyBlockTree
       ancestor = prefix.last
-      postfix    <- genNonEmptyBlockTree(ancestor.id)
+      postfix    <- genNonEmptyBlockTree(ancestor)
       descendant <- Gen.oneOf(postfix)
       data = TestData(prefix ++ postfix)
       nonExisting <- genBlock
     } yield (data, ancestor, descendant, nonExisting)
   ) { case (data, ancestor, descendant, nonExisting) =>
-    def getPath(a: TestBlock, d: TestBlock, maxDistance: Int = Int.MaxValue) =
-      data.store.getPathFromAncestor(a.id, d.id, maxDistance)
+    def getPath(a: TestBlock, d: TestBlock) =
+      data.store.getPathFromAncestor(a.id, d.id)
 
     def pathExists(a: TestBlock, d: TestBlock) = {
       val path = getPath(a, d)
@@ -293,17 +304,7 @@ object BlockStorageProps extends Properties("BlockStorage") {
       "fromAtoA" |: pathExists(ancestor, ancestor),
       "fromDtoD" |: pathExists(descendant, descendant),
       "fromAtoN" |: pathNotExists(ancestor, nonExisting),
-      "fromNtoD" |: pathNotExists(nonExisting, descendant),
-      "maxDistance" |: {
-        val (a, d, n) = (ancestor, descendant, nonExisting)
-        val dist      = getPath(ancestor, descendant).length - 1
-        all(
-          "fromAtoD maxDistance=dist" |: getPath(a, d, dist).nonEmpty,
-          "fromAtoD maxDistance=dist-1" |: getPath(a, d, dist - 1).isEmpty,
-          "fromDtoD maxDistance=0" |: getPath(d, d, 0).nonEmpty,
-          "fromNtoN maxDistance=0" |: getPath(n, n, 0).isEmpty
-        )
-      }
+      "fromNtoD" |: pathNotExists(nonExisting, descendant)
     )
   }
 

@@ -41,6 +41,7 @@ object Block {
     val body = Body(transactions)
     val header = Header(
       parentHash = parent.hash,
+      height = parent.header.height + 1,
       postStateHash = postStateHash,
       contentMerkleRoot = Body.contentMerkleRoot(body)
     )
@@ -56,6 +57,7 @@ object Block {
     val body = Body(Vector.empty)
     val header = Header(
       parentHash = Block.Header.Hash(ByteVector.empty),
+      height = 0,
       postStateHash = Ledger.empty.hash,
       contentMerkleRoot = MerkleTree.empty.hash
     )
@@ -64,6 +66,7 @@ object Block {
 
   case class Header(
       parentHash: Header.Hash,
+      height: Long,
       // Hash of the Ledger after executing the block.
       postStateHash: Ledger.Hash,
       // Merkle root of the transactions in the body.
