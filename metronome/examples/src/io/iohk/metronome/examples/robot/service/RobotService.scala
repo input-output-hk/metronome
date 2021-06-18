@@ -2,7 +2,7 @@ package io.iohk.metronome.examples.robot.service
 
 import cats.implicits._
 import cats.effect.{Sync, Timer, Resource, Concurrent}
-import cats.data.{NonEmptyList, NonEmptyVector}
+import cats.data.{NonEmptyList, NonEmptyVector, OptionT}
 import io.iohk.metronome.core.messages.RPCTracker
 import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.crypto.hash.Hash
@@ -39,25 +39,34 @@ class RobotService[F[_]: Sync: Timer, N](
   override def createBlock(
       highQC: QuorumCertificate[RobotAgreement]
   ): F[Option[RobotBlock]] = {
-    projectState(highQC.blockHash).flatMap {
-      case None =>
-        none.pure[F]
+    val parentState = for {
+      parent <- OptionT {
+        storeRunner.runReadOnly {
+          blockStorage.get(highQC.blockHash)
+        }
+      }
+      preState <- OptionT(projectState(highQC.blockHash))
+    } yield (parent, preState)
 
-      case Some(preState) =>
+    parentState
+      .semiflatMap[RobotBlock] { case (parent, preState) =>
         // Make a valid move; we're not validating our own blocks.
         // Insert some artifical delay otherwise it will churn out
         // blocks as fast as it can.
-        Timer[F].sleep(simulatedDecisionTime) >>
-          advanceState(preState).map { case (command, postState) =>
-            // TODO: Robot app tracing.
-            System.out.println(s"<<< PROPOSING COMMAND: $command >>>")
-            RobotBlock(
-              parentHash = highQC.blockHash,
-              postStateHash = postState.hash,
-              command = command
-            ).some
-          }
-    }
+        for {
+          _                    <- Timer[F].sleep(simulatedDecisionTime)
+          (command, postState) <- advanceState(preState)
+          // TODO: Robot app tracing.
+          _ = System.out.println(s"<<< PROPOSING COMMAND: $command >>>")
+          block = RobotBlock(
+            parentHash = parent.hash,
+            height = parent.height + 1,
+            postStateHash = postState.hash,
+            command = command
+          )
+        } yield block
+      }
+      .value
   }
 
   /** Project state from the last executed block hash to a certain descendant.
@@ -139,7 +148,7 @@ class RobotService[F[_]: Sync: Timer, N](
       block: RobotBlock,
       commitQC: QuorumCertificate[RobotAgreement],
       commitPath: NonEmptyList[RobotAgreement.Hash]
-  ): F[Unit] =
+  ): F[Boolean] =
     projectState(block.parentHash).flatMap {
       case None =>
         Sync[F].raiseError(new IllegalStateException("Can't find pre-state."))
@@ -153,12 +162,13 @@ class RobotService[F[_]: Sync: Timer, N](
             // TODO: Display robot on the console.
             Sync[F].delay(System.out.println(s"\n<<< ROBOT: ${state} >>>\n"))
           }
+          .as(true)
     }
 
   override def syncState(
       sources: NonEmptyVector[ECPublicKey],
       block: RobotBlock
-  ): F[Unit] = {
+  ): F[Boolean] = {
     def loop(sources: List[ECPublicKey]): F[Unit] = {
       sources match {
         case source :: sources =>
@@ -186,9 +196,9 @@ class RobotService[F[_]: Sync: Timer, N](
       }
       .flatMap {
         case None =>
-          loop(sources.toList.filterNot(_ == publicKey))
+          loop(sources.toList.filterNot(_ == publicKey)).as(true)
         case Some(_) =>
-          ().pure[F]
+          false.pure[F]
       }
   }
 

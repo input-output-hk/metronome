@@ -15,7 +15,7 @@ object RobotNamespaces {
   def all: Seq[RocksDBStore.Namespace] = registry
 
   val Block           = register("block")
-  val BlockToParent   = register("block-to-parent")
+  val BlockMeta       = register("block-meta")
   val BlockToChildren = register("block-to-children")
   val ViewState       = register("view-state")
   val State           = register("state")

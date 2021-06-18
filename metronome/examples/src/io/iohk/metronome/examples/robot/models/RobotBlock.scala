@@ -5,6 +5,7 @@ import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 
 case class RobotBlock(
     parentHash: Hash,
+    height: Long,
     postStateHash: Hash,
     command: Robot.Command
 ) {

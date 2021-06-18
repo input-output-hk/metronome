@@ -56,6 +56,7 @@ import scodec.Codec
 import scodec.bits.ByteVector
 import java.nio.file.Files
 import monix.execution.schedulers.SchedulerService
+import io.iohk.metronome.storage.KVTree
 
 /** Composition root for dependency injection.
   *
@@ -84,6 +85,7 @@ trait RobotComposition {
 
     val genesis = RobotBlock(
       parentHash = Hash(ByteVector.empty),
+      height = 0,
       postStateHash = genesisState.hash,
       command = Robot.Command.Rest
     )
@@ -249,8 +251,9 @@ trait RobotComposition {
 
     val blockStorage = new BlockStorage[NS, RobotAgreement](
       blockColl = new KVCollection[NS, Hash, RobotBlock](RobotNamespaces.Block),
-      childToParentColl =
-        new KVCollection[NS, Hash, Hash](RobotNamespaces.BlockToParent),
+      blockMetaColl = new KVCollection[NS, Hash, KVTree.NodeMeta[Hash]](
+        RobotNamespaces.BlockMeta
+      ),
       parentToChildrenColl =
         new KVCollection[NS, Hash, Set[Hash]](RobotNamespaces.BlockToChildren)
     )

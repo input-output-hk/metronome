@@ -13,6 +13,7 @@ object RobotAgreement extends Secp256k1Agreement {
     new consensus.basic.Block[RobotAgreement] {
       override def blockHash(b: RobotBlock)       = b.hash
       override def parentBlockHash(b: RobotBlock) = b.parentHash
+      override def height(b: RobotBlock): Long    = b.height
       override def isValid(b: RobotBlock)         = true
     }
 }
