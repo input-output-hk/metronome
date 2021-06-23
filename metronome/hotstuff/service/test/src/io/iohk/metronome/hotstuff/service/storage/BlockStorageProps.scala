@@ -1,7 +1,7 @@
 package io.iohk.metronome.hotstuff.service.storage
 
 import cats.implicits._
-import io.iohk.metronome.storage.{KVCollection, KVStoreState}
+import io.iohk.metronome.storage.{KVCollection, KVStoreState, KVTree}
 import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, Block => BlockOps}
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
@@ -47,9 +47,9 @@ object BlockStorageProps extends Properties("BlockStorage") {
   object TestBlockStorage
       extends BlockStorage[Namespace, TestAgreement](
         new KVCollection[Namespace, Hash, TestBlock](Namespace.Blocks),
-        new KVCollection[Namespace, Hash, BlockStorage.BlockMeta[
-          TestAgreement
-        ]](Namespace.BlockMetas),
+        new KVCollection[Namespace, Hash, KVTree.NodeMeta[Hash]](
+          Namespace.BlockMetas
+        ),
         new KVCollection[Namespace, Hash, Set[Hash]](Namespace.BlockToChildren)
       )
 
@@ -200,8 +200,8 @@ object BlockStorageProps extends Properties("BlockStorage") {
     val s = data.store.putBlock(block)
     s(Namespace.Blocks)(block.id) == block
     s(Namespace.BlockMetas)(block.id)
-      .asInstanceOf[BlockStorage.BlockMeta[TestAgreement]]
-      .parentBlockHash == block.parentId
+      .asInstanceOf[KVTree.NodeMeta[Hash]]
+      .parentKey == block.parentId
   }
 
   property("put unordered") = forAll {
