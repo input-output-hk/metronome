@@ -23,11 +23,11 @@ object RobotCodecs
   implicit lazy val commandCodec: Codec[Robot.Command] = {
     import Robot.Command._
     mappedEnum(
-      uint4,
-      Rest        -> 1,
-      MoveForward -> 2,
-      TurnLeft    -> 3,
-      TurnRight   -> 4
+      uint2,
+      Rest        -> 0,
+      MoveForward -> 1,
+      TurnLeft    -> 2,
+      TurnRight   -> 3
     )
   }
   implicit lazy val robotPositionCodec: Codec[Robot.Position] =
@@ -35,7 +35,7 @@ object RobotCodecs
 
   implicit lazy val robotOrientationCodec: Codec[Robot.Orientation] = {
     import Robot.Orientation._
-    mappedEnum(uint4, North -> 1, East -> 2, South -> 3, West -> 4)
+    mappedEnum(uint2, North -> 0, East -> 1, South -> 2, West -> 3)
   }
 
   implicit lazy val robotStateCodec: Codec[Robot.State] =
@@ -53,7 +53,7 @@ object RobotCodecs
 
   override implicit lazy val applicationMessageCodec: Codec[RobotMessage] =
     discriminated[RobotMessage]
-      .by(uint4)
+      .by(uint2)
       .typecase(0, getStateRequestCodec)
       .typecase(1, getStateResponseCodec)
 }
