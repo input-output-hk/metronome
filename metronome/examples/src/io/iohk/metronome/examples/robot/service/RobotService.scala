@@ -9,6 +9,7 @@ import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot}
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
+import io.iohk.metronome.examples.robot.service.tracing.RobotTracers
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 import io.iohk.metronome.hotstuff.service.ApplicationService
 import io.iohk.metronome.hotstuff.service.storage.{
@@ -32,7 +33,7 @@ class RobotService[F[_]: Sync: Timer, N](
     stateStorage: KVRingBuffer[N, Hash, Robot.State],
     rpcTracker: RPCTracker[F, RobotMessage],
     simulatedDecisionTime: FiniteDuration
-)(implicit storeRunner: KVStoreRunner[F, N])
+)(implicit storeRunner: KVStoreRunner[F, N], tracers: RobotTracers[F])
     extends ApplicationService[F, RobotAgreement] {
 
   /** Make a random valid move on top of the last block. */
@@ -56,14 +57,13 @@ class RobotService[F[_]: Sync: Timer, N](
         for {
           _                    <- Timer[F].sleep(simulatedDecisionTime)
           (command, postState) <- advanceState(preState)
-          // TODO: Robot app tracing.
-          _ = System.out.println(s"<<< PROPOSING COMMAND: $command >>>")
           block = RobotBlock(
             parentHash = parent.hash,
             height = parent.height + 1,
             postStateHash = postState.hash,
             command = command
           )
+          _ <- tracers.proposing(block)
         } yield block
       }
       .value
@@ -159,8 +159,7 @@ class RobotService[F[_]: Sync: Timer, N](
             stateStorage.put(postState.hash, postState).as(postState)
           }
           .flatMap { state =>
-            // TODO: Display robot on the console.
-            Sync[F].delay(System.out.println(s"\n<<< ROBOT: ${state} >>>\n"))
+            tracers.newState(state)
           }
           .as(true)
     }
@@ -261,7 +260,8 @@ object RobotService {
       simulatedDecisionTime: FiniteDuration = 1.second,
       timeout: FiniteDuration = 5.seconds
   )(implicit
-      storeRunner: KVStoreRunner[F, N]
+      storeRunner: KVStoreRunner[F, N],
+      tracers: RobotTracers[F]
   ): Resource[F, RobotService[F, N]] =
     for {
       rpcTracker <- Resource.liftF(RPCTracker[F, RobotMessage](timeout))

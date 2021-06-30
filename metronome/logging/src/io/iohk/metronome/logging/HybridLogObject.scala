@@ -33,6 +33,6 @@ object HybridLogObject {
 
   implicit val show: Show[HybridLogObject] = Show.show {
     case HybridLogObject(t, s, l, m, e) =>
-      s"$t ${l.toString.toUpperCase.padTo(5, ' ')} - $s: $m ${e.asJson.noSpaces}"
+      s"$t ${l.toString.toUpperCase.padTo(5, ' ')} - ${s.split('.').last}: $m ${e.asJson.noSpaces}"
   }
 }

@@ -1,20 +1,20 @@
 package io.iohk.metronome.examples.robot.app.tracing
 
 import monix.eval.Task
-import io.iohk.metronome.examples.robot.RobotAgreement
-import io.iohk.metronome.hotstuff.service.tracing.{SyncEvent, SyncTracers}
-import io.iohk.metronome.tracer.Tracer
-import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
-import io.circe.{Encoder, JsonObject, Json}
 import io.iohk.metronome.crypto.hash.Hash
-import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.crypto.ECPublicKey
+import io.iohk.metronome.hotstuff.consensus.ViewNumber
+import io.iohk.metronome.hotstuff.service.tracing.{SyncEvent, SyncTracers}
+import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
+import io.iohk.metronome.examples.robot.RobotAgreement
+import io.circe.{Encoder, JsonObject, Json}
 
 object RobotSyncTracers {
 
   type RobotSyncEvent = SyncEvent[RobotAgreement]
 
-  implicit val syncEventHybridLog: HybridLog[SyncEvent[RobotAgreement]] = {
+  implicit val syncEventHybridLog
+      : HybridLog[Task, SyncEvent[RobotAgreement]] = {
     import SyncEvent._
     import io.circe.syntax._
 
@@ -27,7 +27,7 @@ object RobotSyncTracers {
     implicit val publicKeyEncoder: Encoder[ECPublicKey] =
       Encoder[String].contramap[ECPublicKey](_.bytes.toHex)
 
-    HybridLog.instance[RobotSyncEvent](
+    HybridLog.instance[Task, RobotSyncEvent](
       level = {
         case _: Error              => HybridLogObject.Level.Error
         case _: InvalidStatus[_]   => HybridLogObject.Level.Warn
@@ -84,9 +84,9 @@ object RobotSyncTracers {
     )
   }
 
-  implicit val syncEventTracer: Tracer[Task, RobotSyncEvent] =
+  implicit val syncEventHybridLogTracer =
     LogTracer.hybrid[Task, RobotSyncEvent]
 
-  implicit val syncTracers: SyncTracers[Task, RobotAgreement] =
-    SyncTracers(syncEventTracer)
+  implicit val syncHybridLogTracers =
+    SyncTracers(syncEventHybridLogTracer)
 }

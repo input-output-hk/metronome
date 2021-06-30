@@ -6,7 +6,6 @@ import io.iohk.metronome.hotstuff.service.tracing.{
   ConsensusEvent,
   ConsensusTracers
 }
-import io.iohk.metronome.tracer.Tracer
 import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.circe.{Encoder, JsonObject, Json}
 import io.iohk.metronome.crypto.hash.Hash
@@ -19,7 +18,7 @@ object RobotConsensusTracers {
   type RobotConsensusEvent = ConsensusEvent[RobotAgreement]
 
   implicit val consensusEventHybridLog
-      : HybridLog[ConsensusEvent[RobotAgreement]] = {
+      : HybridLog[Task, ConsensusEvent[RobotAgreement]] = {
     import ConsensusEvent._
     import io.circe.syntax._
 
@@ -35,7 +34,7 @@ object RobotConsensusTracers {
     implicit val publicKeyEncoder: Encoder[ECPublicKey] =
       Encoder[String].contramap[ECPublicKey](_.bytes.toHex)
 
-    HybridLog.instance[RobotConsensusEvent](
+    HybridLog.instance[Task, RobotConsensusEvent](
       level = {
         case _: Error        => HybridLogObject.Level.Error
         case _: Timeout      => HybridLogObject.Level.Warn
@@ -121,9 +120,9 @@ object RobotConsensusTracers {
     )
   }
 
-  implicit val consensusEventTracer: Tracer[Task, RobotConsensusEvent] =
+  implicit val consensusEventHybridLogTracer =
     LogTracer.hybrid[Task, RobotConsensusEvent]
 
-  implicit val consensusTracers: ConsensusTracers[Task, RobotAgreement] =
-    ConsensusTracers(consensusEventTracer)
+  implicit val consensusHybridLogTracers =
+    ConsensusTracers(consensusEventHybridLogTracer)
 }

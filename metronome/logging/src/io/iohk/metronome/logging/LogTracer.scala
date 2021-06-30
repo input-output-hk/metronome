@@ -1,6 +1,5 @@
 package io.iohk.metronome.logging
 
-import cats.syntax.contravariant._
 import cats.effect.Sync
 import io.circe.syntax._
 import io.iohk.metronome.tracer.Tracer
@@ -33,6 +32,6 @@ object LogTracer {
     }
 
   /** Create a logger for a type that can be transformed to a `HybridLogObject`. */
-  def hybrid[F[_]: Sync, T: HybridLog]: Tracer[F, T] =
-    hybrid[F].contramap(implicitly[HybridLog[T]].apply _)
+  def hybrid[F[_]: Sync, T](implicit ev: HybridLog[F, T]): Tracer[F, T] =
+    Tracer.contramapM[F, T, HybridLogObject](ev.apply _, hybrid[F])
 }

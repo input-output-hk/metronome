@@ -2,7 +2,7 @@ package io.iohk.metronome.networking
 
 import cats.data.NonEmptyList
 import cats.effect.concurrent.Ref
-import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer}
+import cats.effect.{Concurrent, ContextShift, Resource, Sync, Timer, Clock}
 import io.circe.{Encoder, Json, JsonObject}
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey}
 import io.iohk.metronome.networking.ConnectionHandler.MessageReceived
@@ -139,7 +139,7 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
     Encoder.instance(key => Json.fromString(key.bytes.toHex))
 
   // Just an example of setting up logging.
-  implicit def tracers[F[_]: Sync, K: io.circe.Encoder, M]
+  implicit def tracers[F[_]: Sync: Clock, K: io.circe.Encoder, M]
       : NetworkTracers[F, K, M] = {
     import io.circe.syntax._
     import NetworkEvent._
@@ -149,8 +149,8 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
         JsonObject("key" -> key.asJson, "address" -> address.toString.asJson)
       }
 
-    implicit val hybridLog: HybridLog[NetworkEvent[K, M]] =
-      HybridLog.instance[NetworkEvent[K, M]](
+    implicit val hybridLog: HybridLog[F, NetworkEvent[K, M]] =
+      HybridLog.instance[F, NetworkEvent[K, M]](
         level = _ => HybridLogObject.Level.Debug,
         message = _.getClass.getSimpleName,
         event = {
