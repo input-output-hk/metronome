@@ -3,9 +3,13 @@ package io.iohk.metronome.checkpointing.interpreter
 import io.iohk.metronome.checkpointing.models.{Block, Transaction, Ledger}
 import io.iohk.metronome.checkpointing.models.CheckpointCertificate
 
-/** `InterpreterRPC` is the interface that the Service can call on the Interpreter
-  * side to send queries and commands. It provides RPC style methods for some of the
-  * `InterpeterMessage` types, namely the ones `with Request with FromService`.
+/** `InterpreterRPC` is the interface that the Checkpointing Service can call to send
+  * queries and commands to the Interpreter. It provides RPC style methods for some of the
+  * `InterpeterMessage` types, namely the ones `with Request with FromService`, expecting
+  * `with Response with FromInterpreter` in return.
+  *
+  * It is also the interface that the Interpreter implements in order to process the said
+  * queries and commands. Thus we have separate client- and server-side implementations.
   *
   * See the `InterpreterMessage` for longer descriptions of the message types behind
   * the RPC facade.

@@ -13,7 +13,7 @@ import scala.util.control.NonFatal
 import io.iohk.metronome.core.messages.RPCPair
 
 /** The `InterpreterService` is to be used on the Interpreter side to
-  * manage the behind-the-scenes messaging with the Service.
+  * manage the behind-the-scenes messaging with the Checkpointing Service.
   */
 object InterpreterService {
 
@@ -27,8 +27,8 @@ object InterpreterService {
   private class ServiceImpl[F[_]: Concurrent: Timer](
       localConnectionManager: InterpreterConnection[F],
       interpreterRpc: InterpreterRPC[F],
-      // Internal timeout to prevent memory leaks. The service must have its own
-      // `RPCTracker` instance with a suitable timeout to handle non-responses.
+      // Internal timeout to prevent memory leaks. The Checkpointing Service must have
+      // its own `RPCTracker` instance with a suitable timeout to handle non-responses.
       timeout: FiniteDuration
   )(implicit tracer: Tracer[F, InterpreterEvent])
       extends ServiceRPC[F] {
@@ -49,7 +49,7 @@ object InterpreterService {
           case m: InterpreterMessage.FromInterpreter =>
             // This would be a gross programming error, but let's keep it going and just log it.
             val err = new IllegalArgumentException(
-              s"Invalid message from the Service: $m"
+              s"Invalid message from the Checkpointing Service: $m"
             )
             tracer(Error(err))
 
@@ -96,7 +96,7 @@ object InterpreterService {
               tracer(InterpreterTimeout(request))
             case Right(None) =>
               // The response types contain non-optional values.
-              // The optional semantics on the Service side are
+              // The optional semantics on the Checkpointing Service side are
               // to be achieved using an `RPCTracker`.
               ().pure[F]
             case Right(Some(result)) =>
@@ -138,10 +138,10 @@ object InterpreterService {
       }
   }
 
-  /** Start processing Service messages and in the background, delegating to the `interpreterRPC`,
-    * which is the domain specific Interpreter implementation in the host system.
+  /** Start processing messages from the Checkpointing Service in the background, delegating to the `interpreterRPC`,
+    * which is the domain specific Interpreter implementation in the host system (i.e. the PoW node).
     *
-    * Returns a `ServiceRPC` instance that the host system can use to send notifications to the Service.
+    * Returns a `ServiceRPC` instance that the host system can use to send notifications to the Checkpointing Service.
     */
   def apply[F[_]: Concurrent: Timer](
       localConnectionManager: InterpreterConnection[F],
