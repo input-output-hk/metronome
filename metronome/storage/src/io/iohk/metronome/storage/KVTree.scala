@@ -290,4 +290,12 @@ object KVTree {
       parentKey: K,
       height: Long
   )
+  object NodeMeta {
+    import scodec.Codec
+
+    implicit def codec[K: Codec]: Codec[NodeMeta[K]] = {
+      import scodec.codecs.implicits._
+      Codec.deriveLabelledGeneric
+    }
+  }
 }

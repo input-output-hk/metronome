@@ -32,6 +32,7 @@ import scala.annotation.tailrec
 import scala.collection.immutable.Queue
 import scala.util.control.NonFatal
 import io.iohk.metronome.hotstuff.service.execution.BlockExecutor
+import scala.concurrent.duration.FiniteDuration
 
 /** An effectful executor wrapping the pure HotStuff ProtocolState.
   *
@@ -54,7 +55,8 @@ class ConsensusService[
     syncPipe: SyncPipe[F, A]#Left,
     eventQueue: ConcurrentQueue[F, Event[A]],
     fiberSet: FiberSet[F],
-    maxEarlyViewNumberDiff: Int
+    maxEarlyViewNumberDiff: Int,
+    timeoutPolicy: ConsensusService.TimeoutPolicy
 )(implicit tracers: ConsensusTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
 
   import ConsensusService.MessageCounter
@@ -98,12 +100,11 @@ class ConsensusService[
           protocolError(ProtocolError.UnsafeExtension[A](sender, message))
             .as(none)
 
-        case Right(valid) if valid.message.viewNumber < state.viewNumber =>
+        case Right(valid) if isFromPast(valid, state.viewNumber) =>
           tracers.fromPast(valid) >>
             counterRef.update(_.incPast).as(none)
 
-        case Right(valid)
-            if valid.message.viewNumber > state.viewNumber + maxEarlyViewNumberDiff =>
+        case Right(valid) if isFromFuture(valid, state.viewNumber) =>
           tracers.fromFuture(valid) >>
             counterRef.update(_.incFuture).as(none)
 
@@ -113,6 +114,21 @@ class ConsensusService[
           counterRef.update(_.incPresent).as(validated(valid).some)
       }
     }
+
+  private def isFromPast(
+      e: Event.MessageReceived[A],
+      viewNumber: ViewNumber
+  ): Boolean =
+    e.message match {
+      case m: Message.NewView[_] => m.viewNumber < viewNumber.prev
+      case m                     => m.viewNumber < viewNumber
+    }
+
+  private def isFromFuture(
+      e: Event.MessageReceived[A],
+      viewNumber: ViewNumber
+  ): Boolean =
+    e.message.viewNumber > viewNumber + maxEarlyViewNumberDiff
 
   /** Synchronize any missing block dependencies, then enqueue the event for final processing. */
   private def syncDependencies(
@@ -225,14 +241,20 @@ class ConsensusService[
       stateRef.get.flatMap { state =>
         val handle: F[Unit] = event match {
           case Event.NextView(viewNumber) if viewNumber < state.viewNumber =>
-            ().pure[F]
+            // Every time we don't time out, we can decrese the timeout a little bit.
+            stateRef.set(
+              state.copy(timeout = timeoutPolicy.decrease(state.timeout))
+            )
 
           case e @ Event.NextView(viewNumber) =>
             for {
               counter <- counterRef.get
               _       <- tracers.timeout(viewNumber -> counter)
               _       <- maybeRequestStatusSync(viewNumber, counter)
-              _       <- handleTransition(state.handleNextView(e))
+              adjusted = state.copy(timeout =
+                timeoutPolicy.increase(state.timeout)
+              )
+              _ <- handleTransition(adjusted.handleNextView(e))
             } yield ()
 
           case e @ Event.MessageReceived(_, _) =>
@@ -244,7 +266,9 @@ class ConsensusService[
             handleTransition(state.handleBlockCreated(e))
         }
 
-        handle >> processEvents
+        handle.handleErrorWith { ex =>
+          tracers.error(s"Error processing event $event", ex)
+        } >> processEvents
       }
     }
   }
@@ -257,7 +281,8 @@ class ConsensusService[
     // Only requesting a state sync if we haven't received any message that looks to be in sync
     // but we have received some from the future. If we have received messages from the past,
     // then by the virtue of timeouts they should catch up with us at some point.
-    val isOutOfSync = counter.present == 0 && counter.future > 0
+    val isOutOfSync = counter.present == 0 && counter.future > 0 ||
+      counter.present == 0 && counter.future == 0 && counter.past > 0
 
     // In the case that there were two groups being in sync within group members, but not with
     // each other, than there should be rounds when none of them are leaders and they shouldn't
@@ -400,8 +425,9 @@ class ConsensusService[
   }
 
   /** Effects can be processed independently of each other in the background. */
-  private def scheduleEffects(effects: Seq[Effect[A]]): F[Unit] =
+  private def scheduleEffects(effects: Seq[Effect[A]]): F[Unit] = {
     effects.toList.traverse(scheduleEffect).void
+  }
 
   /** Start processing an effect in the background. Add the background fiber
     * to the scheduled items so they can be canceled if the service is released.
@@ -418,7 +444,9 @@ class ConsensusService[
     val process = effect match {
       case ScheduleNextView(viewNumber, timeout) =>
         val event = validated(NextView(viewNumber))
-        Timer[F].sleep(timeout) >> enqueueEvent(event)
+
+        Timer[F].sleep(timeout) >>
+          enqueueEvent(event)
 
       case CreateBlock(viewNumber, highQC) =>
         // Ask the application to create a block for us.
@@ -520,6 +548,38 @@ object ConsensusService {
     val empty = MessageCounter(0, 0, 0)
   }
 
+  trait TimeoutPolicy {
+    def increase(timeout: FiniteDuration): FiniteDuration
+    def decrease(timeout: FiniteDuration): FiniteDuration
+  }
+  object TimeoutPolicy {
+    val const = new TimeoutPolicy {
+      override def increase(timeout: FiniteDuration) = timeout
+      override def decrease(timeout: FiniteDuration) = timeout
+    }
+
+    def exponential(
+        factor: Double,
+        minTimeout: FiniteDuration,
+        maxTimeout: FiniteDuration
+    ) = new TimeoutPolicy {
+      import scala.concurrent.duration._
+
+      require(factor > 1.0)
+
+      override def increase(timeout: FiniteDuration) =
+        (timeout * factor).min(maxTimeout).toMillis.millis
+
+      override def decrease(timeout: FiniteDuration) =
+        (timeout / factor).max(minTimeout).toMillis.millis
+    }
+  }
+
+  case class Config(
+      timeoutPolicy: TimeoutPolicy,
+      maxEarlyViewNumberDiff: Int = 1
+  )
+
   /** Create a `ConsensusService` instance and start processing events
     * in the background, shutting processing down when the resource is
     * released.
@@ -540,7 +600,7 @@ object ConsensusService {
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
-      maxEarlyViewNumberDiff: Int = 1
+      config: Config
   )(implicit
       tracers: ConsensusTracers[F, A],
       storeRunner: KVStoreRunner[F, N]
@@ -558,8 +618,8 @@ object ConsensusService {
           viewStateStorage,
           syncPipe,
           initState,
-          maxEarlyViewNumberDiff,
-          fiberSet
+          fiberSet,
+          config
         )
       )
 
@@ -584,8 +644,8 @@ object ConsensusService {
       viewStateStorage: ViewStateStorage[N, A],
       syncPipe: SyncPipe[F, A]#Left,
       initState: ProtocolState[A],
-      maxEarlyViewNumberDiff: Int,
-      fiberSet: FiberSet[F]
+      fiberSet: FiberSet[F],
+      config: Config
   )(implicit
       tracers: ConsensusTracers[F, A],
       storeRunner: KVStoreRunner[F, N]
@@ -610,7 +670,8 @@ object ConsensusService {
         syncPipe,
         eventQueue,
         fiberSet,
-        maxEarlyViewNumberDiff
+        config.maxEarlyViewNumberDiff,
+        config.timeoutPolicy
       )
     } yield service
 }

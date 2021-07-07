@@ -203,6 +203,12 @@ case class ProtocolState[A <: Agreement: Block: Signing](
             } else {
               Left(UnsafeExtension(e.sender, m))
             }
+
+          // Some extra votes from the previous round are not unexpected in the Prepare phase.
+          case v: Vote[_]
+              if v.viewNumber == viewNumber.prev &&
+                federation.leaderOf(v.viewNumber) == publicKey =>
+            Right(stay)
         }
 
       // Leader:  Collect Prepare votes, broadcast Prepare Q.C.
@@ -284,6 +290,14 @@ case class ProtocolState[A <: Agreement: Block: Signing](
           v.viewNumber == viewNumber &&
           v.phase.isBefore(phase) &&
           v.blockHash == preparedBlockHash =>
+      Right(stay)
+
+    // The same can happen when we receive votes for a previous view number,
+    // after the Commit Q.C. has been processed in the Decide phase and we
+    // moved to the next phase.
+    case v: Vote[_]
+        if v.viewNumber == viewNumber.prev &&
+          federation.leaderOf(v.viewNumber) == publicKey =>
       Right(stay)
 
     // Ignore votes for other blocks.

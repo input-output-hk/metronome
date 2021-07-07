@@ -36,7 +36,11 @@ class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
       recipient: K,
       message: M
   ): F[Either[ConnectionHandler.ConnectionAlreadyClosedException[K], Unit]] = {
-    connectionHandler.sendMessage(recipient, message)
+    if (recipient == localInfo._1) {
+      connectionHandler.receiveMessage(recipient, message).map(_.asRight)
+    } else {
+      connectionHandler.sendMessage(recipient, message)
+    }
   }
 }
 

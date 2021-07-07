@@ -8,7 +8,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.Agreement
   * not just the general BFT agreement (which could be enough if
   * we need to execute all blocks to synchronize state).
   */
-sealed trait DuplexMessage[A <: Agreement, M]
+sealed trait DuplexMessage[+A <: Agreement, +M]
 
 object DuplexMessage {
 

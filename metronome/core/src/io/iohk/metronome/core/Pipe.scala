@@ -27,7 +27,7 @@ object Pipe {
     def receive: Iterant[F, O]
   }
   object Side {
-    def apply[F[_]: Sync, I, O](
+    def apply[F[_]: Sync: ContextShift, I, O](
         iq: ConcurrentQueue[F, I],
         oq: ConcurrentQueue[F, O]
     ): Side[F, I, O] = new Side[F, I, O] {

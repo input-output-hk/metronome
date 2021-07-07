@@ -26,7 +26,11 @@ class ViewStateStorage[N, A <: Agreement] private (
     KVStore[N].put[Key[V], V](namespace, key, value)
 
   private def read[V: Decoder](key: Key[V]): KVStoreRead[N, V] =
-    KVStoreRead[N].read[Key[V], V](namespace, key).map(_.get)
+    KVStoreRead[N].read[Key[V], V](namespace, key).map {
+      _.getOrElse {
+        throw new IllegalStateException(s"Cannot read view state $key")
+      }
+    }
 
   def setViewNumber(viewNumber: ViewNumber): KVStore[N, Unit] =
     put(Key.ViewNumber, viewNumber)

@@ -190,18 +190,14 @@ object RemoteConnectionManagerWithScalanetProviderSpec {
       s: Scheduler,
       cs: ContextShift[F]
   ): Resource[F, RemoteConnectionManager[F, K, M]] = {
-    ScalanetConnectionProvider
-      .scalanetProvider[F, K, M](
-        bindAddress,
-        nodeKeyPair,
-        secureRandom,
-        useNativeTlsImplementation,
-        framingConfig,
-        maxIncomingQueueSizePerPeer
-      )
-      .flatMap(prov =>
-        RemoteConnectionManager(prov, clusterConfig, retryConfig)
-      )
+    ScalanetConnectionProvider[F, K, M](
+      bindAddress,
+      nodeKeyPair,
+      secureRandom,
+      useNativeTlsImplementation,
+      framingConfig,
+      maxIncomingQueueSizePerPeer
+    ).flatMap(prov => RemoteConnectionManager(prov, clusterConfig, retryConfig))
   }
 
   type ClusterNodes = Map[
