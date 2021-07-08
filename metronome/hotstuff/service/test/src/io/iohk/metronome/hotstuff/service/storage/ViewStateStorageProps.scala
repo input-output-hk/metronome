@@ -16,6 +16,7 @@ import scala.util.Try
 import scodec.bits.BitVector
 import scodec.Codec
 import scala.util.Success
+import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 
 object ViewStateStorageProps extends Properties("ViewStateStorage") {
   property("commands") = ViewStateStorageCommands.property()
@@ -62,7 +63,7 @@ object ViewStateStorageCommands extends Commands {
 
   val genesisState = ViewStateStorage.Bundle
     .fromGenesisQC[TestAgreement] {
-      QuorumCertificate[TestAgreement](
+      QuorumCertificate[TestAgreement, Phase.Prepare](
         Phase.Prepare,
         ViewNumber(1),
         "",
@@ -118,7 +119,7 @@ object ViewStateStorageCommands extends Commands {
       p <- Gen.oneOf(Phase.Prepare, Phase.PreCommit, Phase.Commit)
       h <- arbitrary[TestAgreement.Hash]
       s <- arbitrary[TestAgreement.GSig]
-      qc = QuorumCertificate[TestAgreement](
+      qc = QuorumCertificate[TestAgreement, VotingPhase](
         p,
         state.viewNumber,
         h,
@@ -156,16 +157,20 @@ object ViewStateStorageCommands extends Commands {
     override def postCondition(state: State, success: Boolean): Prop = success
   }
 
-  case class SetQuorumCertificateCommand(qc: QuorumCertificate[TestAgreement])
-      extends UnitCommand {
+  case class SetQuorumCertificateCommand(
+      qc: QuorumCertificate[TestAgreement, VotingPhase]
+  ) extends UnitCommand {
     override def run(sut: Sut): Result =
       sut.write(_.setQuorumCertificate(qc))
 
     override def nextState(state: State): State =
       qc.phase match {
-        case Phase.Prepare   => state.copy(prepareQC = qc)
-        case Phase.PreCommit => state.copy(lockedQC = qc)
-        case Phase.Commit    => state.copy(commitQC = qc)
+        case Phase.Prepare =>
+          state.copy(prepareQC = qc.coerce[Phase.Prepare])
+        case Phase.PreCommit =>
+          state.copy(lockedQC = qc.coerce[Phase.PreCommit])
+        case Phase.Commit =>
+          state.copy(commitQC = qc.coerce[Phase.Commit])
       }
 
     override def preCondition(state: State): Boolean =

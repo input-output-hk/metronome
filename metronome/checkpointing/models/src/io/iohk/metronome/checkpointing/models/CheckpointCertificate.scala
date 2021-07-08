@@ -1,7 +1,7 @@
 package io.iohk.metronome.checkpointing.models
 
 import cats.data.NonEmptyList
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 
 /** The Checkpoint Certificate is a proof of the BFT agreement
@@ -26,5 +26,5 @@ case class CheckpointCertificate(
     // Proof that `checkpoint` is part of `headers.last.contentMerkleRoot`.
     proof: MerkleTree.Proof,
     // Commit Q.C. over `headers.head`.
-    commitQC: QuorumCertificate[CheckpointingAgreement]
+    commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit]
 )

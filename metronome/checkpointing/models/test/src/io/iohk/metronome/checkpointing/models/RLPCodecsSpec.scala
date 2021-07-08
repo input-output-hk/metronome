@@ -168,7 +168,7 @@ class RLPCodecsSpec extends AnyFlatSpec with Matchers {
           leafIndex = 2,
           siblingPath = Vector(sample[MerkleTree.Hash], sample[MerkleTree.Hash])
         ),
-        commitQC = QuorumCertificate[CheckpointingAgreement](
+        commitQC = QuorumCertificate[CheckpointingAgreement, Phase.Commit](
           phase = Phase.Commit,
           viewNumber = ViewNumber(10),
           blockHash = sample[Block.Header.Hash],

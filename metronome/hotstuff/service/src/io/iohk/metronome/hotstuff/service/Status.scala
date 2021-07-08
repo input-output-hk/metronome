@@ -1,7 +1,11 @@
 package io.iohk.metronome.hotstuff.service
 
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
-import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, QuorumCertificate}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Agreement,
+  QuorumCertificate,
+  Phase
+}
 
 /** Status has all the fields necessary for nodes to sync with each other.
   *
@@ -10,6 +14,6 @@ import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, QuorumCertificate}
   */
 case class Status[A <: Agreement](
     viewNumber: ViewNumber,
-    prepareQC: QuorumCertificate[A],
-    commitQC: QuorumCertificate[A]
+    prepareQC: QuorumCertificate[A, Phase.Prepare],
+    commitQC: QuorumCertificate[A, Phase.Commit]
 )

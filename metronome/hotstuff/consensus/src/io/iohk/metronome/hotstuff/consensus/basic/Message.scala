@@ -24,7 +24,7 @@ object Message {
   case class Prepare[A <: Agreement](
       viewNumber: ViewNumber,
       block: A#Block,
-      highQC: QuorumCertificate[A]
+      highQC: QuorumCertificate[A, Phase.Prepare]
   ) extends LeaderMessage[A]
 
   /** Having received one of the leader messages, the replica
@@ -56,7 +56,7 @@ object Message {
     */
   case class Quorum[A <: Agreement](
       viewNumber: ViewNumber,
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A, VotingPhase]
   ) extends LeaderMessage[A]
 
   /** At the end of the round, replicas send the `NewView` message
@@ -64,6 +64,6 @@ object Message {
     */
   case class NewView[A <: Agreement](
       viewNumber: ViewNumber,
-      prepareQC: QuorumCertificate[A]
+      prepareQC: QuorumCertificate[A, Phase.Prepare]
   ) extends ReplicaMessage[A]
 }

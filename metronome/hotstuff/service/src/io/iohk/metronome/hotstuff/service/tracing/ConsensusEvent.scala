@@ -6,7 +6,10 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Event,
   ProtocolError
 }
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  QuorumCertificate,
+  VotingPhase
+}
 import io.iohk.metronome.hotstuff.service.ConsensusService.MessageCounter
 import io.iohk.metronome.hotstuff.service.Status
 
@@ -34,8 +37,9 @@ object ConsensusEvent {
   case class NewView(viewNumber: ViewNumber) extends ConsensusEvent[Nothing]
 
   /** Quorum over some block. */
-  case class Quorum[A <: Agreement](quorumCertificate: QuorumCertificate[A])
-      extends ConsensusEvent[A]
+  case class Quorum[A <: Agreement](
+      quorumCertificate: QuorumCertificate[A, VotingPhase]
+  ) extends ConsensusEvent[A]
 
   /** A formally valid message was received from an earlier view number. */
   case class FromPast[A <: Agreement](message: Event.MessageReceived[A])

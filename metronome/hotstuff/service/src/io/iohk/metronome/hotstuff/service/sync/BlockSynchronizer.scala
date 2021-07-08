@@ -63,7 +63,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     */
   def sync(
       sender: A#PKey,
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A, _]
   ): F[Unit] =
     for {
       path <- download(sender, quorumCertificate.blockHash, Nil)
@@ -84,7 +84,7 @@ class BlockSynchronizer[F[_]: Sync: Timer, N, A <: Agreement: Block](
     */
   def getBlockFromQuorumCertificate(
       sources: NonEmptyVector[A#PKey],
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A, _]
   ): F[Either[DownloadFailedException[A], A#Block]] = {
     val otherSources = sources.filterNot(_ == publicKey).toList
 

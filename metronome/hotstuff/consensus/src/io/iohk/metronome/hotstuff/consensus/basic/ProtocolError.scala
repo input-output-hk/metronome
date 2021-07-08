@@ -32,7 +32,7 @@ object ProtocolError {
   /** The Q.C. signature doesn't match the content. */
   case class InvalidQuorumCertificate[A <: Agreement](
       sender: A#PKey,
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A, VotingPhase]
   ) extends ProtocolError[A]
 
   /** The block in the prepare message doesn't extend the previous Q.C. */

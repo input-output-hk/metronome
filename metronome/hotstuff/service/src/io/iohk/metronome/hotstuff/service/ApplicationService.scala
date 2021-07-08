@@ -1,14 +1,20 @@
 package io.iohk.metronome.hotstuff.service
 
 import cats.data.{NonEmptyVector, NonEmptyList}
-import io.iohk.metronome.hotstuff.consensus.basic.{Agreement, QuorumCertificate}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  Agreement,
+  QuorumCertificate,
+  Phase
+}
 
 /** Represents the "application" domain to the HotStuff module,
   * performing all delegations that HotStuff can't do on its own.
   */
 trait ApplicationService[F[_], A <: Agreement] {
   // TODO (PM-3109): Create block.
-  def createBlock(highQC: QuorumCertificate[A]): F[Option[A#Block]]
+  def createBlock(
+      highQC: QuorumCertificate[A, Phase.Prepare]
+  ): F[Option[A#Block]]
 
   // TODO (PM-3132, PM-3133): Block validation.
   // Returns None if validation cannot be carried out due to data availability issues within a given timeout.
@@ -24,7 +30,7 @@ trait ApplicationService[F[_], A <: Agreement] {
   // whether the block and any corresponding state can be used as a starting point after a restart.
   def executeBlock(
       block: A#Block,
-      commitQC: QuorumCertificate[A],
+      commitQC: QuorumCertificate[A, Phase.Commit],
       commitPath: NonEmptyList[A#Hash]
   ): F[Boolean]
 

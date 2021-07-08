@@ -47,7 +47,7 @@ object ProtocolStateCommands extends Commands {
   val genesis =
     TestBlock(blockHash = 0, parentBlockHash = -1, command = "")
 
-  val genesisQC = QuorumCertificate[TestAgreement](
+  val genesisQC = QuorumCertificate[TestAgreement, Phase.Prepare](
     phase = Phase.Prepare,
     viewNumber = ViewNumber(0),
     blockHash = genesis.blockHash,
@@ -153,8 +153,8 @@ object ProtocolStateCommands extends Commands {
       ownIndex: Int,
       votesFrom: Set[TestAgreement.PKey],
       newViewsFrom: Set[TestAgreement.PKey],
-      newViewsHighQC: QuorumCertificate[TestAgreement],
-      prepareQCs: List[QuorumCertificate[TestAgreement]],
+      newViewsHighQC: QuorumCertificate[TestAgreement, Phase.Prepare],
+      prepareQCs: List[QuorumCertificate[TestAgreement, Phase.Prepare]],
       maybeBlockHash: Option[TestAgreement.Hash]
   ) {
     def publicKey = federation(ownIndex)
@@ -188,7 +188,8 @@ object ProtocolStateCommands extends Commands {
       state.votesFrom.isEmpty &&
       state.newViewsFrom.isEmpty
 
-  override def newSut(state: State): Sut =
+  override def newSut(state: State): Sut = {
+    import Phase._
     new Protocol(
       ProtocolState[TestAgreement](
         viewNumber = ViewNumber(state.viewNumber),
@@ -198,14 +199,15 @@ object ProtocolStateCommands extends Commands {
         federation = Federation(state.federation, state.f)
           .getOrElse(sys.error("Invalid federation!")),
         prepareQC = genesisQC,
-        lockedQC = genesisQC,
-        commitQC = genesisQC,
+        lockedQC = genesisQC.copy[TestAgreement, PreCommit](phase = PreCommit),
+        commitQC = genesisQC.copy[TestAgreement, Commit](phase = Commit),
         preparedBlock = genesis,
         timeout = 10.seconds,
         votes = Set.empty,
         newViews = Map.empty
       )
     )
+  }
 
   override def destroySut(sut: Sut): Unit = ()
 
@@ -312,24 +314,30 @@ object ProtocolStateCommands extends Commands {
     def invalidateViewNumber(v: ViewNumber)   = ViewNumber(v + 1000)
     def invalidSender                         = state.federation.sum + 1
 
-    def invalidateQC(
-        qc: QuorumCertificate[TestAgreement]
-    ): Gen[QuorumCertificate[TestAgreement]] = {
+    def invalidateQC[P <: VotingPhase](
+        qc: QuorumCertificate[TestAgreement, P]
+    ): Gen[QuorumCertificate[TestAgreement, P]] = {
       Gen.oneOf(
         genLazy(
-          qc.copy[TestAgreement](blockHash = invalidateHash(qc.blockHash))
+          qc.copy[TestAgreement, P](blockHash = invalidateHash(qc.blockHash))
         ),
-        genLazy(qc.copy[TestAgreement](phase = nextVoting(qc.phase)))
-          .suchThat(_.blockHash != genesisQC.blockHash),
+        // Now that the compiler (and codecs) check that we're getting the right message,
+        // we shouldn't encounter an unexpected phase in a field like `highQC`,
+        // so this kind of test is no longer needed and would fail with an assertion error
+        // when it's coerced into a type it doesn't match.
+        // genLazy(
+        //   qc.withPhase[VotingPhase](nextVoting(qc.votingPhase))
+        // ).suchThat(_.blockHash != genesisQC.blockHash),
         genLazy(
-          qc.copy[TestAgreement](viewNumber =
+          qc.copy[TestAgreement, P](viewNumber =
             invalidateViewNumber(qc.viewNumber)
           )
         ),
         genLazy(
-          qc.copy[TestAgreement](signature =
+          qc.copy[TestAgreement, P](
             // The quorum cert has no items, so add one to make it different.
-            qc.signature.copy(sig = 0L +: qc.signature.sig.map(invalidateSig))
+            signature =
+              qc.signature.copy(sig = 0L +: qc.signature.sig.map(invalidateSig))
           )
         )
       )
@@ -409,10 +417,10 @@ object ProtocolStateCommands extends Commands {
           case cmd @ QuorumCmd(_, m) =>
             Gen.oneOf(
               "sender" ! genLazy(cmd.copy(sender = invalidSender)),
-              "quorumCertificate" ! invalidateQC(m.quorumCertificate).map {
-                qc =>
+              "quorumCertificate" ! invalidateQC(m.quorumCertificate)
+                .map { qc =>
                   cmd.copy(message = m.copy(quorumCertificate = qc))
-              }
+                }
             )
         }
 
@@ -502,7 +510,7 @@ object ProtocolStateCommands extends Commands {
       phase = votingPhaseFor(state.phase).getOrElse(
         sys.error(s"No voting phase for ${state.phase}")
       )
-      qc = QuorumCertificate[TestAgreement](
+      qc = QuorumCertificate[TestAgreement, VotingPhase](
         phase,
         state.viewNumber,
         blockHash,
@@ -853,7 +861,7 @@ object ProtocolStateCommands extends Commands {
           if (state.phase == Phase.Decide) None else state.maybeBlockHash,
         prepareQCs =
           if (message.quorumCertificate.phase == Phase.Prepare)
-            message.quorumCertificate :: state.prepareQCs
+            message.quorumCertificate.coerce[Phase.Prepare] :: state.prepareQCs
           else state.prepareQCs,
         newViewsHighQC =
           if (state.phase == Phase.Decide) genesisQC else state.newViewsHighQC

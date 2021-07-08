@@ -7,7 +7,8 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   Event,
   ProtocolError,
-  QuorumCertificate
+  QuorumCertificate,
+  VotingPhase
 }
 import io.iohk.metronome.hotstuff.service.ConsensusService.MessageCounter
 import io.iohk.metronome.hotstuff.service.Status
@@ -17,7 +18,7 @@ case class ConsensusTracers[F[_], A <: Agreement](
     viewSync: Tracer[F, ViewNumber],
     adoptView: Tracer[F, Status[A]],
     newView: Tracer[F, ViewNumber],
-    quorum: Tracer[F, QuorumCertificate[A]],
+    quorum: Tracer[F, QuorumCertificate[A, _]],
     fromPast: Tracer[F, Event.MessageReceived[A]],
     fromFuture: Tracer[F, Event.MessageReceived[A]],
     stashed: Tracer[F, ProtocolError.TooEarly[A]],
@@ -40,7 +41,9 @@ object ConsensusTracers {
       viewSync = tracer.contramap[ViewNumber](ViewSync(_)),
       adoptView = tracer.contramap[Status[A]](AdoptView(_)),
       newView = tracer.contramap[ViewNumber](NewView(_)),
-      quorum = tracer.contramap[QuorumCertificate[A]](Quorum(_)),
+      quorum = tracer.contramap[QuorumCertificate[A, _]](qc =>
+        Quorum(qc.coerce[VotingPhase])
+      ),
       fromPast = tracer.contramap[Event.MessageReceived[A]](FromPast(_)),
       fromFuture = tracer.contramap[Event.MessageReceived[A]](FromFuture(_)),
       stashed = tracer.contramap[ProtocolError.TooEarly[A]](Stashed(_)),
