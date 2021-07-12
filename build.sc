@@ -62,7 +62,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Developer("aakoshh", "Akosh Farkash", "https://github.com/aakoshh"),
         Developer("lemastero","Piotr Paradzinski","https://github.com/lemastero"),
         Developer("KonradStaniec","Konrad Staniec","https://github.com/KonradStaniec"),
-        Developer("rtkaczyk", "Radek Tkaczyk", "https://github.com/rtkaczyk")
+        Developer("rtkaczyk", "Radek Tkaczyk", "https://github.com/rtkaczyk"),
+        Developer("biandratti", "Maxi Biandratti", "https://github.com/biandratti")
       )
       // format: on
     )
@@ -223,7 +224,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   }
 
   /** General configuration parser, to be used by application modules. */
-  object config extends SubModule {
+  object config extends SubModule with Publishing {
     override def ivyDeps = super.ivyDeps() ++ Agg(
       ivy"com.typesafe:config:${VersionOf.config}",
       ivy"io.circe::circe-core:${VersionOf.circe}",
@@ -235,6 +236,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         ivy"io.circe::circe-generic:${VersionOf.circe}"
       )
     }
+
+    override def description = "Typesafe config wrapper powered by circe"
   }
 
   /** Generic HotStuff BFT library. */
