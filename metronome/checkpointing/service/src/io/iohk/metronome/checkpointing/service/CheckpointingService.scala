@@ -5,11 +5,13 @@ import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, Resource, Sync}
 import cats.implicits._
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
+import io.iohk.metronome.checkpointing.interpreter.InterpreterRPC
 import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
 import io.iohk.metronome.checkpointing.models.{
   Block,
   CheckpointCertificate,
-  Ledger
+  Ledger,
+  Mempool
 }
 import io.iohk.metronome.checkpointing.service.CheckpointingService.{
   CheckpointData,
@@ -30,19 +32,38 @@ import scala.annotation.tailrec
 
 class CheckpointingService[F[_]: Sync, N](
     ledgerTreeRef: Ref[F, LedgerTree],
+    mempoolRef: Ref[F, Mempool],
     lastCommittedHeaderRef: Ref[F, Block.Header],
     checkpointDataRef: Ref[F, Option[CheckpointData]],
-    //TODO: PM-3137, this is used for testing that a certificate was created correctly
-    //      replace with proper means of pushing the certificate to the Interpreter
-    pushCheckpointFn: CheckpointCertificate => F[Unit],
     ledgerStorage: LedgerStorage[N],
-    blockStorage: BlockStorage[N, CheckpointingAgreement]
+    blockStorage: BlockStorage[N, CheckpointingAgreement],
+    interpreterClient: InterpreterRPC[F]
 )(implicit storeRunner: KVStoreRunner[F, N])
     extends ApplicationService[F, CheckpointingAgreement] {
 
   override def createBlock(
       highQC: QuorumCertificate[CheckpointingAgreement]
-  ): F[Option[Block]] = ???
+  ): F[Option[Block]] = (
+    for {
+      parent    <- OptionT(getBlock(highQC.blockHash))
+      oldLedger <- OptionT(projectLedger(parent))
+      mempool   <- OptionT.liftF(projectMempool)
+
+      newBody <- OptionT {
+        if (mempool.isEmpty)
+          Block.Body.empty.some.pure[F]
+        else
+          interpreterClient.createBlockBody(oldLedger, mempool.proposerBlocks)
+      }
+
+      newLedger = oldLedger.update(newBody.transactions)
+      newBlock  = Block.make(parent.header, newLedger.hash, newBody)
+
+      _ <- OptionT.liftF(
+        updateLedgerTree(newLedger, newBlock, precomputed = true)
+      )
+    } yield newBlock
+  ).value
 
   override def validateBlock(block: Block): F[Option[Boolean]] = {
     val ledgers = for {
@@ -54,18 +75,10 @@ class CheckpointingService[F[_]: Sync, N](
     ledgers.value.flatMap {
       case Some((prevLedger, nextLedger))
           if nextLedger.hash == block.header.postStateHash =>
-        validateTransactions(block.body, prevLedger)
+        interpreterClient.validateBlockBody(block.body, prevLedger)
 
       case _ => false.some.pure[F]
     }
-  }
-
-  private def validateTransactions(
-      body: Block.Body,
-      ledger: Ledger
-  ): F[Option[Boolean]] = {
-    //TODO: Validate transactions PM-3131/3132
-    true.some.pure[F]
   }
 
   override def executeBlock(
@@ -114,7 +127,7 @@ class CheckpointingService[F[_]: Sync, N](
     } yield {
       def loop(block: Block): OptionT[F, Ledger] = {
         def doUpdate(ledger: Ledger) =
-          OptionT.liftF(updateLedgerByBlock(ledger, block))
+          OptionT.liftF(updateLedgerTree(ledger, block, precomputed = false))
 
         ledgerTree.get(block.header.parentHash) match {
           case Some(oldLedger) =>
@@ -141,16 +154,25 @@ class CheckpointingService[F[_]: Sync, N](
     }).flatten
   }
 
-  /** Computes a new ledger from the `block` and saves it in the ledger tree only if
-    * a parent state exists.
+  //TODO: PM-3107
+  def projectMempool: F[Mempool] =
+    mempoolRef.get
+
+  /** Saves a new ledger in the tree only if a parent state exists
+    * Depending on the `precomputed` parameter `ledger` is regarded as:
+    * - a precomputed ledger to be saved directly
+    * - the parent ledger from which a new ledger will be computed and saved
     *
     * Because we're only adding to the tree no locking around it is necessary
     */
-  private def updateLedgerByBlock(
-      oldLedger: Ledger,
-      block: Block
+  private def updateLedgerTree(
+      ledger: Ledger,
+      block: Block,
+      //TODO: I don't like this
+      precomputed: Boolean = false
   ): F[Ledger] = {
-    val newLedger = oldLedger.update(block.body.transactions)
+    val newLedger =
+      if (precomputed) ledger else ledger.update(block.body.transactions)
 
     ledgerTreeRef
       .update { tree =>
@@ -221,8 +243,9 @@ class CheckpointingService[F[_]: Sync, N](
     )
   }
 
+  //TODO: direct call
   private def pushCheckpoint(checkpoint: CheckpointCertificate): F[Unit] =
-    pushCheckpointFn(checkpoint) //TODO: PM-3137
+    interpreterClient.newCheckpointCertificate(checkpoint)
 
   override def syncState(
       sources: NonEmptyVector[ECPublicKey],
@@ -280,7 +303,7 @@ object CheckpointingService {
       ledgerStorage: LedgerStorage[N],
       blockStorage: BlockStorage[N, CheckpointingAgreement],
       viewStateStorage: ViewStateStorage[N, CheckpointingAgreement],
-      pushCheckpointFn: CheckpointCertificate => F[Unit]
+      interpreterClient: InterpreterRPC[F]
   )(implicit
       storeRunner: KVStoreRunner[F, N]
   ): Resource[F, CheckpointingService[F, N]] = {
@@ -306,15 +329,17 @@ object CheckpointingService {
     val service = for {
       (block, ledger) <- lastExecuted
       ledgerTree      <- Ref.of(LedgerTree.root(ledger, block.header))
+      mempool         <- Ref.of(Mempool.empty)
       lastExec        <- Ref.of(block.header)
       checkpointData  <- Ref.of(None: Option[CheckpointData])
     } yield new CheckpointingService[F, N](
       ledgerTree,
+      mempool,
       lastExec,
       checkpointData,
-      pushCheckpointFn,
       ledgerStorage,
-      blockStorage
+      blockStorage,
+      interpreterClient
     )
 
     Resource.liftF(service)

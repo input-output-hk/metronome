@@ -34,14 +34,13 @@ object Block {
 
   /** Smart constructor for a block, setting the correct hashes in the header. */
   def make(
-      parent: Block,
+      parent: Block.Header,
       postStateHash: Ledger.Hash,
-      transactions: IndexedSeq[Transaction]
+      body: Block.Body
   ): Block = {
-    val body = Body(transactions)
     val header = Header(
       parentHash = parent.hash,
-      height = parent.header.height + 1,
+      height = parent.height + 1,
       postStateHash = postStateHash,
       contentMerkleRoot = Body.contentMerkleRoot(body)
     )
@@ -80,6 +79,8 @@ object Block {
   ) extends RLPHash[Body, Body.Hash]
 
   object Body extends RLPHashCompanion[Body]()(RLPCodecs.rlpBlockBody) {
+    val empty = Body(Vector.empty)
+
     def contentMerkleRoot(body: Body): MerkleTree.Hash =
       MerkleTree
         .build(body.transactions.map(tx => MerkleTree.Hash(tx.hash)))
