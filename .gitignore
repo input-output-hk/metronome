@@ -1,2 +1,8 @@
 *.class
 *.log
+.bloop
+.metals
+.vscode
+out/
+*.iml
+/.idea*

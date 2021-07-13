@@ -1,0 +1,1 @@
+Ledger(Some(CheckpointCandidate(BitVector(312 bits, 0x80a2017fe6000001f6ff6562991fa96676ab000100c6eaff7fb080d1017f4900047f00fbb1ff17))),Vector(ProposerBlock(BitVector(232 bits, 0x80d80100567f8f7f4d00ff27843963ffff7aff7f4101ff7f00ffff8001)), ProposerBlock(BitVector(312 bits, 0x00cb05f2ffff2dd91fff57446e803f3001d7cf80e3b5007f7601ff0708808001e000a0ff6e8057))))
