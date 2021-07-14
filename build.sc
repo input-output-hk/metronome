@@ -132,9 +132,9 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[JavaModule] =
         super.moduleDeps ++ Seq(logging)
 
-      // Enable logging in tests.
-      // Control the visibility using ./test/resources/logback.xml
-      // Alternatively, capture logs in memory.
+      // Enable logging in tests with `LogTracer`.
+      // Control the visibility by creating a `./test/resources/logback-test.xml` file.
+      // Alternatively, capture logs in memory with `InMemoryLogTracer`.
       override def ivyDeps = Agg(
         ivy"org.scalatest::scalatest:${VersionOf.scalatest}",
         ivy"org.scalacheck::scalacheck:${VersionOf.scalacheck}",
