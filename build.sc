@@ -154,7 +154,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
   /** Abstractions shared between all modules. */
   object core extends SubModule with Publishing {
-    override def description: String =
+    override val description =
       "Common abstractions."
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
@@ -181,7 +181,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     * Based on https://github.com/input-output-hk/iohk-monitoring-framework/tree/master/contra-tracer
     */
   object tracing extends SubModule with Publishing {
-    override def description: String =
+    override val description =
       "Abstractions for contravariant tracing."
 
     def scalacPluginIvyDeps = Agg(
@@ -191,7 +191,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
   /** Additional crypto utilities such as threshold signature. */
   object crypto extends SubModule with Publishing {
-    override def description: String =
+    override val description =
       "Cryptographic primitives to support HotStuff and BFT proof verification."
 
     override def moduleDeps: Seq[PublishModule] =
@@ -209,8 +209,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   /** Generic Peer-to-Peer components that can multiplex protocols
     * from different modules over a single authenticated TLS connection.
     */
-  object networking extends SubModule {
-    override def moduleDeps: Seq[JavaModule] =
+  object networking extends SubModule with Publishing {
+    override val description =
+      "Generic networking library for keeping connections alive between federation members."
+
+    override def moduleDeps: Seq[PublishModule] =
       Seq(tracing, crypto)
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
@@ -245,7 +248,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
     /** Pure consensus models. */
     object consensus extends SubModule with Publishing {
-      override def description: String =
+      override val description =
         "Pure HotStuff consensus models."
 
       override def moduleDeps: Seq[PublishModule] =
@@ -287,7 +290,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       * Includes the certificate model and the checkpoint ledger and chain models.
       */
     object models extends SubModule with Publishing {
-      override def description: String =
+      override val description =
         "Checkpointing domain models, including the checkpoint certificate and its validation logic."
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
@@ -308,7 +311,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       * Includes the local communication protocol messages and networking.
       */
     object interpreter extends SubModule with Publishing {
-      override def description: String =
+      override val description =
         "Components to implement a PoW side checkpointing interpreter."
 
       override def ivyDeps = Agg(
@@ -316,7 +319,12 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
 
       override def moduleDeps: Seq[PublishModule] =
-        Seq(tracing, crypto, checkpointing.models)
+        Seq(tracing, crypto, networking, checkpointing.models)
+
+      object test extends TestModule {
+        override def moduleDeps: Seq[JavaModule] =
+          super.moduleDeps ++ Seq(checkpointing.models.test)
+      }
     }
 
     /** Implements the checkpointing functionality, validation rules,
