@@ -26,6 +26,7 @@ import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.compatible.Assertion
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.util.Random
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.Inside
 import scodec.bits.BitVector
@@ -61,7 +62,7 @@ class InterpreterServiceSpec extends AsyncFlatSpec with Matchers with Inside {
 
   it should "send messages from the Service to the Interpreter" in test {
     new Fixture {
-      val mockValidationResult = true
+      val mockValidationResult = Random.nextBoolean()
 
       override lazy val interpreterRpc: InterpreterRPC[Task] =
         new MockInterpreterRPC() {
@@ -230,10 +231,9 @@ object InterpreterServiceSpec {
     import DefaultInterpreterCodecs.interpreterMessageCodec
 
     implicit val networkTracers = NetworkTracers(
+      // We can use the following tracer to debug network issues:
+      // Tracer.instance[Task, NetworkEvent[ECPublicKey, InterpreterMessage]](e => Task(println(e)))
       Tracer.noOpTracer[Task, NetworkEvent[ECPublicKey, InterpreterMessage]]
-      // Tracer.instance[Task, NetworkEvent[ECPublicKey, InterpreterMessage]](e =>
-      //   Task(println(e))
-      // )
     )
 
     for {
