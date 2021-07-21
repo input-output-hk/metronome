@@ -31,8 +31,14 @@ The BFT service delegates checkpoint proposal and candidate validation to the Ch
 
 When a winner is elected, a Checkpoint Certificate is compiled, comprising the checkpointed data (a block identity, or something more complex) and a witness for the BFT agreement, which proves that the decision is final and cannot be rolled back. Because of the need for this proof, low latency BFT algorithms such as HotStuff are preferred.
 
-
 ## Build
+
+### Requirements
+
+- Mill, a build tool for scala.
+- JDK 11
+
+### Building the project
 
 The project is built using [Mill](https://github.com/com-lihaoyi/mill), which works fine with [Metals](https://scalameta.org/metals/docs/build-tools/mill.html).
 
