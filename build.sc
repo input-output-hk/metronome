@@ -121,6 +121,12 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
       override def scalacOptions =
         SubModule.this.scalacOptions
+
+      // Test modules might depend on each other for example to get `Arbitrary` instances.
+      def testModuleDeps: Seq[JavaModule] = Seq.empty
+
+      override def moduleDeps: Seq[JavaModule] =
+        super.moduleDeps ++ testModuleDeps
     }
 
     // Since mill 0.9.7 there can be only one `testFramework` per module.
@@ -281,8 +287,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         )
 
       object props extends PropsModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(hotstuff.consensus.props)
+        override def testModuleDeps = Seq(hotstuff.consensus.props)
       }
       object specs extends SpecsModule
     }
@@ -307,12 +312,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Seq(core, crypto, hotstuff.consensus)
 
       object props extends PropsModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(hotstuff.consensus.props)
+        override def testModuleDeps = Seq(hotstuff.consensus.props)
       }
       object specs extends SpecsModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(checkpointing.models.props)
+        override def testModuleDeps = Seq(checkpointing.models.props)
       }
     }
 
@@ -332,8 +335,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Seq(tracing, crypto, networking, checkpointing.models)
 
       object props extends PropsModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(checkpointing.models.props)
+        override def testModuleDeps = Seq(checkpointing.models.props)
       }
       object specs extends SpecsModule
     }
@@ -364,8 +366,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           )
       }
       object specs extends SpecsModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(checkpointing.models.props)
+        override def testModuleDeps = Seq(checkpointing.models.props)
       }
     }
 
