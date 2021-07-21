@@ -55,10 +55,11 @@ mill __.test
 mill --watch metronome[2.13.4].rocksdb.test
 ```
 
-To run a single test class, use the `.single` method with the full path to the spec:
+To run a single test class, use the `.single` method with the full path to the spec. Note that `ScalaTest` tests are in the `specs` subdirectories while `ScalaCheck` ones are in `props`.
 
 ```console
-mill __.storage.test.single io.iohk.metronome.storage.KVStoreStateSpec
+mill __.storage.specs.single io.iohk.metronome.storage.KVStoreStateSpec
+mill __.hotstuff.consensus.props.single io.iohk.metronome.hotstuff.consensus.basic.ProtocolStateProps
 ```
 
 To experiment with the code, start an interactive session:
