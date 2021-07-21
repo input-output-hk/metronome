@@ -67,6 +67,12 @@ To experiment with the code, start an interactive session:
 mill -i metronome[2.13.4].hotstuff.consensus.console
 ```
 
+### Versions
+
+You will need Java 11 to build.
+
+The `mill` version is set in the `.mill-version` file or the `MILL_VERSION` env var. To build with Nix in sandbox environment, it's best to make sure that the build works with the version that Nix comes with, because after [this update](https://github.com/NixOS/nixpkgs/pull/130823) it's not going to dynamically download the one set in the project.
+
 ### Formatting the codebase
 
 Please configure your editor to use `scalafmt` on save. CI will be configured to check formatting.
