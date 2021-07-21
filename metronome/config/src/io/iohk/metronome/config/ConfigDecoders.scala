@@ -22,9 +22,17 @@ object ConfigDecoders {
     }
 
   /** Parse HOCON durations like "5m". */
-  val durationDecoder: Decoder[FiniteDuration] =
+  implicit lazy val durationDecoder: Decoder[FiniteDuration] =
     Decoder[String].emapTry {
       tryParse(_, _.getDuration(_).toMillis.millis)
+    }
+
+  /** Overriding boolean values with system properties turns them into String,
+    * which the default circe decoder does not expect.
+    */
+  implicit lazy val booleanDecoder: Decoder[Boolean] =
+    Decoder.decodeBoolean or Decoder[String].emapTry {
+      tryParse(_, _ getBoolean _)
     }
 
   /** Parse an object where a discriminant tells us which other key value

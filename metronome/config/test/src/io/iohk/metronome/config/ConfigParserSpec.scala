@@ -108,6 +108,7 @@ class ConfigParserSpec
           bootstrap = List("localhost:40001"),
           timeout = 5.seconds,
           maxPacketSize = TestConfig.Size(512000),
+          maxIncomingConnections = 10,
           clientId = None
         ),
         TestConfig
@@ -117,6 +118,34 @@ class ConfigParserSpec
           ),
         chainId = Some("test-chain")
       )
+    }
+  }
+
+  it should "work with system property overrides" in {
+    import ConfigParserSpec.TestConfig
+
+    withProperty("metronome.metrics.enabled", "true") {
+      withProperty("metronome.network.max-incoming-connections", "50") {
+        val config = ConfigParser.parse[TestConfig](
+          ConfigFactory.load("complex.conf").getConfig("metronome").root()
+        )
+
+        inside(config) { case Right(config) =>
+          config.metrics.enabled shouldBe true
+          config.network.maxIncomingConnections shouldBe 50
+        }
+      }
+    }
+  }
+
+  def withProperty[T](key: String, value: String)(thunk: => T): T = {
+    val maybeCurrent = Option(System.setProperty(key, value))
+    try {
+      ConfigFactory.invalidateCaches()
+      thunk
+    } finally {
+      maybeCurrent.foreach(System.setProperty(key, _))
+      ConfigFactory.invalidateCaches()
     }
   }
 }
@@ -131,8 +160,7 @@ object ConfigParserSpec {
       chainId: Option[String]
   )
   object TestConfig {
-    implicit val durationDecoder: Decoder[FiniteDuration] =
-      ConfigDecoders.durationDecoder
+    import ConfigDecoders.{durationDecoder, booleanDecoder}
 
     case class Metrics(enabled: Boolean)
     object Metrics {
@@ -144,6 +172,7 @@ object ConfigParserSpec {
         bootstrap: List[String],
         timeout: FiniteDuration,
         maxPacketSize: Size,
+        maxIncomingConnections: Int,
         clientId: Option[String]
     )
     object Network {
