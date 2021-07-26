@@ -1,7 +1,7 @@
 package io.iohk.metronome.rocksdb
 
 import cats.implicits._
-import cats.effect.Resource
+import cats.effect.{Resource, Blocker}
 import io.iohk.metronome.storage.{
   KVStoreState,
   KVStore,
@@ -152,13 +152,11 @@ object RocksDBStoreCommands extends Commands {
   /** Create a new empty database. */
   override def newSut(state: State): Sut = {
     val res = for {
-      path <- Resource.make(Task {
-        Files.createTempDirectory("testdb")
-      }) { path =>
-        Task {
-          if (Files.exists(path)) Files.delete(path)
-        }
-      }
+      path <- Resource.liftF(Task {
+        val tmp = Files.createTempDirectory("testdb")
+        tmp.toFile.deleteOnExit()
+        tmp
+      })
 
       config = RocksDBStore.Config.default(path)
 
@@ -452,7 +450,16 @@ object RocksDBStoreCommands extends Commands {
 
         case None =>
           val connection = await {
-            RocksDBStore[Task](sut.config.value, sut.namespaces).allocated
+            val res = for {
+              blocker <- Blocker[Task]
+              db <- RocksDBStore[Task](
+                sut.config.value,
+                sut.namespaces,
+                blocker
+              )
+            } yield db
+
+            res.allocated
               .map { case (db, release) =>
                 Allocated(db, release)
               }

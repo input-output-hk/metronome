@@ -1,11 +1,15 @@
 package io.iohk.metronome.examples.robot.app
 
 import cats.implicits._
-import cats.effect.{Resource, Concurrent}
+import cats.effect.{Resource, Concurrent, Blocker}
 import monix.eval.Task
 import monix.execution.Scheduler
 import io.iohk.metronome.crypto.{ECKeyPair, ECPublicKey, GroupSignature}
 import io.iohk.metronome.crypto.hash.Hash
+import io.iohk.metronome.hotstuff.service.tracing.{
+  ConsensusTracers,
+  SyncTracers
+}
 import io.iohk.metronome.hotstuff.consensus.{
   Federation,
   LeaderSelection,
@@ -21,21 +25,26 @@ import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
 }
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
+}
 import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
   ScalanetConnectionProvider,
   RemoteConnectionManager,
+  NetworkTracers,
   Network
-}
-import io.iohk.metronome.hotstuff.service.storage.{
-  BlockStorage,
-  ViewStateStorage
 }
 import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot, RobotSigning}
 import io.iohk.metronome.examples.robot.service.RobotService
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
+import io.iohk.metronome.examples.robot.service.tracing.{
+  RobotTracers,
+  RobotEvent
+}
 import io.iohk.metronome.examples.robot.app.config.{RobotConfig, RobotOptions}
 import io.iohk.metronome.examples.robot.app.tracing.{
   RobotNetworkTracers,
@@ -48,15 +57,15 @@ import io.iohk.metronome.storage.{
   KVStoreRead,
   KVStore,
   KVCollection,
-  KVRingBuffer
+  KVRingBuffer,
+  KVTree
 }
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
 import java.security.SecureRandom
 import scodec.Codec
 import scodec.bits.ByteVector
 import java.nio.file.Files
-import monix.execution.schedulers.SchedulerService
-import io.iohk.metronome.storage.KVTree
+import io.iohk.metronome.tracer.Tracer
 
 /** Composition root for dependency injection.
   *
@@ -65,14 +74,29 @@ import io.iohk.metronome.storage.KVTree
 trait RobotComposition {
   import RobotCodecs._
 
-  type NetworkMessage = DuplexMessage[RobotAgreement, RobotMessage]
+  type NetworkMessage =
+    DuplexMessage[RobotAgreement, RobotMessage]
+
+  type ConnectionManager =
+    RemoteConnectionManager[Task, ECPublicKey, NetworkMessage]
 
   type NS = RocksDBStore.Namespace
+
+  type NTS = NetworkTracers[Task, ECPublicKey, NetworkMessage]
+  type CTS = ConsensusTracers[Task, RobotAgreement]
+  type STS = SyncTracers[Task, RobotAgreement]
+
+  /** Storages to be returned so we can look at state in tests. */
+  case class Storages(
+      blockStorage: BlockStorage[NS, RobotAgreement],
+      viewStateStorage: ViewStateStorage[NS, RobotAgreement],
+      stateStorage: KVRingBuffer[NS, Hash, Robot.State]
+  )(implicit val storeRunner: KVStoreRunner[Task, NS])
 
   def compose(
       opts: RobotOptions,
       config: RobotConfig
-  ): Resource[Task, Unit] = {
+  ): Resource[Task, Storages] = {
 
     val genesisState = Robot
       .State(
@@ -90,9 +114,14 @@ trait RobotComposition {
       command = Robot.Command.Rest
     )
 
+    implicit val networkTracers: NTS  = makeNetworkTracers
+    implicit val consesusTracers: CTS = makeConsensusTracers
+    implicit val syncTracers: STS     = makeSyncTracers
+    implicit val robotTracers         = makeRobotTracers
+
     for {
-      connectionProvider <- makeConnectionProvider(config, opts)
-      connectionManager  <- makeConnectionManager(config, connectionProvider)
+
+      connectionManager <- makeConnectionManager(config, opts)
 
       (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
 
@@ -124,7 +153,27 @@ trait RobotComposition {
 
       _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
 
-    } yield ()
+    } yield Storages(blockStorage, viewStateStorage, stateStorage)
+  }
+
+  protected def makeNetworkTracers =
+    RobotNetworkTracers.networkHybridLogTracers
+
+  protected def makeConsensusTracers =
+    RobotConsensusTracers.consensusHybridLogTracers
+
+  protected def makeSyncTracers =
+    RobotSyncTracers.syncHybridLogTracers
+
+  protected def makeRobotTracers = {
+    // TODO: Display the robot moving in the console: https://eed3si9n.com/console-games-in-scala
+    val robotEventTracer = Tracer.instance[Task, RobotEvent] {
+      case RobotEvent.Proposing(block) =>
+        Task(println(s"<<< PROPOSING COMMAND: ${block.command} >>>"))
+      case RobotEvent.NewState(state) =>
+        Task(println(s"\n<<< ROBOT: ${state} >>>\n"))
+    }
+    RobotTracers(robotEventTracer)
   }
 
   protected def makeConnectionProvider(
@@ -133,7 +182,7 @@ trait RobotComposition {
   ) = {
     val localNode = config.network.nodes(opts.nodeIndex)
     for {
-      implicit0(scheduler: SchedulerService) <- Resource.make(
+      implicit0(scheduler: Scheduler) <- Resource.make(
         Task(Scheduler.io("scalanet"))
       )(scheduler => Task(scheduler.shutdown()))
 
@@ -164,8 +213,9 @@ trait RobotComposition {
         ECPublicKey,
         NetworkMessage
       ]
-  ) = {
-    import RobotNetworkTracers.networkTracers
+  )(implicit
+      networkTracers: NTS
+  ): Resource[Task, ConnectionManager] = {
 
     val clusterConfig = RemoteConnectionManager.ClusterConfig(
       clusterNodes = config.network.nodes.map { node =>
@@ -181,6 +231,17 @@ trait RobotComposition {
     ](connectionProvider, clusterConfig, retryConfig)
   }
 
+  protected def makeConnectionManager(
+      config: RobotConfig,
+      opts: RobotOptions
+  )(implicit
+      networkTracers: NTS
+  ): Resource[Task, ConnectionManager] =
+    for {
+      connectionProvider <- makeConnectionProvider(config, opts)
+      connectionManager  <- makeConnectionManager(config, connectionProvider)
+    } yield connectionManager
+
   protected def makeRocksDBStore(
       config: RobotConfig,
       opts: RobotOptions
@@ -188,13 +249,19 @@ trait RobotComposition {
     val dbConfig = RocksDBStore.Config.default(
       config.db.path.resolve(opts.nodeIndex.toString)
     )
-    Resource.liftF {
-      Task {
-        Files.createDirectories(dbConfig.path)
+    for {
+      dir <- Resource.liftF {
+        Task {
+          Files.createDirectories(dbConfig.path)
+        }
       }
-    } >>
-      RocksDBStore[Task](dbConfig, RobotNamespaces.all)
+      blocker <- makeDBBlocker
+      db      <- RocksDBStore[Task](dbConfig, RobotNamespaces.all, blocker)
+    } yield db
   }
+
+  protected def makeDBBlocker =
+    Blocker[Task]
 
   protected def makeKVStoreRunner(
       db: RocksDBStore[Task]
@@ -319,8 +386,9 @@ trait RobotComposition {
       viewStateStorage: ViewStateStorage[NS, RobotAgreement],
       stateStorage: KVRingBuffer[NS, Hash, Robot.State]
   )(implicit
-      storeRunner: KVStoreRunner[Task, NS]
-  ) =
+      storeRunner: KVStoreRunner[Task, NS],
+      tracers: RobotTracers[Task]
+  ) = {
     RobotService[Task, NS](
       maxRow = config.model.maxRow,
       maxCol = config.model.maxCol,
@@ -332,6 +400,7 @@ trait RobotComposition {
       simulatedDecisionTime = config.model.simulatedDecisionTime,
       timeout = config.network.timeout
     )
+  }
 
   protected def makeHotstuffService(
       config: RobotConfig,
@@ -346,15 +415,13 @@ trait RobotComposition {
       blockStorage: BlockStorage[NS, RobotAgreement],
       viewStateStorage: ViewStateStorage[NS, RobotAgreement]
   )(implicit
-      storeRunner: KVStoreRunner[Task, NS]
+      storeRunner: KVStoreRunner[Task, NS],
+      consensusTracers: CTS,
+      syncTracers: STS
   ) = {
-    import RobotConsensusTracers._
-    import RobotSyncTracers._
-
     // Round-Robin is more predictable than Hashing.
     implicit val leaderSelection = LeaderSelection.RoundRobin
-
-    implicit val signing = new RobotSigning(genesis.hash)
+    implicit val signing         = new RobotSigning(genesis.hash)
 
     val localNode = config.network.nodes(opts.nodeIndex)
 
