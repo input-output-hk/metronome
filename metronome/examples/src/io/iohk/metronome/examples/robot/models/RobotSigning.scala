@@ -7,6 +7,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.{
   QuorumCertificate,
   Secp256k1Signing
 }
+import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 
 class RobotSigning(
     genesisHash: RobotAgreement.Hash
@@ -22,7 +23,7 @@ class RobotSigning(
     */
   override def validate(
       federation: Federation[RobotAgreement.PKey],
-      quorumCertificate: QuorumCertificate[RobotAgreement]
+      quorumCertificate: QuorumCertificate[RobotAgreement, VotingPhase]
   ): Boolean =
     if (quorumCertificate.blockHash == genesisHash) {
       quorumCertificate.signature.sig.isEmpty

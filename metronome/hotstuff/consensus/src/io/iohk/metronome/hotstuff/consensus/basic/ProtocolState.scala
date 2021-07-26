@@ -42,11 +42,11 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     signingKey: A#SKey,
     federation: Federation[A#PKey],
     // Highest QC for which a replica voted Pre-Commit, because it received a Prepare Q.C. from the leader.
-    prepareQC: QuorumCertificate[A],
+    prepareQC: QuorumCertificate[A, Phase.Prepare],
     // Locked QC, for which a replica voted Commit, because it received a Pre-Commit Q.C. from leader.
-    lockedQC: QuorumCertificate[A],
+    lockedQC: QuorumCertificate[A, Phase.PreCommit],
     // Commit QC, which a replica received in the Decide phase, and then executed the block in it.
-    commitQC: QuorumCertificate[A],
+    commitQC: QuorumCertificate[A, Phase.Commit],
     // The block the federation is currently voting on.
     preparedBlock: A#Block,
     // Timeout for the view, so that it can be adjusted next time if necessary.
@@ -222,7 +222,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
                 SaveBlock(preparedBlock)
               )
               val next = moveTo(Phase.Commit).copy(
-                prepareQC = m.quorumCertificate
+                prepareQC = m.quorumCertificate.coerce[Phase.Prepare]
               )
               next -> effects
             }
@@ -238,7 +238,7 @@ case class ProtocolState[A <: Agreement: Block: Signing](
                 sendVote(Phase.Commit, m.quorumCertificate.blockHash)
               )
               val next = moveTo(Phase.Decide).copy(
-                lockedQC = m.quorumCertificate
+                lockedQC = m.quorumCertificate.coerce[Phase.PreCommit]
               )
               next -> effects
             }
@@ -252,12 +252,14 @@ case class ProtocolState[A <: Agreement: Block: Signing](
             handleQuorum(e, Phase.Commit) { m =>
               handleNextView(NextView(viewNumber)) match {
                 case (next, effects) =>
+                  val commitQC = m.quorumCertificate.coerce[Phase.Commit]
+
                   val withExec = ExecuteBlocks(
                     lastExecutedBlockHash,
-                    m.quorumCertificate
+                    commitQC
                   ) +: effects
 
-                  val withLast = next.copy(commitQC = m.quorumCertificate)
+                  val withLast = next.copy(commitQC = commitQC)
 
                   withLast -> withExec
               }
@@ -417,7 +419,10 @@ case class ProtocolState[A <: Agreement: Block: Signing](
     * which means each leader is expected to create max 1 block
     * on top of the previous high Q.C.
     */
-  private def isExtension(block: A#Block, qc: QuorumCertificate[A]): Boolean =
+  private def isExtension(
+      block: A#Block,
+      qc: QuorumCertificate[A, _]
+  ): Boolean =
     qc.blockHash == Block[A].parentBlockHash(block)
 
   /** Register a new vote; if there are enough to form a new Q.C.,

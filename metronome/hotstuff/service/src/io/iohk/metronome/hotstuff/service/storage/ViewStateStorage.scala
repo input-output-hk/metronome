@@ -5,10 +5,12 @@ import io.iohk.metronome.hotstuff.consensus.ViewNumber
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
   QuorumCertificate,
-  Phase
+  Phase,
+  VotingPhase
 }
 import io.iohk.metronome.storage.{KVStore, KVStoreRead}
-import scodec.{Codec, Encoder, Decoder}
+import scodec.{Codec, Encoder, Decoder, Attempt, Err}
+import scala.reflect.ClassTag
 
 class ViewStateStorage[N, A <: Agreement] private (
     namespace: N
@@ -17,7 +19,9 @@ class ViewStateStorage[N, A <: Agreement] private (
     kvn: KVStore.Ops[N],
     kvrn: KVStoreRead.Ops[N],
     codecVN: Codec[ViewNumber],
-    codecQC: Codec[QuorumCertificate[A]],
+    codecQCP: Codec[QuorumCertificate[A, Phase.Prepare]],
+    codecQCPC: Codec[QuorumCertificate[A, Phase.PreCommit]],
+    codecQCC: Codec[QuorumCertificate[A, Phase.Commit]],
     codecH: Codec[A#Hash]
 ) {
   import keys.Key
@@ -35,14 +39,14 @@ class ViewStateStorage[N, A <: Agreement] private (
   def setViewNumber(viewNumber: ViewNumber): KVStore[N, Unit] =
     put(Key.ViewNumber, viewNumber)
 
-  def setQuorumCertificate(qc: QuorumCertificate[A]): KVStore[N, Unit] =
+  def setQuorumCertificate(qc: QuorumCertificate[A, _]): KVStore[N, Unit] =
     qc.phase match {
       case Phase.Prepare =>
-        put(Key.PrepareQC, qc)
+        put(Key.PrepareQC, qc.coerce[Phase.Prepare])
       case Phase.PreCommit =>
-        put(Key.LockedQC, qc)
+        put(Key.LockedQC, qc.coerce[Phase.PreCommit])
       case Phase.Commit =>
-        put(Key.CommitQC, qc)
+        put(Key.CommitQC, qc.coerce[Phase.Commit])
     }
 
   def setLastExecutedBlockHash(blockHash: A#Hash): KVStore[N, Unit] =
@@ -87,9 +91,9 @@ object ViewStateStorage {
     sealed abstract class Key[V](private val code: Int)
     object Key {
       case object ViewNumber            extends Key[ViewNumber](0)
-      case object PrepareQC             extends Key[QuorumCertificate[A]](1)
-      case object LockedQC              extends Key[QuorumCertificate[A]](2)
-      case object CommitQC              extends Key[QuorumCertificate[A]](3)
+      case object PrepareQC             extends Key[QuorumCertificate[A, Phase.Prepare]](1)
+      case object LockedQC              extends Key[QuorumCertificate[A, Phase.PreCommit]](2)
+      case object CommitQC              extends Key[QuorumCertificate[A, Phase.Commit]](3)
       case object LastExecutedBlockHash extends Key[A#Hash](4)
       case object RootBlockHash         extends Key[A#Hash](5)
 
@@ -106,32 +110,48 @@ object ViewStateStorage {
     */
   case class Bundle[A <: Agreement](
       viewNumber: ViewNumber,
-      prepareQC: QuorumCertificate[A],
-      lockedQC: QuorumCertificate[A],
-      commitQC: QuorumCertificate[A],
+      prepareQC: QuorumCertificate[A, Phase.Prepare],
+      lockedQC: QuorumCertificate[A, Phase.PreCommit],
+      commitQC: QuorumCertificate[A, Phase.Commit],
       lastExecutedBlockHash: A#Hash,
       rootBlockHash: A#Hash
-  ) {
-    assert(prepareQC.phase == Phase.Prepare)
-    assert(lockedQC.phase == Phase.PreCommit)
-    assert(commitQC.phase == Phase.Commit)
-  }
+  )
+
   object Bundle {
 
     /** Convenience method reflecting the expectation that the signature
       * in the genesis Q.C. will not depend on the phase, just the genesis
       * hash.
       */
-    def fromGenesisQC[A <: Agreement](genesisQC: QuorumCertificate[A]) =
+    def fromGenesisQC[A <: Agreement](genesisQC: QuorumCertificate[A, _]) =
       Bundle[A](
         viewNumber = genesisQC.viewNumber,
-        prepareQC = genesisQC.copy[A](phase = Phase.Prepare),
-        lockedQC = genesisQC.copy[A](phase = Phase.PreCommit),
-        commitQC = genesisQC.copy[A](phase = Phase.Commit),
+        prepareQC = genesisQC.copy[A, Phase.Prepare](phase = Phase.Prepare),
+        lockedQC = genesisQC.copy[A, Phase.PreCommit](phase = Phase.PreCommit),
+        commitQC = genesisQC.copy[A, Phase.Commit](phase = Phase.Commit),
         lastExecutedBlockHash = genesisQC.blockHash,
         rootBlockHash = genesisQC.blockHash
       )
   }
+
+  private implicit def codecQCP[A <: Agreement, P <: VotingPhase](implicit
+      ev: Codec[QuorumCertificate[A, VotingPhase]],
+      ct: ClassTag[P]
+  ) = ev.exmap[QuorumCertificate[A, P]](
+    qc =>
+      ct.unapply(qc.phase)
+        .map { _ =>
+          Attempt.successful(qc.coerce[P])
+        }
+        .getOrElse {
+          Attempt.failure(
+            Err(
+              s"Invalid phase in view state storage: ${qc.phase}, expected ${ct.runtimeClass.getSimpleName}"
+            )
+          )
+        },
+    qc => Attempt.successful(qc)
+  )
 
   /** Create a ViewStateStorage instance by pre-loading it with the genesis,
     * unless it already has data.
@@ -141,7 +161,7 @@ object ViewStateStorage {
       genesis: Bundle[A]
   )(implicit
       codecVN: Codec[ViewNumber],
-      codecQC: Codec[QuorumCertificate[A]],
+      codecQC: Codec[QuorumCertificate[A, VotingPhase]],
       codecH: Codec[A#Hash]
   ): KVStore[N, ViewStateStorage[N, A]] = {
     implicit val kvn  = KVStore.instance[N]

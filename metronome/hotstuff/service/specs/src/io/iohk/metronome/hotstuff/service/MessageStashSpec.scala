@@ -35,7 +35,7 @@ class MessageStashSpec extends AnyFlatSpec with Matchers {
         "Alice",
         Message.NewView(
           ViewNumber(10),
-          QuorumCertificate[TestAgreement](
+          QuorumCertificate[TestAgreement, Phase.Prepare](
             Phase.Prepare,
             ViewNumber(9),
             123,
@@ -63,7 +63,7 @@ class MessageStashSpec extends AnyFlatSpec with Matchers {
         error.event.copy(message =
           Message.NewView(
             ViewNumber(10),
-            QuorumCertificate[TestAgreement](
+            QuorumCertificate[TestAgreement, Phase.Prepare](
               Phase.Prepare,
               ViewNumber(8),
               122,

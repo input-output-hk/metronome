@@ -23,7 +23,7 @@ import io.iohk.metronome.checkpointing.service.storage.LedgerStorageProps.{
   neverUsedCodec,
   Namespace => LedgerNamespace
 }
-import io.iohk.metronome.hotstuff.consensus.basic.Phase.Commit
+import io.iohk.metronome.hotstuff.consensus.basic.Phase
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
 import io.iohk.metronome.hotstuff.service.storage.BlockStorage
 import io.iohk.metronome.hotstuff.service.storage.BlockStorageProps.{
@@ -44,6 +44,7 @@ import org.scalacheck.{Gen, Prop, Properties}
 
 import scala.concurrent.duration._
 import scala.util.Random
+import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 
 /** Props for Checkpointing service
   *
@@ -70,7 +71,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
       initialBlock: Block,
       initialLedger: Ledger,
       batch: List[Block],
-      commitQC: QuorumCertificate[CheckpointingAgreement],
+      commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit],
       randomSeed: Long
   ) {
     val resources: Resource[Task, TestResources] = {
@@ -198,9 +199,12 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
 
     def genCommitQC(
         block: Block
-    ): Gen[QuorumCertificate[CheckpointingAgreement]] =
-      arbitrary[QuorumCertificate[CheckpointingAgreement]].map {
-        _.copy[CheckpointingAgreement](phase = Commit, blockHash = block.hash)
+    ): Gen[QuorumCertificate[CheckpointingAgreement, Phase.Commit]] =
+      arbitrary[QuorumCertificate[CheckpointingAgreement, VotingPhase]].map {
+        _.copy[CheckpointingAgreement, Phase.Commit](
+          phase = Phase.Commit,
+          blockHash = block.hash
+        )
       }
   }
 

@@ -10,7 +10,7 @@ import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.models.{RobotBlock, Robot}
 import io.iohk.metronome.examples.robot.service.messages.RobotMessage
 import io.iohk.metronome.examples.robot.service.tracing.RobotTracers
-import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
+import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.ApplicationService
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
@@ -38,7 +38,7 @@ class RobotService[F[_]: Sync: Timer, N](
 
   /** Make a random valid move on top of the last block. */
   override def createBlock(
-      highQC: QuorumCertificate[RobotAgreement]
+      highQC: QuorumCertificate[RobotAgreement, Phase.Prepare]
   ): F[Option[RobotBlock]] = {
     val parentState = for {
       parent <- OptionT {
@@ -146,7 +146,7 @@ class RobotService[F[_]: Sync: Timer, N](
   /** Execute the next block in the queue, store the resulting state. */
   override def executeBlock(
       block: RobotBlock,
-      commitQC: QuorumCertificate[RobotAgreement],
+      commitQC: QuorumCertificate[RobotAgreement, Phase.Commit],
       commitPath: NonEmptyList[RobotAgreement.Hash]
   ): F[Boolean] =
     projectState(block.parentHash).flatMap {

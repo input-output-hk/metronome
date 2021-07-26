@@ -101,14 +101,14 @@ object ArbitraryInstances
     }
 
   implicit val arbQuorumCertificate
-      : Arbitrary[QuorumCertificate[CheckpointingAgreement]] =
+      : Arbitrary[QuorumCertificate[CheckpointingAgreement, VotingPhase]] =
     Arbitrary {
       for {
         phase      <- arbitrary[VotingPhase]
         viewNumber <- arbitrary[ViewNumber]
         blockHash  <- arbitrary[Block.Header.Hash]
         signature  <- arbitrary[CheckpointingAgreement.GSig]
-      } yield QuorumCertificate[CheckpointingAgreement](
+      } yield QuorumCertificate[CheckpointingAgreement, VotingPhase](
         phase,
         viewNumber,
         blockHash,
@@ -132,7 +132,7 @@ object ArbitraryInstances
 
         viewNumber <- Gen.posNum[Long].map(x => ViewNumber(x + n))
         signature  <- arbitrary[CheckpointingAgreement.GSig]
-        commitQC = QuorumCertificate[CheckpointingAgreement](
+        commitQC = QuorumCertificate[CheckpointingAgreement, Phase.Commit](
           phase = Phase.Commit,
           viewNumber = viewNumber,
           blockHash = headers.head.hash,

@@ -339,7 +339,7 @@ trait RobotComposition {
   protected def makeViewStateStorage(genesis: RobotBlock)(implicit
       storeRunner: KVStoreRunner[Task, NS]
   ) = Resource.liftF {
-    val genesisQC = QuorumCertificate[RobotAgreement](
+    val genesisQC = QuorumCertificate[RobotAgreement, Phase.Prepare](
       phase = Phase.Prepare,
       viewNumber = ViewNumber(0),
       blockHash = genesis.hash,
