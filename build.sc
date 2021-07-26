@@ -28,9 +28,10 @@ object VersionOf {
   val slf4j                = "1.7.30"
   val `scodec-core`        = "1.11.7"
   val `scodec-bits`        = "1.1.12"
+  val scopt                = "4.0.1"
 }
 
-// Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deperaction
+// Using 2.12.13 instead of 2.12.10 to access @nowarn, to disable certain deprecation
 // warnings that come up in 2.13 but are too awkward to work around.
 object metronome extends Cross[MetronomeModule]("2.12.13", "2.13.4")
 
@@ -238,10 +239,13 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
   /** General configuration parser, to be used by application modules. */
   object config extends SubModule with Publishing {
+    override val description = "Typesafe config wrapper powered by circe"
+
     override def ivyDeps = super.ivyDeps() ++ Agg(
       ivy"com.typesafe:config:${VersionOf.config}",
       ivy"io.circe::circe-core:${VersionOf.circe}",
-      ivy"io.circe::circe-parser:${VersionOf.circe}"
+      ivy"io.circe::circe-parser:${VersionOf.circe}",
+      ivy"io.circe::circe-generic:${VersionOf.circe}"
     )
 
     object specs extends SpecsModule {
@@ -249,8 +253,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         ivy"io.circe::circe-generic:${VersionOf.circe}"
       )
     }
-
-    override def description = "Typesafe config wrapper powered by circe"
   }
 
   /** Generic HotStuff BFT library. */
@@ -431,5 +433,29 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         ivy"io.monix::monix:${VersionOf.monix}"
       )
     }
+  }
+
+  /** Demo applications over example agreements. */
+  object examples extends SubModule {
+    override def moduleDeps: Seq[JavaModule] =
+      Seq(
+        hotstuff.service,
+        config,
+        logging,
+        networking,
+        rocksdb
+      )
+
+    override def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"com.github.scopt::scopt:${VersionOf.scopt}",
+      ivy"ch.qos.logback:logback-classic:${VersionOf.logback}"
+    )
+
+    /** Entry point for the robot example. */
+    def robot(args: String*) = T.command {
+      super.runMain("io.iohk.metronome.examples.robot.app.RobotApp", args: _*)
+    }
+
+    object specs extends SpecsModule
   }
 }
