@@ -3,7 +3,9 @@ package io.iohk.metronome.examples.robot.app
 import cats.implicits._
 import cats.effect.Resource
 import io.iohk.metronome.crypto.ECKeyPair
+import io.iohk.metronome.hotstuff.consensus.basic.Phase
 import io.iohk.metronome.hotstuff.service.tracing.ConsensusEvent
+import io.iohk.metronome.examples.robot.RobotAgreement
 import io.iohk.metronome.examples.robot.app.config.{
   RobotConfig,
   RobotConfigParser,
@@ -16,23 +18,26 @@ import monix.execution.schedulers.TestScheduler
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.compatible.Assertion
 import scala.concurrent.duration._
-import org.scalatest.Inspectors
 import org.scalatest.matchers.should.Matchers
-import scala.reflect.ClassTag
+import org.scalatest.Inspectors
 
 /** Set up an in-memory federation with simulated network stack and elapsed time. */
-class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
+class RobotIntegrationSpec extends AnyFlatSpec with Matchers with Inspectors {
   import RobotIntegrationSpec._
+  import RobotTestConnectionManager.{Dispatcher, Delay, Loss}
 
   def test(fixture: Fixture): Assertion = {
     implicit val scheduler = fixture.scheduler
 
-    // Without an extra delay, the `TestScheduler` executes tasks immediately.
-    val fut = fixture.resources.use { envs =>
-      fixture.test(envs).delayExecution(0.second)
+    val fut = fixture.resources.use { case (dispatcher, envs) =>
+      // Without an extra delay, the `TestScheduler` executes tasks immediately.
+      fixture.test(dispatcher, envs).delayExecution(0.second)
     }.runToFuture
 
     scheduler.tick(fixture.duration)
+
+    // Check that no fiber raised an unhandled error.
+    scheduler.state.lastReportedError shouldBe null
 
     fut.value.getOrElse(sys.error("The test hasn't finished")).get
   }
@@ -49,29 +54,114 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
       }
   }
 
-  def eventCount[A: ClassTag](events: Vector[_]): Int =
-    events.collect { case e: A =>
-      e
-    }.size
-
-  behavior of "RobotComposition"
+  behavior of "RobotAgreement"
 
   it should "compose components that can run and stay in sync" in test {
-    new Fixture(10.minutes) {
-      // Wait with the test result to keep the resources working.
-      override def test(envs: List[RobotTestComposition.Env]) =
+    // This is a happy scenario, all nodes starting at the same time and
+    // running flawlessly, so we should see consensus very quickly.
+    new Fixture(
+      1.minutes,
+      networkDelay = Delay(min = 50.millis, max = 500.millis),
+      networkLoss = Loss(0.01)
+    ) {
+      override def test(
+          dispatcher: Dispatcher,
+          envs: List[RobotTestComposition.Env]
+      ) =
         for {
-          _               <- Task.sleep(duration - 1.minute)
-          logs            <- envs.traverse(_.logTracer.getLogs)
-          consensusEvents <- envs.traverse(_.consensusEventTracer.getEvents)
-          syncEvents      <- envs.traverse(_.syncEventTracer.getEvents)
+          _    <- Task.sleep(duration - 5.seconds)
+          logs <- envs.traverse(_.logTracer.getLogs)
+
+          quourumCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.Quorum[RobotAgreement]]
+          )
+          blockCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.BlockExecuted[RobotAgreement]]
+          )
+
+          lastCommittedBlockHashes <- envs
+            .traverse { env =>
+              env.consensusEventTracer.getEvents.map { events =>
+                events.reverse.collectFirst {
+                  case ConsensusEvent.Quorum(qc) if qc.phase == Phase.Commit =>
+                    qc.blockHash
+                }
+              }
+            }
+            .map(_.flatten)
+
+          lastExecutedBlockHashes <- envs.traverse { env =>
+            env.storages.storeRunner.runReadOnly {
+              env.storages.viewStateStorage.getLastExecutedBlockHash
+            }
+          }
         } yield {
           // printLogs(logs)
-          Inspectors.forAll(consensusEvents) { events =>
-            // Networking isn't yet implemented, so it should just warn about timeouts.
-            eventCount[ConsensusEvent.Timeout](events) should be > 0
-            eventCount[ConsensusEvent.Quorum[_]](events) shouldBe 0
+          all(quourumCounts) should be > 0
+          all(blockCounts) should be > 0
+          // Check that consensus is reasonably close on nodes.
+          lastExecutedBlockHashes.distinct.size should be <= 2
+          lastCommittedBlockHashes.distinct.size should be <= 2
+          // Hopefully someone has executed the last commit as well.
+          forAtLeast(
+            1,
+            lastCommittedBlockHashes
+          ) { lastCommittedBlockHash =>
+            lastExecutedBlockHashes.contains(
+              lastCommittedBlockHash
+            ) shouldBe true
           }
+        }
+    }
+  }
+
+  it should "be able to sync when nodes go offline" in test {
+    // In this scenario, networking is disabled on all nodes in the
+    // beginning, then they are enabled one by one. By the end they
+    // should reconnect and sync with each other.
+    new Fixture(
+      360.seconds,
+      networkDelay = Delay(min = 50.millis, max = 250.millis)
+    ) {
+      val staggerDuration = 30.seconds
+
+      override def test(
+          dispatcher: Dispatcher,
+          envs: List[RobotTestComposition.Env]
+      ) =
+        for {
+          keys <- dispatcher.connectionPublicKeys.map(_.toList)
+          _    <- keys.traverse(dispatcher.disable)
+          // NOTE: keys.traverse doesn't seem to work with the TestScheduler and sleep.
+          _ <- keys.foldLeft(Task.unit) { case (task, key) =>
+            task >> Task.sleep(staggerDuration) >> dispatcher.enable(key)
+          }
+          // Let them sync now.
+          _    <- Task.sleep(duration - 5.seconds - keys.length * staggerDuration)
+          logs <- envs.traverse(_.logTracer.getLogs)
+
+          quourumCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.Quorum[RobotAgreement]]
+          )
+
+          adoptCounts <- envs.traverse(
+            _.consensusEventTracer
+              .count[ConsensusEvent.AdoptView[RobotAgreement]]
+          )
+
+          viewNumbers <- envs.traverse { env =>
+            env.storages.storeRunner.runReadOnly {
+              env.storages.viewStateStorage.getBundle.map(_.viewNumber)
+            }
+          }
+        } yield {
+          // printLogs(logs)
+          all(quourumCounts) should be > 0
+          atLeast(1, adoptCounts) should be > 0
+          viewNumbers.distinct.size should be <= 2
         }
     }
   }
@@ -79,11 +169,23 @@ class RobotIntegrationSpec extends AnyFlatSpec with Matchers {
 
 object RobotIntegrationSpec {
 
-  abstract class Fixture(val duration: FiniteDuration)
-      extends RobotComposition {
+  import RobotTestConnectionManager.{Delay, Loss, Dispatcher}
+
+  abstract class Fixture(
+      // Maximum time to run the simulated test for.
+      // There should be some `Task.sleep` in the `test` to let things unfold
+      // before making assertions, but altogether less sleep than `duration`.
+      val duration: FiniteDuration,
+      networkDelay: Delay = Delay.Zero,
+      networkLoss: Loss = Loss.Zero,
+      nodeCount: Int = 5
+  ) extends RobotComposition {
 
     /** Override to implement the test. */
-    def test(envs: List[RobotTestComposition.Env]): Task[Assertion]
+    def test(
+        dispatcher: Dispatcher,
+        envs: List[RobotTestComposition.Env]
+    ): Task[Assertion]
 
     val scheduler = TestScheduler()
 
@@ -96,9 +198,9 @@ object RobotIntegrationSpec {
             )
           }
         }
-        // Use 5 nodes in integration testing.
+        // Just generate new keys, ignore what's in the default configuration.
         rnd  = new java.security.SecureRandom()
-        keys = List.fill(5)(ECKeyPair.generate(rnd))
+        keys = List.fill(nodeCount)(ECKeyPair.generate(rnd))
 
         tmpdir <- Resource.liftF(Task {
           val tmp = Files.createTempDirectory("robot-testdb")
@@ -126,15 +228,20 @@ object RobotIntegrationSpec {
     val resources =
       for {
         config <- config
-
+        dispatcher <- Resource.liftF {
+          Dispatcher(networkDelay, networkLoss)
+        }
         nodeEnvs <- (0 until config.network.nodes.size).toList.map { i =>
           val opts = RobotOptions(nodeIndex = i)
-          val comp = makeComposition(scheduler)
+          val comp = makeComposition(scheduler, dispatcher)
           comp.composeEnv(opts, config)
         }.sequence
-      } yield nodeEnvs
+      } yield (dispatcher, nodeEnvs)
 
-    def makeComposition(scheduler: TestScheduler) =
-      new RobotTestComposition(scheduler)
+    def makeComposition(
+        scheduler: TestScheduler,
+        dispatcher: RobotTestConnectionManager.Dispatcher
+    ) =
+      new RobotTestComposition(scheduler, dispatcher)
   }
 }
