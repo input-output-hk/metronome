@@ -122,11 +122,16 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def scalacOptions =
         SubModule.this.scalacOptions
 
-      override def testFrameworks =
-        Seq(
-          "org.scalatest.tools.Framework",
-          "org.scalacheck.ScalaCheckFramework"
-        )
+      // Test modules might depend on each other for example to get `Arbitrary` instances.
+      def testModuleDeps: Seq[JavaModule] = Seq.empty
+
+      override def moduleDeps: Seq[JavaModule] =
+        super.moduleDeps ++ testModuleDeps
+    }
+
+    // Since mill 0.9.7 there can be only one `testFramework` per module.
+    trait SpecsModule extends TestModule {
+      override def testFramework = "org.scalatest.tools.Framework"
 
       // It may be useful to see logs in tests.
       override def moduleDeps: Seq[JavaModule] =
@@ -137,17 +142,25 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       // Alternatively, capture logs in memory with `InMemoryLogTracer`.
       override def ivyDeps = Agg(
         ivy"org.scalatest::scalatest:${VersionOf.scalatest}",
-        ivy"org.scalacheck::scalacheck:${VersionOf.scalacheck}",
         ivy"ch.qos.logback:logback-classic:${VersionOf.logback}"
       )
 
       def single(args: String*) = T.command {
-        // ScalaCheck test
-        if (args.headOption.exists(_.endsWith("Props")))
-          super.runMain(args.head, args.tail: _*)
         // ScalaTest test
-        else
-          super.runMain("org.scalatest.run", args: _*)
+        super.runMain("org.scalatest.run", args: _*)
+      }
+    }
+
+    trait PropsModule extends TestModule {
+      override def testFramework = "org.scalacheck.ScalaCheckFramework"
+
+      override def ivyDeps = Agg(
+        ivy"org.scalacheck::scalacheck:${VersionOf.scalacheck}"
+      )
+
+      def single(args: String*) = T.command {
+        // ScalaCheck test
+        super.runMain(args.head, args.tail: _*)
       }
     }
   }
@@ -162,7 +175,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"io.monix::monix:${VersionOf.monix}"
     )
 
-    object test extends TestModule
+    object specs extends SpecsModule
   }
 
   /** Storage abstractions, e.g. a generic key-value store. */
@@ -173,7 +186,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.scodec::scodec-core:${VersionOf.`scodec-core`}"
     )
 
-    object test extends TestModule
+    object specs extends SpecsModule
   }
 
   /** Emit trace events, abstracting away logs and metrics.
@@ -203,7 +216,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.scodec::scodec-core:${VersionOf.`scodec-core`}"
     )
 
-    object test extends TestModule
+    object specs extends SpecsModule
   }
 
   /** Generic Peer-to-Peer components that can multiplex protocols
@@ -220,10 +233,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"io.iohk::scalanet:${VersionOf.scalanet}"
     )
 
-    object test extends TestModule {
-      override def moduleDeps: Seq[JavaModule] =
-        super.moduleDeps ++ Seq(logging)
-    }
+    object specs extends SpecsModule
   }
 
   /** General configuration parser, to be used by application modules. */
@@ -234,7 +244,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"io.circe::circe-parser:${VersionOf.circe}"
     )
 
-    object test extends TestModule {
+    object specs extends SpecsModule {
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"io.circe::circe-generic:${VersionOf.circe}"
       )
@@ -254,7 +264,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[PublishModule] =
         Seq(core, crypto)
 
-      object test extends TestModule
+      object props extends PropsModule
+      object specs extends SpecsModule
     }
 
     /** Expose forensics events via tracing. */
@@ -275,10 +286,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           hotstuff.forensics
         )
 
-      object test extends TestModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(hotstuff.consensus.test)
+      object props extends PropsModule {
+        override def testModuleDeps = Seq(hotstuff.consensus.props)
       }
+      object specs extends SpecsModule
     }
   }
 
@@ -300,9 +311,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[PublishModule] =
         Seq(core, crypto, hotstuff.consensus)
 
-      object test extends TestModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(hotstuff.consensus.test)
+      object props extends PropsModule {
+        override def testModuleDeps = Seq(hotstuff.consensus.props)
+      }
+      object specs extends SpecsModule {
+        override def testModuleDeps = Seq(checkpointing.models.props)
       }
     }
 
@@ -321,10 +334,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       override def moduleDeps: Seq[PublishModule] =
         Seq(tracing, crypto, networking, checkpointing.models)
 
-      object test extends TestModule {
-        override def moduleDeps: Seq[JavaModule] =
-          super.moduleDeps ++ Seq(checkpointing.models.test)
+      object props extends PropsModule {
+        override def testModuleDeps = Seq(checkpointing.models.props)
       }
+      object specs extends SpecsModule
     }
 
     /** Implements the checkpointing functionality, validation rules,
@@ -345,12 +358,15 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
           checkpointing.interpreter
         )
 
-      object test extends TestModule {
+      object props extends PropsModule {
         override def moduleDeps: Seq[JavaModule] =
           super.moduleDeps ++ Seq(
-            checkpointing.models.test,
-            hotstuff.service.test
+            checkpointing.models.props,
+            hotstuff.service.props
           )
+      }
+      object specs extends SpecsModule {
+        override def testModuleDeps = Seq(checkpointing.models.props)
       }
     }
 
@@ -372,8 +388,6 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         ivy"ch.qos.logback:logback-classic:${VersionOf.logback}",
         ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}"
       )
-
-      object test extends TestModule
     }
   }
 
@@ -412,7 +426,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       ivy"org.rocksdb:rocksdbjni:${VersionOf.rocksdb}"
     )
 
-    object test extends TestModule {
+    object props extends PropsModule {
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"io.monix::monix:${VersionOf.monix}"
       )

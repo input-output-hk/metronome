@@ -55,10 +55,11 @@ mill __.test
 mill --watch metronome[2.13.4].rocksdb.test
 ```
 
-To run a single test class, use the `.single` method with the full path to the spec:
+To run a single test class, use the `.single` method with the full path to the spec. Note that `ScalaTest` tests are in the `specs` subdirectories while `ScalaCheck` ones are in `props`.
 
 ```console
-mill __.storage.test.single io.iohk.metronome.storage.KVStoreStateSpec
+mill __.storage.specs.single io.iohk.metronome.storage.KVStoreStateSpec
+mill __.hotstuff.consensus.props.single io.iohk.metronome.hotstuff.consensus.basic.ProtocolStateProps
 ```
 
 To experiment with the code, start an interactive session:
@@ -66,6 +67,12 @@ To experiment with the code, start an interactive session:
 ```console
 mill -i metronome[2.13.4].hotstuff.consensus.console
 ```
+
+### Versions
+
+You will need Java 11 to build.
+
+The `mill` version is set in the `.mill-version` file or the `MILL_VERSION` env var. To build with Nix in sandbox environment, it's best to make sure that the build works with the version that Nix comes with, because after [this update](https://github.com/NixOS/nixpkgs/pull/130823) it's not going to dynamically download the one set in the project.
 
 ### Formatting the codebase
 
