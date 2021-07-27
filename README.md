@@ -31,8 +31,14 @@ The BFT service delegates checkpoint proposal and candidate validation to the Ch
 
 When a winner is elected, a Checkpoint Certificate is compiled, comprising the checkpointed data (a block identity, or something more complex) and a witness for the BFT agreement, which proves that the decision is final and cannot be rolled back. Because of the need for this proof, low latency BFT algorithms such as HotStuff are preferred.
 
-
 ## Build
+
+### Requirements
+
+- Mill, a build tool for scala.
+- JDK 11
+
+### Building the project
 
 The project is built using [Mill](https://github.com/com-lihaoyi/mill), which works fine with [Metals](https://scalameta.org/metals/docs/build-tools/mill.html).
 
@@ -55,10 +61,11 @@ mill __.test
 mill --watch metronome[2.13.4].rocksdb.test
 ```
 
-To run a single test class, use the `.single` method with the full path to the spec:
+To run a single test class, use the `.single` method with the full path to the spec. Note that `ScalaTest` tests are in the `specs` subdirectories while `ScalaCheck` ones are in `props`.
 
 ```console
-mill __.storage.test.single io.iohk.metronome.storage.KVStoreStateSpec
+mill __.storage.specs.single io.iohk.metronome.storage.KVStoreStateSpec
+mill __.hotstuff.consensus.props.single io.iohk.metronome.hotstuff.consensus.basic.ProtocolStateProps
 ```
 
 To experiment with the code, start an interactive session:
@@ -66,6 +73,12 @@ To experiment with the code, start an interactive session:
 ```console
 mill -i metronome[2.13.4].hotstuff.consensus.console
 ```
+
+### Versions
+
+You will need Java 11 to build.
+
+The `mill` version is set in the `.mill-version` file or the `MILL_VERSION` env var. To build with Nix in sandbox environment, it's best to make sure that the build works with the version that Nix comes with, because after [this update](https://github.com/NixOS/nixpkgs/pull/130823) it's not going to dynamically download the one set in the project.
 
 ### Formatting the codebase
 
@@ -84,3 +97,29 @@ echo -n "0.1.0-SNAPSHOT" > versionFile/version
 Builds on `develop` will publish the snapshot version to Sonatype, which can be overwritten if the version number is not updated.
 
 During [publishing](https://com-lihaoyi.github.io/mill/page/common-project-layouts.html#publishing) on `master` we will use `mill versionFile.setReleaseVersion` to remove the `-SNAPSHOT` postfix and make a release. After that the version number should be bumped on `develop`, e.g. `mill versionFile.setNextVersion --bump minor`.
+
+## Example Applications
+
+The [examples](./metronome/examples) module contains applications that demonstrate the software at work with simplified consensus use cases.
+
+### Robot
+
+The [robot example](./metronome/examples/src/io/iohk/metronome/examples/robot) is about the federation moving around a fictional robot on the screen.
+Each leader proposes the next command to be carried out by the robot, once consensus is reached. The setup assumes 4 nodes, with at most
+1 Byzantine member.
+
+To test it, start 4 consoles and run commands like the following, `$i` going from 0 to 3:
+
+```shell
+./metronome/examples/robot.sh $i
+```
+
+The detailed logs should be in `~/.metronome/examples/robot/logs/node-$i.log`, e.g.:
+
+```console
+$ tail -f ~/.metronome/examples/robot/logs/node-0.log
+14:03:03.607 ERROR i.i.m.h.s.tracing.ConsensusEvent Error {"message":"Error processing effect SendMessage(ECPublicKey(ByteVector(64 bytes, 0xcb020251d396614a35038dd2ff88fd2f1a5fd74c8bcad4b353fa605405c8b1b8c80ee12d2a10b1fca59424b16890c8115fbc94a68026369acc3c2603595e6387)),NewView(5,QuorumCertificate(Prepare,0,ByteVector(32 bytes, 0xb978b34fc4e905a727065b3e18d941a44a8349d8251514debbee5d6ddb94d430),GroupSignature(List()))))","error":"Connection with node ECPublicKey(ByteVector(64 bytes, 0xcb020251d396614a35038dd2ff88fd2f1a5fd74c8bcad4b353fa605405c8b1b8c80ee12d2a10b1fca59424b16890c8115fbc94a68026369acc3c2603595e6387)), has already closed"}
+14:03:04.736 DEBUG i.i.m.networking.NetworkEvent ConnectionFailed {"key":"23fcab42e8f1078880b27aab4849092489bfa8d3e3b0faa54c9db89e89223c783ec7a3b2f8e6461b27778f78cea261a2272abe31c5601173b2964ef14af897dc","address":"localhost/127.0.0.1:40003","error":"io.iohk.scalanet.peergroup.PeerGroup$ChannelSetupException: Error establishing channel to PeerInfo(BitVector(512 bits, 0x23fcab42e8f1078880b27aab4849092489bfa8d3e3b0faa54c9db89e89223c783ec7a3b2f8e6461b27778f78cea261a2272abe31c5601173b2964ef14af897dc),localhost/127.0.0.1:40003)."}
+```
+
+To clear out everything before a restart, just run `rm -rf ~/.metronome/examples/robot`.

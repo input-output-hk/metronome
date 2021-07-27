@@ -18,26 +18,14 @@ import java.net.InetSocketAddress
 import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 import scala.concurrent.duration.FiniteDuration
 
-class RemoteConnectionManager[F[_]: Sync, K, M: Codec](
-    connectionHandler: ConnectionHandler[F, K, M],
-    localInfo: (K, InetSocketAddress)
-) {
-
-  def getLocalPeerInfo: (K, InetSocketAddress) = localInfo
-
-  def getAcquiredConnections: F[Set[K]] = {
-    connectionHandler.getAllActiveConnections
-  }
-
-  def incomingMessages: Iterant[F, MessageReceived[K, M]] =
-    connectionHandler.incomingMessages
-
+trait RemoteConnectionManager[F[_], K, M] {
+  def getLocalPeerInfo: (K, InetSocketAddress)
+  def getAcquiredConnections: F[Set[K]]
+  def incomingMessages: Iterant[F, MessageReceived[K, M]]
   def sendMessage(
       recipient: K,
       message: M
-  ): F[Either[ConnectionHandler.ConnectionAlreadyClosedException[K], Unit]] = {
-    connectionHandler.sendMessage(recipient, message)
-  }
+  ): F[Either[ConnectionHandler.ConnectionAlreadyClosedException[K], Unit]]
 }
 
 object RemoteConnectionManager {
@@ -281,7 +269,33 @@ object RemoteConnectionManager {
 
     def getIncomingConnectionServerInfo(k: K): Option[InetSocketAddress] =
       serverAddresses.get(k)
+  }
 
+  def apply[F[_]: Sync, K, M: Codec](
+      connectionHandler: ConnectionHandler[F, K, M],
+      localInfo: (K, InetSocketAddress)
+  ): RemoteConnectionManager[F, K, M] = new RemoteConnectionManager[F, K, M] {
+
+    override def getLocalPeerInfo: (K, InetSocketAddress) = localInfo
+
+    override def getAcquiredConnections: F[Set[K]] =
+      connectionHandler.getAllActiveConnections
+
+    override def incomingMessages: Iterant[F, MessageReceived[K, M]] =
+      connectionHandler.incomingMessages
+
+    override def sendMessage(
+        recipient: K,
+        message: M
+    ): F[
+      Either[ConnectionHandler.ConnectionAlreadyClosedException[K], Unit]
+    ] = {
+      if (recipient == localInfo._1) {
+        connectionHandler.receiveMessage(recipient, message).map(_.asRight)
+      } else {
+        connectionHandler.sendMessage(recipient, message)
+      }
+    }
   }
 
   /** Connection manager for static topology cluster. It starts 3 concurrent backgrounds processes:
@@ -353,7 +367,7 @@ object RemoteConnectionManager {
         clusterConfig
       ).background
 
-    } yield new RemoteConnectionManager[F, K, M](
+    } yield RemoteConnectionManager[F, K, M](
       connectionsHandler,
       encryptedConnectionsProvider.localPeerInfo
     )

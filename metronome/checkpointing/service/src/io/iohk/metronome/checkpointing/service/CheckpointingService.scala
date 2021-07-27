@@ -48,7 +48,7 @@ class CheckpointingService[F[_]: Sync, N](
     extends ApplicationService[F, CheckpointingAgreement] {
 
   override def createBlock(
-      highQC: QuorumCertificate[CheckpointingAgreement]
+      highQC: QuorumCertificate[CheckpointingAgreement, Phase.Prepare]
   ): F[Option[Block]] = (
     for {
       parent    <- OptionT(getBlock(highQC.blockHash))
@@ -87,7 +87,7 @@ class CheckpointingService[F[_]: Sync, N](
 
   override def executeBlock(
       block: Block,
-      commitQC: QuorumCertificate[CheckpointingAgreement],
+      commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit],
       commitPath: NonEmptyList[Block.Hash]
   ): F[Boolean] = {
     require(commitQC.phase == Phase.Commit, "Commit QC required")
