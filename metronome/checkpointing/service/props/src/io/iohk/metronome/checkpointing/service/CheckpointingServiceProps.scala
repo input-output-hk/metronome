@@ -5,46 +5,20 @@ import cats.effect.Resource
 import cats.effect.concurrent.Ref
 import cats.implicits._
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
-import io.iohk.metronome.checkpointing.models.Block.{Hash, Header}
 import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
-import io.iohk.metronome.checkpointing.models.{
-  ArbitraryInstances,
-  Block,
-  CheckpointCertificate,
-  Ledger
-}
+import io.iohk.metronome.checkpointing.models._
 import io.iohk.metronome.checkpointing.service.CheckpointingService.{
-  CheckpointData,
   LedgerNode,
   LedgerTree
 }
-import io.iohk.metronome.checkpointing.service.storage.LedgerStorage
-import io.iohk.metronome.checkpointing.service.storage.LedgerStorageProps.{
-  neverUsedCodec,
-  Namespace => LedgerNamespace
-}
 import io.iohk.metronome.hotstuff.consensus.basic.Phase
 import io.iohk.metronome.hotstuff.consensus.basic.QuorumCertificate
-import io.iohk.metronome.hotstuff.service.storage.BlockStorage
-import io.iohk.metronome.hotstuff.service.storage.BlockStorageProps.{
-  Namespace => BlockNamespace
-}
-import io.iohk.metronome.storage.{
-  InMemoryKVStore,
-  KVCollection,
-  KVStoreRunner,
-  KVStoreState,
-  KVTree
-}
 import monix.eval.Task
-import monix.execution.Scheduler
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.{all, classify, forAll, forAllNoShrink, propBoolean}
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.{Gen, Properties}
 
-import scala.concurrent.duration._
 import scala.util.Random
-import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 
 /** Props for Checkpointing service
   *
@@ -55,17 +29,7 @@ import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
   */
 class CheckpointingServiceProps extends Properties("CheckpointingService") {
 
-  type Namespace = String
-
-  case class TestResources(
-      checkpointingService: CheckpointingService[Task, Namespace],
-      ledgerStorage: LedgerStorage[Namespace],
-      blockStorage: BlockStorage[Namespace, CheckpointingAgreement],
-      store: KVStoreRunner[Task, Namespace],
-      ledgerTreeRef: Ref[Task, LedgerTree],
-      checkpointDataRef: Ref[Task, Option[CheckpointData]],
-      lastCheckpointCertRef: Ref[Task, Option[CheckpointCertificate]]
-  )
+  import CheckpointingServiceFixtures._
 
   case class TestFixture(
       initialBlock: Block,
@@ -73,65 +37,29 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
       batch: List[Block],
       commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit],
       randomSeed: Long
-  ) {
-    val resources: Resource[Task, TestResources] = {
-      val ledgerStorage =
-        new LedgerStorage[Namespace](
-          new KVCollection[Namespace, Ledger.Hash, Ledger](
-            LedgerNamespace.Ledgers
-          ),
-          LedgerNamespace.LedgerMeta,
-          maxHistorySize = 10
-        )
+  ) extends BaseFixture {
 
-      val blockStorage = new BlockStorage[Namespace, CheckpointingAgreement](
-        new KVCollection[Namespace, Block.Hash, Block](BlockNamespace.Blocks),
-        new KVCollection[Namespace, Block.Hash, KVTree.NodeMeta[Hash]](
-          BlockNamespace.BlockMetas
-        ),
-        new KVCollection[Namespace, Block.Hash, Set[Block.Hash]](
-          BlockNamespace.BlockToChildren
-        )
-      )
+    class InterpreterClient(
+        val lastCheckpointCertRef: Ref[Task, Option[CheckpointCertificate]]
+    ) extends DefaultMockInterpreterClient {
 
-      implicit val store = InMemoryKVStore[Task, Namespace](
-        Ref.unsafe[Task, KVStoreState[Namespace]#Store](Map.empty)
-      )
+      override def validateBlockBody(
+          blockBody: Block.Body,
+          ledger: Ledger
+      ): Task[Option[Boolean]] = Task.pure(true.some)
 
-      Resource.liftF {
-        for {
-          _ <- store.runReadWrite {
-            ledgerStorage.put(initialLedger.hash, initialLedger) >>
-              blockStorage.put(initialBlock)
-          }
-
-          ledgerTree <- Ref.of[Task, LedgerTree](
-            LedgerTree.root(initialLedger, initialBlock.header)
-          )
-          lastExec <- Ref.of[Task, Header](initialBlock.header)
-          chkpData <- Ref.of[Task, Option[CheckpointData]](None)
-          lastCert <- Ref.of[Task, Option[CheckpointCertificate]](None)
-
-          service = new CheckpointingService[Task, Namespace](
-            ledgerTree,
-            lastExec,
-            chkpData,
-            cc => lastCert.set(cc.some),
-            ledgerStorage,
-            blockStorage
-          )
-
-        } yield TestResources(
-          service,
-          ledgerStorage,
-          blockStorage,
-          store,
-          ledgerTree,
-          chkpData,
-          lastCert
-        )
-      }
+      override def newCheckpointCertificate(
+          checkpointCertificate: CheckpointCertificate
+      ): Task[Unit] =
+        lastCheckpointCertRef.set(checkpointCertificate.some)
     }
+
+    override val interpreterClientResource: Resource[Task, InterpreterClient] =
+      Resource.liftF {
+        Ref[Task]
+          .of(None: Option[CheckpointCertificate])
+          .map(new InterpreterClient(_))
+      }
 
     // not used in the impl so a senseless value
     val commitPath = NonEmptyList.one(initialBlock.header.parentHash)
@@ -159,63 +87,16 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
       for {
         block <- arbitrary[Block]
         ledger = Ledger.empty.update(block.body.transactions)
-        batch    <- genBlockChain(block, ledger, min = minChain)
-        commitQC <- genCommitQC(batch.last)
+        batch    <- genBlockChain(block, ledger, min = minChain, max = 5)
+        commitQC <- genQC(Phase.Commit, batch.last.hash)
         seed     <- Gen.posNum[Long]
       } yield TestFixture(block, ledger, batch, commitQC, seed)
     }
-
-    def genBlockChain(
-        parent: Block,
-        initialLedger: Ledger,
-        min: Int = 1,
-        max: Int = 6
-    ): Gen[List[Block]] = {
-      for {
-        n      <- Gen.choose(min, max)
-        blocks <- Gen.listOfN(n, arbitrary[Block])
-      } yield {
-        def link(
-            parent: Block,
-            prevLedger: Ledger,
-            chain: List[Block]
-        ): List[Block] = chain match {
-          case b :: bs =>
-            val nextLedger = prevLedger.update(b.body.transactions)
-            val header = b.header.copy(
-              parentHash = parent.hash,
-              height = parent.header.height + 1,
-              postStateHash = nextLedger.hash
-            )
-            val linked = Block.makeUnsafe(header, b.body)
-            linked :: link(linked, nextLedger, bs)
-          case Nil =>
-            Nil
-        }
-
-        link(parent, initialLedger, blocks)
-      }
-    }
-
-    def genCommitQC(
-        block: Block
-    ): Gen[QuorumCertificate[CheckpointingAgreement, Phase.Commit]] =
-      arbitrary[QuorumCertificate[CheckpointingAgreement, VotingPhase]].map {
-        _.copy[CheckpointingAgreement, Phase.Commit](
-          phase = Phase.Commit,
-          blockHash = block.hash
-        )
-      }
   }
 
-  def run(fixture: TestFixture)(test: TestResources => Task[Prop]): Prop = {
-    import Scheduler.Implicits.global
-
-    fixture.resources.use(test).runSyncUnsafe(timeout = 5.seconds)
-  }
-
+  // TODO: PM-3107 verify that mempool was filtered
   property("normal execution") = forAll(TestFixture.gen()) { fixture =>
-    run(fixture) { res =>
+    fixture.run { res =>
       import fixture._
       import res._
 
@@ -231,7 +112,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         results         <- execution
         persistedLedger <- ledgerStorageCheck
         ledgerTree      <- ledgerTreeRef.get
-        lastCheckpoint  <- lastCheckpointCertRef.get
+        lastCheckpoint  <- interpreterClient.lastCheckpointCertRef.get
         checkpointData  <- checkpointDataRef.get
       } yield {
         val ledgerTreeUpdated =
@@ -255,7 +136,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
 
   property("interrupted execution") = forAll(TestFixture.gen(minChain = 2)) {
     fixture =>
-      run(fixture) { res =>
+      fixture.run { res =>
         import fixture._
         import res._
 
@@ -267,7 +148,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         for {
           results        <- execution
           ledgerTree     <- ledgerTreeRef.get
-          lastCheckpoint <- lastCheckpointCertRef.get
+          lastCheckpoint <- interpreterClient.lastCheckpointCertRef.get
         } yield {
           val ledgerTreeUpdated =
             batch.init.map(_.hash).forall(ledgerTree.contains)
@@ -284,7 +165,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
 
   property("failed execution - no parent") =
     forAll(TestFixture.gen(minChain = 2)) { fixture =>
-      run(fixture) { res =>
+      fixture.run { res =>
         import fixture._
         import res._
 
@@ -303,7 +184,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
 
   property("failed execution - height below last executed") =
     forAll(TestFixture.gen(minChain = 2)) { fixture =>
-      run(fixture) { res =>
+      fixture.run { res =>
         import fixture._
         import res._
 
@@ -322,11 +203,9 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
       }
     }
 
-  //TODO: Validate transactions PM-3131/3132
-  //      use a mocked interpreter client that always evaluates blocks as valid
   property("parallel validation") = forAll(TestFixture.gen(minChain = 4)) {
     fixture =>
-      run(fixture) { res =>
+      fixture.run { res =>
         import fixture._
         import res._
 
@@ -375,15 +254,13 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
       }
   }
 
-  //TODO: Validate transactions PM-3131/3132
-  //      use a mocked interpreter client that always evaluates blocks as valid
   property("execution parallel to validation") = forAllNoShrink {
     for {
       f   <- TestFixture.gen(minChain = 4)
-      ext <- TestFixture.genBlockChain(f.batch.last, f.finalLedger)
+      ext <- genBlockChain(f.batch.last, f.finalLedger, min = 4, max = 5)
     } yield (f, f.batch ++ ext)
   } { case (fixture, validationBatch) =>
-    run(fixture) { res =>
+    fixture.run { res =>
       import fixture._
       import res._
 
@@ -448,7 +325,7 @@ class CheckpointingServiceProps extends Properties("CheckpointingService") {
         par             <- achievedPar.get
         persistedLedger <- ledgerStorageCheck
         ledgerTree      <- ledgerTreeRef.get
-        lastCheckpoint  <- lastCheckpointCertRef.get
+        lastCheckpoint  <- interpreterClient.lastCheckpointCertRef.get
         checkpointData  <- checkpointDataRef.get
       } yield {
         val validationsAfterExec = validationRes.collect {

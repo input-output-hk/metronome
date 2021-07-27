@@ -59,6 +59,14 @@ object ArbitraryInstances
       )
     }
 
+  implicit val arbMempool: Arbitrary[Mempool] =
+    Arbitrary {
+      for {
+        newCC <- arbitrary[Boolean]
+        pbs   <- arbitrary[Set[Transaction.ProposerBlock]]
+      } yield Mempool(pbs.toVector, newCC)
+    }
+
   implicit val arbLedger: Arbitrary[Ledger] =
     Arbitrary {
       for {
@@ -87,6 +95,9 @@ object ArbitraryInstances
 
   implicit val arbBlockHeader: Arbitrary[Block.Header] =
     Arbitrary(arbitrary[Block].map(_.header))
+
+  implicit val arbBlockBody: Arbitrary[Block.Body] =
+    Arbitrary(arbitrary[Block].map(_.body))
 
   implicit val arbECDSASignature: Arbitrary[ECDSASignature] =
     Arbitrary {
