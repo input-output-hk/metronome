@@ -106,61 +106,65 @@ object CheckpointCertificateProps extends Properties("CheckpointCertificate") {
   def invalidateCertificate(
       c: CheckpointCertificate
   ): Gen[(String, CheckpointCertificate)] =
-    Gen.oneOf(
-      arbitrary[Block.Hash].map { h =>
-        "Invalid block hash" -> c.copy(commitQC =
-          c.commitQC.copy[CheckpointingAgreement, Phase.Commit](blockHash = h)
-        )
-      },
-      arbitrary[ViewNumber].map { vn =>
-        "Invalid view number" -> c.copy(commitQC =
-          c.commitQC.copy[CheckpointingAgreement, Phase.Commit](viewNumber =
-            ViewNumber(c.commitQC.viewNumber + vn)
+    Gen
+      .oneOf(
+        arbitrary[Block.Hash].map { h =>
+          "Invalid block hash" -> c.copy(commitQC =
+            c.commitQC.copy[CheckpointingAgreement, Phase.Commit](blockHash = h)
           )
-        )
-      },
-      Gen.oneOf(c.commitQC.signature.sig).map { s =>
-        "Removed signature" -> c.copy(commitQC =
-          c.commitQC.copy[CheckpointingAgreement, Phase.Commit](signature =
-            c.commitQC.signature.copy(
-              sig = c.commitQC.signature.sig.filterNot(_ == s)
+        },
+        arbitrary[ViewNumber].map { vn =>
+          "Invalid view number" -> c.copy(commitQC =
+            c.commitQC
+              .copy[CheckpointingAgreement, Phase.Commit](viewNumber = vn)
+          )
+        },
+        Gen.oneOf(c.commitQC.signature.sig).map { s =>
+          "Removed signature" -> c.copy(commitQC =
+            c.commitQC.copy[CheckpointingAgreement, Phase.Commit](signature =
+              c.commitQC.signature.copy(
+                sig = c.commitQC.signature.sig.filterNot(_ == s)
+              )
             )
           )
-        )
-      },
-      arbitrary[CheckpointingAgreement.PSig].map { s =>
-        "Replaced signature" -> c.copy(commitQC =
-          c.commitQC.copy[CheckpointingAgreement, Phase.Commit](signature =
-            c.commitQC.signature.copy(
-              sig = s +: c.commitQC.signature.sig.tail
+        },
+        arbitrary[CheckpointingAgreement.PSig].map { s =>
+          "Replaced signature" -> c.copy(commitQC =
+            c.commitQC.copy[CheckpointingAgreement, Phase.Commit](signature =
+              c.commitQC.signature.copy(
+                sig = s +: c.commitQC.signature.sig.tail
+              )
             )
           )
-        )
-      },
-      arbitrary[Transaction.CheckpointCandidate].map { cc =>
-        "Invalid candidate" -> c.copy(checkpoint = cc)
-      },
-      arbitrary[CheckpointCertificate].map { cc =>
-        "Invalid proof" -> c.copy(proof = cc.proof)
-      },
-      for {
-        hs0 <- Gen.const(c.headers.toList)
-        if hs0.size > 1
-        seed <- arbitrary[Int]
-        hs1 = new Random(seed).shuffle(hs0)
-        if hs1 != hs0
-      } yield "Shuffled headers" -> c.copy(headers =
-        NonEmptyList.fromListUnsafe(hs1)
-      ),
-      Gen.nonEmptyListOf(arbitrary[Block.Header]).map { bs =>
-        "Prefixed headers" ->
-          c.copy(headers = NonEmptyList.fromListUnsafe(bs ++ c.headers.toList))
-      },
-      Gen.nonEmptyListOf(arbitrary[Block.Header]).map { bs =>
-        "Postfixed headers" ->
-          c.copy(headers = NonEmptyList.fromListUnsafe(c.headers.toList ++ bs))
-      }
-    )
+        },
+        arbitrary[Transaction.CheckpointCandidate].map { cc =>
+          "Invalid candidate" -> c.copy(checkpoint = cc)
+        },
+        arbitrary[CheckpointCertificate].map { cc =>
+          "Invalid proof" -> c.copy(proof = cc.proof)
+        },
+        Gen.nonEmptyListOf(arbitrary[Block.Header]).map { bs =>
+          "Prefixed headers" ->
+            c.copy(headers =
+              NonEmptyList.fromListUnsafe(bs ++ c.headers.toList)
+            )
+        },
+        Gen.nonEmptyListOf(arbitrary[Block.Header]).map { bs =>
+          "Postfixed headers" ->
+            c.copy(headers =
+              NonEmptyList.fromListUnsafe(c.headers.toList ++ bs)
+            )
+        },
+        for {
+          hs0 <- Gen.const(c.headers.toList)
+          if hs0.size > 1
+          seed <- arbitrary[Int]
+          hs1 = new Random(seed).shuffle(hs0)
+          if hs1 != hs0
+        } yield "Shuffled headers" -> c
+          .copy(headers = NonEmptyList.fromListUnsafe(hs1))
+      )
+      .suchThat({ case (_, c1) => c1 != c })
 
   property("validate - reject random") = forAll {
     (
