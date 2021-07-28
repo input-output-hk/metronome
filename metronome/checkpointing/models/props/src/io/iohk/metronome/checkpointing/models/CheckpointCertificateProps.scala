@@ -27,7 +27,7 @@ object CheckpointCertificateProps extends Properties("CheckpointCertificate") {
 
   // Testing with real signatures is rather slow.
   override def overrideParameters(p: Test.Parameters): Test.Parameters =
-    p.withMinSuccessfulTests(20)
+    p.withMinSuccessfulTests(25)
 
   implicit val genFederation: Gen[
     (

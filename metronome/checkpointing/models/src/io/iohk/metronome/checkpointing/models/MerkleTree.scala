@@ -117,6 +117,9 @@ object MerkleTree {
       }
     }
 
+    val maxLeafIndex = (1 << proof.siblingPath.length) - 1
+
+    proof.leafIndex <= maxLeafIndex &&
     verify(leaf, 1, proof.siblingPath) == root
   }
 
