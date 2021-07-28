@@ -87,7 +87,7 @@ object CheckpointCertificate {
       _ <- check("The Merkle proof is invalid.") {
         MerkleTree.verifyProof(
           certificate.proof,
-          root = certificate.headers.last.contentMerkleRoot,
+          root = certificate.headers.head.contentMerkleRoot,
           leaf = MerkleTree.Hash(certificate.checkpoint.hash)
         )
       }
