@@ -56,6 +56,14 @@ object CheckpointCertificateProps extends Properties("CheckpointCertificate") {
         ).map(ByteVector(_)).reduce(_ ++ _)
     )
 
+  /** Extends a chain of blocks `n` more times.
+    *
+    * The `ancestors` are ordered so that the `head` is the most recent block,
+    * the one which should be used as the parent for the extension.
+    *
+    * The return value is reversed so the oldest block is the `head` and the tip is the `last` item.
+    * This can be used to put into the `CheckpointCertificate` in the same order.
+    */
   def buildChain(
       n: Int,
       parentLedger: Ledger,
