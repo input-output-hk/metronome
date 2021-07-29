@@ -45,6 +45,8 @@ object CheckpointCertificate {
       commitQC: QuorumCertificate[CheckpointingAgreement, Phase.Commit]
   ): Option[CheckpointCertificate] = {
     assert(block.hash == headers.head.hash)
+    assert(commitQC.blockHash == headers.last.hash)
+
     constructProof(block).map { case (proof, cp) =>
       CheckpointCertificate(headers, cp, proof, commitQC)
     }
