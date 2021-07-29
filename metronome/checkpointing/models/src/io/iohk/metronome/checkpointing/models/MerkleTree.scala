@@ -117,6 +117,9 @@ object MerkleTree {
       }
     }
 
+    // This is required so for example on a single element tree a `Proof(4, Nil)` is not accepted, only `Proof(0, Nil)`,
+    // otherwise it would make the `CheckpointCertificate` malleable by adding arbitrarily large leaf indexes,
+    // as long as the LSB side that the verification uses is correct.
     val maxLeafIndex = (1 << proof.siblingPath.length) - 1
 
     proof.leafIndex <= maxLeafIndex &&
