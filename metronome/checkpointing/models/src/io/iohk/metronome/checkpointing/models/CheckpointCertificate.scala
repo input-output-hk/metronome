@@ -63,36 +63,26 @@ object CheckpointCertificate {
   )(implicit
       signing: Signing[CheckpointingAgreement]
   ): Either[String, Validated[Transaction.CheckpointCandidate]] = {
-    def check(
-        message: String
-    )(cond: Boolean): Either[String, Unit] =
-      Either.cond(cond, (), message)
-
+    val hs = certificate.headers
     for {
-      _ <- check(
+      _ <- hs.toList.zip(hs.tail).forall { case (parent, child) =>
+        parent.hash == child.parentHash
+      } orError
         "The headers do not correspond to a chain of parent-child blocks."
-      ) {
-        certificate.headers.toList.zip(certificate.headers.tail).forall {
-          case (parent, child) =>
-            parent.hash == child.parentHash
-        }
-      }
 
-      _ <- check("The Commit Q.C. is not about the last block in the chain.") {
-        certificate.commitQC.blockHash == certificate.headers.last.hash
-      }
+      _ <- (certificate.commitQC.blockHash == hs.last.hash) orError
+        "The Commit Q.C. is not about the last block in the chain."
 
-      _ <- check("The Commit Q.C. is invalid.") {
-        signing.validate(federation, certificate.commitQC)
-      }
+      _ <- signing.validate(federation, certificate.commitQC) orError
+        "The Commit Q.C. is invalid."
 
-      _ <- check("The Merkle proof is invalid.") {
-        MerkleTree.verifyProof(
-          certificate.proof,
-          root = certificate.headers.head.contentMerkleRoot,
-          leaf = MerkleTree.Hash(certificate.checkpoint.hash)
-        )
-      }
+      _ <- MerkleTree.verifyProof(
+        certificate.proof,
+        root = hs.head.contentMerkleRoot,
+        leaf = MerkleTree.Hash(certificate.checkpoint.hash)
+      ) orError
+        "The Merkle proof is invalid."
+
     } yield Validated[Transaction.CheckpointCandidate](certificate.checkpoint)
   }
 
@@ -107,4 +97,9 @@ object CheckpointCertificate {
         val cpHash = MerkleTree.Hash(cp.hash)
         MerkleTree.generateProofFromHash(tree, cpHash).map(_ -> cp)
     }.flatten
+
+  private implicit class BoolOps(val test: Boolean) extends AnyVal {
+    def orError(error: String): Either[String, Unit] =
+      Either.cond(test, (), error)
+  }
 }
