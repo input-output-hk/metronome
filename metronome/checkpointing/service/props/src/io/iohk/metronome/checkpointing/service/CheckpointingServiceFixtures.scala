@@ -103,7 +103,8 @@ object CheckpointingServiceFixtures {
 
     def config: CheckpointingService.Config = CheckpointingService.Config(
       expectCheckpointCandidateNotifications = true,
-      interpreterTimeout = 10.seconds
+      interpreterTimeout = 10.seconds,
+      networkTimeout = 5.seconds
     )
 
     type InterpreterClient <: InterpreterRPC[Task]

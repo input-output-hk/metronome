@@ -34,6 +34,11 @@ import io.iohk.metronome.tracer.Tracer
 
 import scala.annotation.tailrec
 import scala.concurrent.duration.FiniteDuration
+import io.iohk.metronome.networking.Network
+import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
+import io.iohk.metronome.networking.ConnectionHandler
+import io.iohk.metronome.core.messages.RPCSupport
+import io.iohk.metronome.core.messages.RPCTracker
 
 class CheckpointingService[F[_]: Sync, N](
     ledgerTreeRef: Ref[F, LedgerTree],
@@ -170,7 +175,7 @@ class CheckpointingService[F[_]: Sync, N](
     * that were included since last committed block up to the
     * `blockHash`
     */
-  def projectMempool(blockHash: Block.Hash): F[Mempool] =
+  private def projectMempool(blockHash: Block.Hash): F[Mempool] =
     mempoolRef.getAndUpdate(_.clearCheckpointCandidate)
 
   /** Saves a new ledger in the tree only if a parent state exists.
@@ -258,7 +263,8 @@ object CheckpointingService {
 
   case class Config(
       expectCheckpointCandidateNotifications: Boolean,
-      interpreterTimeout: FiniteDuration
+      interpreterTimeout: FiniteDuration,
+      networkTimeout: FiniteDuration
   )
 
   /** A node in LedgerTree
@@ -317,7 +323,54 @@ object CheckpointingService {
       mempoolRef.update(_.withNewCheckpointCandidate)
   }
 
+  private class NetworkHandler[F[_]: Sync, N](
+      network: Network[F, CheckpointingAgreement.PKey, CheckpointingMessage],
+      ledgerStorage: LedgerStorage[N],
+      rpcTracker: RPCTracker[F, CheckpointingMessage]
+  )(implicit storeRunner: KVStoreRunner[F, N])
+      extends RPCSupport.Remote[
+        F,
+        CheckpointingAgreement.PKey,
+        CheckpointingMessage,
+        CheckpointingMessage with CheckpointingMessage.Request,
+        CheckpointingMessage with CheckpointingMessage.Response
+      ](rpcTracker, CheckpointingMessage.RequestId[F]) {
+
+    protected override val sendRequest = (to, req) =>
+      network.sendMessage(to, req)
+
+    def processNetworkMessages: F[Unit] =
+      network.incomingMessages
+        .mapEval[Unit] {
+          case ConnectionHandler.MessageReceived(from, message) =>
+            processNetworkMessage(from, message)
+        }
+        .completedL
+
+    def processNetworkMessage(
+        from: CheckpointingAgreement.PKey,
+        message: CheckpointingMessage
+    ): F[Unit] = {
+      import CheckpointingMessage._
+      message match {
+        case response: CheckpointingMessage.Response =>
+          receiveResponse(from, response)
+
+        case GetStateRequest(requestId, stateHash) =>
+          storeRunner.runReadOnly {
+            ledgerStorage.get(stateHash)
+          } flatMap {
+            case None =>
+              ().pure[F]
+            case Some(ledger) =>
+              network.sendMessage(from, GetStateResponse(requestId, ledger))
+          }
+      }
+    }
+  }
+
   def apply[F[_]: Concurrent: Timer, N](
+      network: Network[F, CheckpointingAgreement.PKey, CheckpointingMessage],
       ledgerStorage: LedgerStorage[N],
       blockStorage: BlockStorage[N, CheckpointingAgreement],
       viewStateStorage: ViewStateStorage[N, CheckpointingAgreement],
@@ -346,32 +399,43 @@ object CheckpointingService {
         }
       }
 
-    val serviceConstructor = for {
+    def mkService(
+        mempoolRef: Ref[F, Mempool],
+        interpreterClient: InterpreterRPC[F]
+    ) = for {
       (block, ledger) <- lastExecuted
       ledgerTree      <- Ref.of(LedgerTree.root(ledger, block.header))
       lastExec        <- Ref.of(block.header)
       checkpointData  <- Ref.of(None: Option[CheckpointData])
-    } yield new CheckpointingService[F, N](
-      ledgerTree,
-      _,
-      lastExec,
-      checkpointData,
-      ledgerStorage,
-      blockStorage,
-      _,
-      config
-    )
+      service = new CheckpointingService[F, N](
+        ledgerTree,
+        mempoolRef,
+        lastExec,
+        checkpointData,
+        ledgerStorage,
+        blockStorage,
+        interpreterClient,
+        config
+      )
+    } yield service
 
     for {
-      serviceCons <- Resource.liftF(serviceConstructor)
-      mempool     <- Resource.liftF(Ref.of(Mempool.init))
+      mempool <- Resource.liftF(Ref.of(Mempool.init))
       serviceRpc = new ServiceRpcImpl(mempool)
+      rpcTracker <- Resource.liftF(
+        RPCTracker[F, CheckpointingMessage](config.networkTimeout)
+      )
+      networkHandler = new NetworkHandler(network, ledgerStorage, rpcTracker)
       interpreterClient <- InterpreterClient(
         interpreterConnection,
         serviceRpc,
         config.interpreterTimeout
       )
-    } yield serviceCons(mempool, interpreterClient)
+      service <- Resource.liftF(mkService(mempool, interpreterClient))
+      _ <- Concurrent[F].background {
+        networkHandler.processNetworkMessages
+      }
+    } yield service
   }
 
 }
