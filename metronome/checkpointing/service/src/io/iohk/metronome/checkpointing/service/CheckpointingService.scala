@@ -34,9 +34,9 @@ import io.iohk.metronome.hotstuff.service.storage.{
 import io.iohk.metronome.networking.{Network, ConnectionHandler}
 import io.iohk.metronome.storage.KVStoreRunner
 import io.iohk.metronome.tracer.Tracer
-
 import scala.annotation.tailrec
 import scala.concurrent.duration.FiniteDuration
+import scala.util.control.NonFatal
 
 class CheckpointingService[F[_]: Sync, N](
     ledgerTreeRef: Ref[F, LedgerTree],
@@ -48,8 +48,10 @@ class CheckpointingService[F[_]: Sync, N](
     interpreterClient: InterpreterRPC[F],
     stateSynchronizer: CheckpointingService.StateSynchronizer[F],
     config: CheckpointingService.Config
-)(implicit storeRunner: KVStoreRunner[F, N])
-    extends ApplicationService[F, CheckpointingAgreement] {
+)(implicit
+    storeRunner: KVStoreRunner[F, N],
+    tracer: Tracer[F, CheckpointingEvent]
+) extends ApplicationService[F, CheckpointingAgreement] {
 
   override def createBlock(
       highQC: QuorumCertificate[CheckpointingAgreement, Phase.Prepare]
@@ -70,6 +72,7 @@ class CheckpointingService[F[_]: Sync, N](
       newBlock  = Block.make(parent.header, newLedger.hash, newBody)
 
       _ <- OptionT.liftF(updateLedgerTree(newLedger, newBlock.header))
+      _ <- OptionT.liftF(tracer(CheckpointingEvent.Proposing(newBlock)))
     } yield newBlock
   ).value
 
@@ -83,9 +86,15 @@ class CheckpointingService[F[_]: Sync, N](
     ledgers.value.flatMap {
       case Some((prevLedger, nextLedger))
           if nextLedger.hash == block.header.postStateHash =>
-        interpreterClient.validateBlockBody(block.body, prevLedger)
+        interpreterClient.validateBlockBody(block.body, prevLedger).flatTap {
+          case Some(false) =>
+            tracer(CheckpointingEvent.InterpreterValidationFailed(block))
+          case _ =>
+            ().pure[F]
+        }
 
-      case _ => false.some.pure[F]
+      case _ =>
+        tracer(CheckpointingEvent.StateUnavailable(block)).as(false.some)
     }
   }
 
@@ -108,10 +117,15 @@ class CheckpointingService[F[_]: Sync, N](
               }
               .toOptionT[F]
 
-            saveLedger(block.header, ledger) >>
+            tracer(CheckpointingEvent.NewState(ledger)) >>
+              saveLedger(block.header, ledger) >>
               certificateOpt.cataF(
                 ().pure[F],
-                interpreterClient.newCheckpointCertificate
+                certificate =>
+                  tracer(
+                    CheckpointingEvent.NewCheckpointCertificate(certificate)
+                  ) >>
+                    interpreterClient.newCheckpointCertificate(certificate)
               ) >>
               true.pure[F]
           }
@@ -369,7 +383,7 @@ object CheckpointingService {
         message: CheckpointingMessage
     ): F[Unit] = {
       import CheckpointingMessage._
-      message match {
+      val process = message match {
         case response: CheckpointingMessage.Response =>
           receiveResponse(from, response)
 
@@ -382,6 +396,10 @@ object CheckpointingService {
             case Some(ledger) =>
               network.sendMessage(from, GetStateResponse(requestId, ledger))
           }
+      }
+
+      process.handleErrorWith { case NonFatal(ex) =>
+        tracer(CheckpointingEvent.Error(ex))
       }
     }
 

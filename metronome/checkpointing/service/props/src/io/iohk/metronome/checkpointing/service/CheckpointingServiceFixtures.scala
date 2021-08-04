@@ -40,6 +40,8 @@ import org.scalacheck.{Gen, Prop}
 
 import scala.concurrent.duration.DurationInt
 import cats.data.NonEmptyVector
+import io.iohk.metronome.tracer.Tracer
+import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
 
 object CheckpointingServiceFixtures {
 
@@ -125,6 +127,8 @@ object CheckpointingServiceFixtures {
               stateHash: Ledger.Hash
           ): Task[Either[Throwable, Boolean]] = ???
         }
+
+      implicit val tracer = Tracer.noOpTracer[Task, CheckpointingEvent]
 
       interpreterClientResource.flatMap { interpreterClient =>
         Resource.liftF {
