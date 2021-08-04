@@ -3,6 +3,7 @@ package io.iohk.metronome.checkpointing.service
 import cats.effect.Resource
 import cats.effect.concurrent.Ref
 import cats.implicits._
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.interpreter.InterpreterRPC
 import io.iohk.metronome.checkpointing.models.ArbitraryInstances._
@@ -38,6 +39,7 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Gen, Prop}
 
 import scala.concurrent.duration.DurationInt
+import cats.data.NonEmptyVector
 
 object CheckpointingServiceFixtures {
 
@@ -116,6 +118,14 @@ object CheckpointingServiceFixtures {
       val storages = new Storages
       import storages._
 
+      val mockStateSynchronizer =
+        new CheckpointingService.StateSynchronizer[Task] {
+          override def trySyncState(
+              sources: NonEmptyVector[ECPublicKey],
+              stateHash: Ledger.Hash
+          ): Task[Either[Throwable, Boolean]] = ???
+        }
+
       interpreterClientResource.flatMap { interpreterClient =>
         Resource.liftF {
           for {
@@ -139,6 +149,7 @@ object CheckpointingServiceFixtures {
               ledgerStorage,
               blockStorage,
               interpreterClient,
+              mockStateSynchronizer,
               config
             )
 

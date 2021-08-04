@@ -28,4 +28,7 @@ object CheckpointingMessage extends RPCMessageCompanion {
       state: Ledger
   ) extends CheckpointingMessage
       with Response
+
+  implicit val getStatePair =
+    pair[GetStateRequest, GetStateResponse]
 }
