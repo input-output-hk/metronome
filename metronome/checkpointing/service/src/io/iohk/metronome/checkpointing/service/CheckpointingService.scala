@@ -335,8 +335,10 @@ object CheckpointingService {
       network: Network[F, CheckpointingAgreement.PKey, CheckpointingMessage],
       ledgerStorage: LedgerStorage[N],
       rpcTracker: RPCTracker[F, CheckpointingMessage]
-  )(implicit storeRunner: KVStoreRunner[F, N])
-      extends RPCSupport.Remote[
+  )(implicit
+      storeRunner: KVStoreRunner[F, N],
+      tracer: Tracer[F, CheckpointingEvent]
+  ) extends RPCSupport.Remote[
         F,
         CheckpointingAgreement.PKey,
         CheckpointingMessage,
@@ -347,6 +349,12 @@ object CheckpointingService {
 
     protected override val sendRequest = (to, req) =>
       network.sendMessage(to, req)
+
+    protected override val requestTimeout = (to, req) =>
+      tracer(CheckpointingEvent.NetworkTimeout(to, req))
+
+    protected override val responseIgnored = (to, req, err) =>
+      tracer(CheckpointingEvent.NetworkResponseIgnored(to, req, err))
 
     def processNetworkMessages: F[Unit] =
       network.incomingMessages
