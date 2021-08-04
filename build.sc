@@ -160,8 +160,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
       )
 
       def single(args: String*) = T.command {
-        // ScalaCheck test
-        super.runMain(args.head, args.tail: _*)
+        // ScalaCheck test. Increased verbosity for longer stack traces.
+        super.runMain(args.head, (args.tail ++ Seq("-verbosity", "3")): _*)
       }
     }
   }
