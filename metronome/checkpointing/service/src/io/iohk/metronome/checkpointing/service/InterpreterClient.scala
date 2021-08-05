@@ -2,7 +2,7 @@ package io.iohk.metronome.checkpointing.service
 
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Resource, Sync}
-import io.iohk.metronome.core.messages.{RPCTracker, RPCPair}
+import io.iohk.metronome.core.messages.{RPCTracker, RPCSupport}
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.interpreter.{ServiceRPC, InterpreterRPC}
 import io.iohk.metronome.checkpointing.interpreter.InterpreterService.InterpreterConnection
@@ -15,7 +15,6 @@ import io.iohk.metronome.checkpointing.models.{
 import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
 import io.iohk.metronome.tracer.Tracer
 import scala.concurrent.duration.FiniteDuration
-import scala.reflect.ClassTag
 import scala.util.control.NonFatal
 
 /** Mirroring the `InterpreterService`, the `InterpreterClient` presents
@@ -30,27 +29,37 @@ object InterpreterClient {
       serviceRpc: ServiceRPC[F],
       rpcTracker: RPCTracker[F, InterpreterMessage]
   )(implicit tracer: Tracer[F, CheckpointingEvent])
-      extends InterpreterRPC[F] {
+      extends RPCSupport[
+        F,
+        Unit,
+        InterpreterMessage,
+        InterpreterMessage with Request with FromService,
+        InterpreterMessage with Response with FromInterpreter
+      ](rpcTracker, InterpreterMessage.RequestId[F])
+      with InterpreterRPC[F] {
+
+    protected override val sendRequest =
+      (_, req) => sendMessage(req)
+    protected override val requestTimeout =
+      (_, req) => tracer(InterpreterTimeout(req))
+    protected override val responseIgnored =
+      (_, req, err) => tracer(InterpreterResponseIgnored(req, err))
 
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
     ): F[Option[Block.Body]] =
-      for {
-        requestId <- RequestId[F]
-        request = CreateBlockBodyRequest(requestId, ledger, mempool)
-        maybeResponse <- sendRequest(request)
-      } yield maybeResponse.map(_.blockBody)
+      sendRequest((), CreateBlockBodyRequest(_, ledger, mempool)).map {
+        _.map(_.blockBody)
+      }
 
     override def validateBlockBody(
         blockBody: Block.Body,
         ledger: Ledger
     ): F[Option[Boolean]] =
-      for {
-        requestId <- RequestId[F]
-        request = ValidateBlockBodyRequest(requestId, blockBody, ledger)
-        maybeResponse <- sendRequest(request)
-      } yield maybeResponse.map(_.isValid)
+      sendRequest((), ValidateBlockBodyRequest(_, blockBody, ledger)).map {
+        _.map(_.isValid)
+      }
 
     override def newCheckpointCertificate(
         checkpointCertificate: CheckpointCertificate
@@ -63,19 +72,6 @@ object InterpreterClient {
         )
         _ <- sendCommand(request)
       } yield ()
-
-    private def sendRequest[
-        Req <: InterpreterMessage with Request with FromService,
-        Res <: InterpreterMessage with Response with FromInterpreter
-    ](
-        request: Req
-    )(implicit ev: RPCPair.Aux[Req, Res], ct: ClassTag[Res]): F[Option[Res]] =
-      for {
-        join <- rpcTracker.register[Req, Res](request)
-        _    <- sendMessage(request)
-        res  <- join
-        _    <- tracer(InterpreterTimeout(request)).whenA(res.isEmpty)
-      } yield res
 
     private def sendCommand(
         command: InterpreterMessage
@@ -104,12 +100,7 @@ object InterpreterClient {
             tracer(Error(err))
 
           case response: Response with FromInterpreter =>
-            rpcTracker.complete(response).flatMap {
-              case Right(ok) =>
-                tracer(InterpreterResponseIgnored(response, None)).whenA(!ok)
-              case Left(ex) =>
-                tracer(InterpreterResponseIgnored(response, Some(ex)))
-            }
+            receiveResponse((), response)
 
           case NewProposerBlockRequest(_, proposerBlock) =>
             serviceRpc.newProposerBlock(proposerBlock).handleErrorWith {

@@ -4,11 +4,7 @@ import cats.implicits._
 import cats.Parallel
 import cats.effect.{Sync, Resource, Concurrent, ContextShift, Timer}
 import io.iohk.metronome.core.fibers.FiberMap
-import io.iohk.metronome.core.messages.{
-  RPCMessageCompanion,
-  RPCPair,
-  RPCTracker
-}
+import io.iohk.metronome.core.messages.{RPCTracker, RPCSupport}
 import io.iohk.metronome.hotstuff.consensus.{Federation, ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
@@ -32,7 +28,6 @@ import io.iohk.metronome.networking.{ConnectionHandler, Network}
 import io.iohk.metronome.storage.KVStoreRunner
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
-import scala.reflect.ClassTag
 
 /** The `SyncService` handles the `SyncMessage`s coming from the network,
   * i.e. serving block and status requests, as well as receive responses
@@ -55,10 +50,24 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     getState: F[ProtocolState[A]],
     incomingFiberMap: FiberMap[F, A#PKey],
     rpcTracker: RPCTracker[F, SyncMessage[A]]
-)(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N]) {
+)(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N])
+    extends RPCSupport[
+      F,
+      A#PKey,
+      SyncMessage[A],
+      SyncMessage[A] with SyncMessage.Request,
+      SyncMessage[A] with SyncMessage.Response
+    ](rpcTracker, SyncMessage.RequestId[F]) {
   import SyncMessage._
 
   type BlockSync = SyncService.BlockSynchronizerWithFiberMap[F, N, A]
+
+  protected override val sendRequest =
+    (to, req) => network.sendMessage(to, req)
+  protected override val requestTimeout =
+    (to, req) => tracers.requestTimeout((to, req))
+  protected override val responseIgnored =
+    (from, res, err) => tracers.responseIgnored((from, res, err))
 
   private def protocolStatus: F[Status[A]] =
     getState.map { state =>
@@ -72,11 +81,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
         blockStorage.get(blockHash)
       }
     } else {
-      for {
-        requestId <- RequestId[F]
-        request = GetBlockRequest(requestId, blockHash)
-        maybeResponse <- sendRequest(from, request)
-      } yield maybeResponse.map(_.block)
+      sendRequest(from, GetBlockRequest(_, blockHash)).map(_.map(_.block))
     }
 
   /** Request the status of a peer. */
@@ -84,32 +89,8 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     if (from == publicKey) {
       protocolStatus.map(_.some)
     } else {
-      for {
-        requestId <- RequestId[F]
-        request = GetStatusRequest[A](requestId)
-        maybeResponse <- sendRequest(from, request)
-      } yield maybeResponse.map(_.status)
+      sendRequest(from, GetStatusRequest[A](_)).map(_.map(_.status))
     }
-
-  /** Send a request to the peer and track the response.
-    *
-    * Returns `None` if we're not connected or the request times out.
-    */
-  private def sendRequest[
-      Req <: RPCMessageCompanion#Request,
-      Res <: RPCMessageCompanion#Response
-  ](from: A#PKey, request: Req)(implicit
-      ev1: Req <:< SyncMessage[A] with SyncMessage.Request,
-      ev2: RPCPair.Aux[Req, Res],
-      ct: ClassTag[Res]
-  ): F[Option[Res]] = {
-    for {
-      join <- rpcTracker.register[Req, Res](request)
-      _    <- network.sendMessage(from, request)
-      res  <- join
-      _    <- tracers.requestTimeout(from -> request).whenA(res.isEmpty)
-    } yield res
-  }
 
   /** Process incoming network messages. */
   private def processNetworkMessages: F[Unit] = {
@@ -163,12 +144,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
           }
 
       case response: SyncMessage.Response =>
-        rpcTracker.complete(response).flatMap {
-          case Right(ok) =>
-            tracers.responseIgnored((from, response, None)).whenA(!ok)
-          case Left(ex) =>
-            tracers.responseIgnored((from, response, Some(ex)))
-        }
+        receiveResponse(from, response)
     }
 
     process.handleErrorWith { case NonFatal(ex) =>

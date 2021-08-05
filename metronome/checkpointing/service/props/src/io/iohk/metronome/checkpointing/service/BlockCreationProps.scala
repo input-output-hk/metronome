@@ -79,8 +79,19 @@ object BlockCreationProps extends Properties("BlockCreation") {
         chain       <- genBlockChain(block, Ledger.empty, min = minChain, max = 5)
         highQC      <- genQC(Phase.Prepare, chain.last.hash)
         createdBody <- arbitrary[Option[Block.Body]]
-        mempool     <- arbitrary[Mempool]
-        initialMempool = mempool.add(chain.flatMap(_.body.proposerBlocks))
+
+        hasCheckpointCandidate = createdBody
+          .exists(_.transactions.collect {
+            case _: Transaction.CheckpointCandidate =>
+          }.nonEmpty)
+
+        initialMempool <- arbitrary[Mempool].map(
+          _.copy(hasNewCheckpointCandidate = hasCheckpointCandidate).add(
+            chain.flatMap(_.body.proposerBlocks) ++
+              createdBody.toSeq.flatMap(_.proposerBlocks)
+          )
+        )
+
         checkpointNotifications <- arbitrary[Boolean]
       } yield TestFixture(
         chain,
@@ -125,7 +136,7 @@ object BlockCreationProps extends Properties("BlockCreation") {
 
         val finalLedgerSaved = expectedBlock match {
           case Some(b) =>
-            ledgerTree(b.hash) == LedgerNode(finalLedger, b.header)
+            ledgerTree.get(b.hash).contains(LedgerNode(finalLedger, b.header))
           case None => true
         }
 

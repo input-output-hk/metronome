@@ -3,6 +3,7 @@ package io.iohk.metronome.checkpointing.service
 import cats.effect.Resource
 import cats.effect.concurrent.Ref
 import cats.implicits._
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.interpreter.InterpreterRPC
 import io.iohk.metronome.checkpointing.models.ArbitraryInstances._
@@ -38,6 +39,9 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Gen, Prop}
 
 import scala.concurrent.duration.DurationInt
+import cats.data.NonEmptyVector
+import io.iohk.metronome.tracer.Tracer
+import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
 
 object CheckpointingServiceFixtures {
 
@@ -103,7 +107,8 @@ object CheckpointingServiceFixtures {
 
     def config: CheckpointingService.Config = CheckpointingService.Config(
       expectCheckpointCandidateNotifications = true,
-      interpreterTimeout = 10.seconds
+      interpreterTimeout = 10.seconds,
+      networkTimeout = 5.seconds
     )
 
     type InterpreterClient <: InterpreterRPC[Task]
@@ -114,6 +119,16 @@ object CheckpointingServiceFixtures {
 
       val storages = new Storages
       import storages._
+
+      val mockStateSynchronizer =
+        new CheckpointingService.StateSynchronizer[Task] {
+          override def trySyncState(
+              sources: NonEmptyVector[ECPublicKey],
+              stateHash: Ledger.Hash
+          ): Task[Either[Throwable, Boolean]] = ???
+        }
+
+      implicit val tracer = Tracer.noOpTracer[Task, CheckpointingEvent]
 
       interpreterClientResource.flatMap { interpreterClient =>
         Resource.liftF {
@@ -138,6 +153,7 @@ object CheckpointingServiceFixtures {
               ledgerStorage,
               blockStorage,
               interpreterClient,
+              mockStateSynchronizer,
               config
             )
 

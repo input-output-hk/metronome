@@ -3,7 +3,7 @@ package io.iohk.metronome.examples.robot.service
 import cats.implicits._
 import cats.effect.{Sync, Timer, Resource, Concurrent}
 import cats.data.{NonEmptyList, NonEmptyVector, OptionT}
-import io.iohk.metronome.core.messages.RPCTracker
+import io.iohk.metronome.core.messages.{RPCTracker, RPCSupport}
 import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.examples.robot.RobotAgreement
@@ -34,7 +34,16 @@ class RobotService[F[_]: Sync: Timer, N](
     rpcTracker: RPCTracker[F, RobotMessage],
     simulatedDecisionTime: FiniteDuration
 )(implicit storeRunner: KVStoreRunner[F, N], tracers: RobotTracers[F])
-    extends ApplicationService[F, RobotAgreement] {
+    extends RPCSupport[
+      F,
+      RobotAgreement.PKey,
+      RobotMessage,
+      RobotMessage with RobotMessage.Request,
+      RobotMessage with RobotMessage.Response
+    ](rpcTracker, RobotMessage.RequestId[F])
+    with ApplicationService[F, RobotAgreement] {
+
+  protected override val sendRequest = (to, req) => network.sendMessage(to, req)
 
   /** Make a random valid move on top of the last block. */
   override def createBlock(
@@ -206,13 +215,10 @@ class RobotService[F[_]: Sync: Timer, N](
       stateHash: Hash
   ): F[Option[Robot.State]] = {
     assert(from != publicKey, "Shouldn't try to get state from self.")
-    for {
-      requestId <- RobotMessage.RequestId[F]
-      request = RobotMessage.GetStateRequest(requestId, stateHash)
-      join          <- rpcTracker.register(request)
-      _             <- network.sendMessage(from, request)
-      maybeResponse <- join
-    } yield maybeResponse.map(_.state).filter(_.hash == stateHash)
+
+    sendRequest(from, RobotMessage.GetStateRequest(_, stateHash)).map {
+      _.map(_.state).filter(_.hash == stateHash)
+    }
   }
 
   private def processNetworkMessages: F[Unit] = {
@@ -242,8 +248,7 @@ class RobotService[F[_]: Sync: Timer, N](
           }
 
       case response: RobotMessage.Response =>
-        rpcTracker.complete(response).void
-
+        receiveResponse(from, response)
     }
   }
 }

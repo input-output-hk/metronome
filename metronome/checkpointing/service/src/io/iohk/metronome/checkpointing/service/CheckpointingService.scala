@@ -4,6 +4,8 @@ import cats.data.{NonEmptyList, NonEmptyVector, OptionT}
 import cats.effect.concurrent.Ref
 import cats.effect.{Concurrent, Resource, Sync, Timer}
 import cats.implicits._
+import io.iohk.metronome.core.messages.{RPCSupport, RPCTracker}
+import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.interpreter.InterpreterService.InterpreterConnection
 import io.iohk.metronome.checkpointing.interpreter.{InterpreterRPC, ServiceRPC}
@@ -22,18 +24,19 @@ import io.iohk.metronome.checkpointing.service.CheckpointingService.{
 }
 import io.iohk.metronome.checkpointing.service.storage.LedgerStorage
 import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
-import io.iohk.metronome.crypto.ECPublicKey
+import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
 import io.iohk.metronome.hotstuff.consensus.basic.{Phase, QuorumCertificate}
 import io.iohk.metronome.hotstuff.service.ApplicationService
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
   ViewStateStorage
 }
+import io.iohk.metronome.networking.{Network, ConnectionHandler}
 import io.iohk.metronome.storage.KVStoreRunner
 import io.iohk.metronome.tracer.Tracer
-
 import scala.annotation.tailrec
 import scala.concurrent.duration.FiniteDuration
+import scala.util.control.NonFatal
 
 class CheckpointingService[F[_]: Sync, N](
     ledgerTreeRef: Ref[F, LedgerTree],
@@ -43,9 +46,12 @@ class CheckpointingService[F[_]: Sync, N](
     ledgerStorage: LedgerStorage[N],
     blockStorage: BlockStorage[N, CheckpointingAgreement],
     interpreterClient: InterpreterRPC[F],
+    stateSynchronizer: CheckpointingService.StateSynchronizer[F],
     config: CheckpointingService.Config
-)(implicit storeRunner: KVStoreRunner[F, N])
-    extends ApplicationService[F, CheckpointingAgreement] {
+)(implicit
+    storeRunner: KVStoreRunner[F, N],
+    tracer: Tracer[F, CheckpointingEvent]
+) extends ApplicationService[F, CheckpointingAgreement] {
 
   override def createBlock(
       highQC: QuorumCertificate[CheckpointingAgreement, Phase.Prepare]
@@ -66,6 +72,7 @@ class CheckpointingService[F[_]: Sync, N](
       newBlock  = Block.make(parent.header, newLedger.hash, newBody)
 
       _ <- OptionT.liftF(updateLedgerTree(newLedger, newBlock.header))
+      _ <- OptionT.liftF(tracer(CheckpointingEvent.Proposing(newBlock)))
     } yield newBlock
   ).value
 
@@ -79,9 +86,15 @@ class CheckpointingService[F[_]: Sync, N](
     ledgers.value.flatMap {
       case Some((prevLedger, nextLedger))
           if nextLedger.hash == block.header.postStateHash =>
-        interpreterClient.validateBlockBody(block.body, prevLedger)
+        interpreterClient.validateBlockBody(block.body, prevLedger).flatTap {
+          case Some(false) =>
+            tracer(CheckpointingEvent.InterpreterValidationFailed(block))
+          case _ =>
+            ().pure[F]
+        }
 
-      case _ => false.some.pure[F]
+      case _ =>
+        tracer(CheckpointingEvent.StateUnavailable(block)).as(false.some)
     }
   }
 
@@ -104,10 +117,15 @@ class CheckpointingService[F[_]: Sync, N](
               }
               .toOptionT[F]
 
-            saveLedger(block.header, ledger) >>
+            tracer(CheckpointingEvent.NewState(ledger)) >>
+              saveLedger(block.header, ledger) >>
               certificateOpt.cataF(
                 ().pure[F],
-                interpreterClient.newCheckpointCertificate
+                certificate =>
+                  tracer(
+                    CheckpointingEvent.NewCheckpointCertificate(certificate)
+                  ) >>
+                    interpreterClient.newCheckpointCertificate(certificate)
               ) >>
               true.pure[F]
           }
@@ -170,7 +188,7 @@ class CheckpointingService[F[_]: Sync, N](
     * that were included since last committed block up to the
     * `blockHash`
     */
-  def projectMempool(blockHash: Block.Hash): F[Mempool] =
+  private def projectMempool(blockHash: Block.Hash): F[Mempool] =
     mempoolRef.getAndUpdate(_.clearCheckpointCandidate)
 
   /** Saves a new ledger in the tree only if a parent state exists.
@@ -251,14 +269,16 @@ class CheckpointingService[F[_]: Sync, N](
   override def syncState(
       sources: NonEmptyVector[ECPublicKey],
       block: Block
-  ): F[Boolean] = ???
+  ): F[Boolean] =
+    stateSynchronizer.trySyncState(sources, block.header.postStateHash).rethrow
 }
 
 object CheckpointingService {
 
   case class Config(
       expectCheckpointCandidateNotifications: Boolean,
-      interpreterTimeout: FiniteDuration
+      interpreterTimeout: FiniteDuration,
+      networkTimeout: FiniteDuration
   )
 
   /** A node in LedgerTree
@@ -317,7 +337,126 @@ object CheckpointingService {
       mempoolRef.update(_.withNewCheckpointCandidate)
   }
 
+  trait StateSynchronizer[F[_]] {
+    def trySyncState(
+        sources: NonEmptyVector[CheckpointingAgreement.PKey],
+        stateHash: Ledger.Hash
+    ): F[Either[Throwable, Boolean]]
+  }
+
+  private class NetworkHandler[F[_]: Sync, N](
+      publicKey: CheckpointingAgreement.PKey,
+      network: Network[F, CheckpointingAgreement.PKey, CheckpointingMessage],
+      ledgerStorage: LedgerStorage[N],
+      rpcTracker: RPCTracker[F, CheckpointingMessage]
+  )(implicit
+      storeRunner: KVStoreRunner[F, N],
+      tracer: Tracer[F, CheckpointingEvent]
+  ) extends RPCSupport[
+        F,
+        CheckpointingAgreement.PKey,
+        CheckpointingMessage,
+        CheckpointingMessage with CheckpointingMessage.Request,
+        CheckpointingMessage with CheckpointingMessage.Response
+      ](rpcTracker, CheckpointingMessage.RequestId[F])
+      with StateSynchronizer[F] {
+
+    protected override val sendRequest = (to, req) =>
+      network.sendMessage(to, req)
+
+    protected override val requestTimeout = (to, req) =>
+      tracer(CheckpointingEvent.NetworkTimeout(to, req))
+
+    protected override val responseIgnored = (to, req, err) =>
+      tracer(CheckpointingEvent.NetworkResponseIgnored(to, req, err))
+
+    def processNetworkMessages: F[Unit] =
+      network.incomingMessages
+        .mapEval[Unit] {
+          case ConnectionHandler.MessageReceived(from, message) =>
+            processNetworkMessage(from, message)
+        }
+        .completedL
+
+    def processNetworkMessage(
+        from: CheckpointingAgreement.PKey,
+        message: CheckpointingMessage
+    ): F[Unit] = {
+      import CheckpointingMessage._
+      val process = message match {
+        case response: CheckpointingMessage.Response =>
+          receiveResponse(from, response)
+
+        case GetStateRequest(requestId, stateHash) =>
+          storeRunner.runReadOnly {
+            ledgerStorage.get(stateHash)
+          } flatMap {
+            case None =>
+              ().pure[F]
+            case Some(ledger) =>
+              network.sendMessage(from, GetStateResponse(requestId, ledger))
+          }
+      }
+
+      process.handleErrorWith { case NonFatal(ex) =>
+        tracer(CheckpointingEvent.Error(ex))
+      }
+    }
+
+    /** Try to download the ledger from one of the sources. Return an error
+      * if all sources timed out and we couldn't get a response from any of them.
+      */
+    override def trySyncState(
+        sources: NonEmptyVector[CheckpointingAgreement.PKey],
+        stateHash: Ledger.Hash
+    ): F[Either[Throwable, Boolean]] = {
+      import CheckpointingMessage._
+
+      def loop(
+          sources: List[CheckpointingAgreement.PKey]
+      ): F[Option[Ledger]] = {
+        sources match {
+          case Nil =>
+            none.pure[F]
+
+          case source :: sources =>
+            sendRequest(source, GetStateRequest(_, stateHash)) flatMap {
+              case Some(response) if response.state.hash == stateHash =>
+                response.state.some.pure[F]
+              case _ =>
+                loop(sources)
+            }
+        }
+      }
+
+      storeRunner.runReadOnly {
+        ledgerStorage.get(stateHash)
+      } flatMap {
+        case None =>
+          loop(sources.toList.filterNot(_ == publicKey)) flatMap {
+            case None =>
+              new IllegalStateException(
+                "Could not get the state from any of the sources."
+              ).asLeft.pure[F].widen
+
+            case Some(ledger) =>
+              storeRunner
+                .runReadWrite {
+                  ledgerStorage.put(ledger)
+                }
+                .as(true.asRight)
+          }
+
+        case Some(_) =>
+          // We have the ledger, so don't clear the block history, we didn't need to jump.
+          false.asRight.pure[F]
+      }
+    }
+  }
+
   def apply[F[_]: Concurrent: Timer, N](
+      publicKey: CheckpointingAgreement.PKey,
+      network: Network[F, CheckpointingAgreement.PKey, CheckpointingMessage],
       ledgerStorage: LedgerStorage[N],
       blockStorage: BlockStorage[N, CheckpointingAgreement],
       viewStateStorage: ViewStateStorage[N, CheckpointingAgreement],
@@ -346,32 +485,56 @@ object CheckpointingService {
         }
       }
 
-    val serviceConstructor = for {
+    def mkService(
+        mempoolRef: Ref[F, Mempool],
+        interpreterClient: InterpreterRPC[F],
+        networkHandler: NetworkHandler[F, N]
+    ) = for {
       (block, ledger) <- lastExecuted
       ledgerTree      <- Ref.of(LedgerTree.root(ledger, block.header))
       lastExec        <- Ref.of(block.header)
       checkpointData  <- Ref.of(None: Option[CheckpointData])
-    } yield new CheckpointingService[F, N](
-      ledgerTree,
-      _,
-      lastExec,
-      checkpointData,
-      ledgerStorage,
-      blockStorage,
-      _,
-      config
-    )
+      service = new CheckpointingService[F, N](
+        ledgerTree,
+        mempoolRef,
+        lastExec,
+        checkpointData,
+        ledgerStorage,
+        blockStorage,
+        interpreterClient,
+        networkHandler,
+        config
+      )
+    } yield service
 
     for {
-      serviceCons <- Resource.liftF(serviceConstructor)
-      mempool     <- Resource.liftF(Ref.of(Mempool.init))
+      mempool <- Resource.liftF(Ref.of(Mempool.init))
       serviceRpc = new ServiceRpcImpl(mempool)
+
+      rpcTracker <- Resource.liftF(
+        RPCTracker[F, CheckpointingMessage](config.networkTimeout)
+      )
+      networkHandler = new NetworkHandler(
+        publicKey,
+        network,
+        ledgerStorage,
+        rpcTracker
+      )
+
       interpreterClient <- InterpreterClient(
         interpreterConnection,
         serviceRpc,
         config.interpreterTimeout
       )
-    } yield serviceCons(mempool, interpreterClient)
+
+      service <- Resource.liftF(
+        mkService(mempool, interpreterClient, networkHandler)
+      )
+
+      _ <- Concurrent[F].background {
+        networkHandler.processNetworkMessages
+      }
+    } yield service
   }
 
 }
