@@ -29,8 +29,9 @@ object InterpreterClient {
       serviceRpc: ServiceRPC[F],
       rpcTracker: RPCTracker[F, InterpreterMessage]
   )(implicit tracer: Tracer[F, CheckpointingEvent])
-      extends RPCSupport.Local[
+      extends RPCSupport[
         F,
+        Unit,
         InterpreterMessage,
         InterpreterMessage with Request with FromService,
         InterpreterMessage with Response with FromInterpreter
@@ -38,17 +39,17 @@ object InterpreterClient {
       with InterpreterRPC[F] {
 
     protected override val sendRequest =
-      req => sendMessage(req)
+      (_, req) => sendMessage(req)
     protected override val requestTimeout =
-      req => tracer(InterpreterTimeout(req))
+      (_, req) => tracer(InterpreterTimeout(req))
     protected override val responseIgnored =
-      (req, err) => tracer(InterpreterResponseIgnored(req, err))
+      (_, req, err) => tracer(InterpreterResponseIgnored(req, err))
 
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
     ): F[Option[Block.Body]] =
-      sendRequest(CreateBlockBodyRequest(_, ledger, mempool)).map {
+      sendRequest((), CreateBlockBodyRequest(_, ledger, mempool)).map {
         _.map(_.blockBody)
       }
 
@@ -56,7 +57,7 @@ object InterpreterClient {
         blockBody: Block.Body,
         ledger: Ledger
     ): F[Option[Boolean]] =
-      sendRequest(ValidateBlockBodyRequest(_, blockBody, ledger)).map {
+      sendRequest((), ValidateBlockBodyRequest(_, blockBody, ledger)).map {
         _.map(_.isValid)
       }
 
@@ -99,7 +100,7 @@ object InterpreterClient {
             tracer(Error(err))
 
           case response: Response with FromInterpreter =>
-            receiveResponse(response)
+            receiveResponse((), response)
 
           case NewProposerBlockRequest(_, proposerBlock) =>
             serviceRpc.newProposerBlock(proposerBlock).handleErrorWith {

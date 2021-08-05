@@ -51,7 +51,7 @@ class SyncService[F[_]: Concurrent: ContextShift, N, A <: Agreement: Block](
     incomingFiberMap: FiberMap[F, A#PKey],
     rpcTracker: RPCTracker[F, SyncMessage[A]]
 )(implicit tracers: SyncTracers[F, A], storeRunner: KVStoreRunner[F, N])
-    extends RPCSupport.Remote[
+    extends RPCSupport[
       F,
       A#PKey,
       SyncMessage[A],

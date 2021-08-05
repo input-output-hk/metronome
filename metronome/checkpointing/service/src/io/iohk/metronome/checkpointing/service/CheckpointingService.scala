@@ -352,7 +352,7 @@ object CheckpointingService {
   )(implicit
       storeRunner: KVStoreRunner[F, N],
       tracer: Tracer[F, CheckpointingEvent]
-  ) extends RPCSupport.Remote[
+  ) extends RPCSupport[
         F,
         CheckpointingAgreement.PKey,
         CheckpointingMessage,

@@ -34,7 +34,7 @@ class RobotService[F[_]: Sync: Timer, N](
     rpcTracker: RPCTracker[F, RobotMessage],
     simulatedDecisionTime: FiniteDuration
 )(implicit storeRunner: KVStoreRunner[F, N], tracers: RobotTracers[F])
-    extends RPCSupport.Remote[
+    extends RPCSupport[
       F,
       RobotAgreement.PKey,
       RobotMessage,
