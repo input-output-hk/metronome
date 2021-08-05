@@ -81,10 +81,9 @@ object BlockCreationProps extends Properties("BlockCreation") {
         createdBody <- arbitrary[Option[Block.Body]]
 
         hasCheckpointCandidate = createdBody
-          .map(_.transactions.collect {
+          .exists(_.transactions.collect {
             case _: Transaction.CheckpointCandidate =>
           }.nonEmpty)
-          .getOrElse(false)
 
         initialMempool <- arbitrary[Mempool].map(
           _.copy(hasNewCheckpointCandidate = hasCheckpointCandidate).add(
