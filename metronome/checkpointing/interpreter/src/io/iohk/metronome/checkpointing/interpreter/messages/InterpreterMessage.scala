@@ -102,10 +102,16 @@ object InterpreterMessage extends RPCMessageCompanion {
     * nothing to do, so the Service can either propose an empty block
     * to keep everyone in sync, or just move to the next leader by
     * other means.
+    *
+    * The response can also contain a set of mempool items that
+    * should be permanently removed, because they will never be
+    * included in a block body. This should prevent pending
+    * transactions lingering forever in memory.
     */
   case class CreateBlockBodyResponse(
       requestId: RequestId,
-      blockBody: Block.Body
+      blockBody: Block.Body,
+      purgeFromMempool: Set[Transaction.ProposerBlock]
   ) extends InterpreterMessage
       with Response
       with FromInterpreter

@@ -31,6 +31,9 @@ trait DefaultInterpreterCodecs {
   private implicit def `Codec[Seq[T]]`[T: Codec]: Codec[Seq[T]] =
     Codec[List[T]].xmap(_.toSeq, _.toList)
 
+  private implicit def `Codec[Set[T]]`[T: Codec]: Codec[Set[T]] =
+    Codec[List[T]].xmap(_.toSet, _.toList)
+
   implicit val newProposerBlockRequestCodec: Codec[NewProposerBlockRequest] =
     Codec.deriveLabelledGeneric
 

@@ -26,7 +26,7 @@ trait InterpreterRPC[F[_]] {
   def createBlockBody(
       ledger: Ledger,
       mempool: Seq[Transaction.ProposerBlock]
-  ): F[Option[Block.Body]]
+  ): F[Option[(Block.Body, Set[Transaction.ProposerBlock])]]
 
   def validateBlockBody(
       blockBody: Block.Body,

@@ -44,8 +44,10 @@ object BlockCreationProps extends Properties("BlockCreation") {
       override def createBlockBody(
           ledger: Ledger,
           mempool: Seq[ProposerBlock]
-      ): Task[Option[Block.Body]] =
-        recordedArguments.set((ledger, mempool).some).map(_ => createdBody)
+      ) =
+        recordedArguments
+          .set((ledger, mempool).some)
+          .as(createdBody.map(_ -> Set.empty))
     }
 
     override val interpreterClientResource: Resource[Task, InterpreterClient] =

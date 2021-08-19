@@ -39,7 +39,8 @@ object ArbitraryInstances {
       for {
         requestId <- arbitrary[UUID]
         block     <- arbitrary[Block]
-      } yield CreateBlockBodyResponse(requestId, block.body)
+        mempool   <- arbitrary[Set[Transaction.ProposerBlock]]
+      } yield CreateBlockBodyResponse(requestId, block.body, mempool)
     }
 
   implicit val arbValidateBlockBodyRequest

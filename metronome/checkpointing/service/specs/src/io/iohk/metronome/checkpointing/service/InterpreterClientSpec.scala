@@ -136,10 +136,11 @@ class InterpreterClientSpec extends AnyFlatSpec with Matchers with Inspectors {
           _ <- awaitProcessing()
 
           sb = sample[Block].body
+          sp = sample[Set[Transaction.ProposerBlock]]
           iv = true
           _ <- input.connection.processOutgoingMessages {
             case CreateBlockBodyRequest(requestId, _, _) =>
-              CreateBlockBodyResponse(requestId, sb)
+              CreateBlockBodyResponse(requestId, sb, sp)
             case ValidateBlockBodyRequest(requestId, _, _) =>
               ValidateBlockBodyResponse(requestId, iv)
           }
@@ -150,7 +151,7 @@ class InterpreterClientSpec extends AnyFlatSpec with Matchers with Inspectors {
           r1 <- w1.join
           r2 <- w2.join
         } yield {
-          r1 shouldBe Some(sb)
+          r1 shouldBe Some(sb -> sp)
           r2 shouldBe Some(iv)
         }
     }

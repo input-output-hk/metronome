@@ -62,7 +62,7 @@ object CheckpointingServiceFixtures {
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
-    ): Task[Option[Block.Body]] =
+    ): Task[Option[(Block.Body, Set[Transaction.ProposerBlock])]] =
       Task.pure(None)
 
     override def validateBlockBody(

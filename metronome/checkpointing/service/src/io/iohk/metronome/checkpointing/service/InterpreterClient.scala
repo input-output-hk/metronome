@@ -48,9 +48,9 @@ object InterpreterClient {
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
-    ): F[Option[Block.Body]] =
+    ): F[Option[(Block.Body, Set[Transaction.ProposerBlock])]] =
       sendRequest((), CreateBlockBodyRequest(_, ledger, mempool)).map {
-        _.map(_.blockBody)
+        _.map(r => (r.blockBody, r.purgeFromMempool))
       }
 
     override def validateBlockBody(
