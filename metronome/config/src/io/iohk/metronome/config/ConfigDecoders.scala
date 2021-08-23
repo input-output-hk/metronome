@@ -64,8 +64,15 @@ object ConfigDecoders {
   }
 
   implicit def vectorDecoder[A](implicit aDecoder: Decoder[A]): Decoder[Vector[A]] = {
-    Decoder.decodeVector[A] or Decoder[Map[Int, A]].map { srcMap =>
-      srcMap.toVector.sortBy(_._1).map(_._2)
+    Decoder.decodeVector[A] or Decoder[Map[Int, A]].emap { srcMap =>
+      val sorted = srcMap.toVector.sortBy(_._1)
+      if (sorted.isEmpty || sorted.size == sorted.last._1 + 1) {
+        // no gaps, because key uniqueness is guaranteed by Map
+        Right(sorted.map(_._2))
+      } else {
+        val keyPrintout = sorted.map(_._1).mkString("{", ", ", "}")
+        Left(s"Expected [0, ${sorted.size}) sequence, but got $keyPrintout")
+      }
     }
   }
 

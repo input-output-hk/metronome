@@ -53,30 +53,77 @@ class ConfigParserSpec
     json.noSpaces shouldBe """{"nestedStructure":{"barBaz":{"spam":"eggs"},"foo":10}}"""
   }
 
-  "seq,list,vector decoders" should "handle JSON Object with indices successfully" in {
+  "seq,list,vector decoders" should "handle JSON Object with sequential indices successfully" in {
     import ConfigParserSpec.TestConfigWithJsonArray._
     val withArray = """{"field":["valueA", "valueB", "valueC"]}"""
     val withObject = """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
+    val expected = Vector("valueA", "valueB", "valueC")
     val aConf = ConfigFactory.parseString(withArray)
     val oConf = ConfigFactory.parseString(withObject)
 
-    //seqs
+    // seqs
     val aSeq = ConfigParser.parse[TestConfigWithSeq](aConf.root)
     val oSeq = ConfigParser.parse[TestConfigWithSeq](oConf.root)
-    aSeq shouldBe a[Right[_,_]]
+    inside(aSeq) { case Right(value) => value.field.toVector shouldBe expected }
     aSeq shouldEqual oSeq
 
-    //lists
+    // lists
     val aList = ConfigParser.parse[TestConfigWithList](aConf.root)
     val oList = ConfigParser.parse[TestConfigWithList](oConf.root)
-    aList shouldBe a[Right[_,_]]
+    inside(aList) { case Right(value) => value.field.toVector shouldBe expected }
     aList shouldEqual oList
 
-    //vectors
+    // vectors
     val aVector = ConfigParser.parse[TestConfigWithVector](aConf.root)
     val oVector = ConfigParser.parse[TestConfigWithVector](oConf.root)
-    aVector shouldBe a[Right[_,_]]
+    inside(aVector) { case Right(value) => value.field shouldBe expected }
     aVector shouldEqual oVector
+  }
+
+  "seq,list,vector decoders" should "fail on JSON Object key gaps but allow empty object" in {
+    import ConfigParserSpec.TestConfigWithJsonArray._
+
+    val withGaps1 = """{"field":{"2":"valueC", "0":"valueA"}}"""
+    val withGaps2 = """{"field":{"2":"valueA"}}"""
+    val withDupes = """{"field":{"2":"valueA", "2":"valueB"}}"""
+    val withEmpty = """{"field":{}}"""
+    val gapsConf1 = ConfigFactory.parseString(withGaps1)
+    val gapsConf2 = ConfigFactory.parseString(withGaps2)
+    val dupesConf = ConfigFactory.parseString(withDupes)
+    val emptyConf = ConfigFactory.parseString(withEmpty)
+
+    // seqs
+    val gapsSeq1 = ConfigParser.parse[TestConfigWithSeq](gapsConf1.root)
+    val gapsSeq2 = ConfigParser.parse[TestConfigWithSeq](gapsConf2.root)
+    val dupesSeq = ConfigParser.parse[TestConfigWithSeq](dupesConf.root)
+    val emptySeq = ConfigParser.parse[TestConfigWithSeq](emptyConf.root)
+
+    inside(gapsSeq1) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}") }
+    inside(gapsSeq2) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(dupesSeq) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(emptySeq) { case Right(success) => success.field shouldBe empty }
+
+    // lists
+    val gapsList1 = ConfigParser.parse[TestConfigWithList](gapsConf1.root)
+    val gapsList2 = ConfigParser.parse[TestConfigWithList](gapsConf2.root)
+    val dupesList = ConfigParser.parse[TestConfigWithList](dupesConf.root)
+    val emptyList = ConfigParser.parse[TestConfigWithList](emptyConf.root)
+
+    inside(gapsList1) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}") }
+    inside(gapsList2) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(dupesList) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(emptyList) { case Right(success) => success.field shouldBe empty }
+
+    // vectors
+    val gapsVector1 = ConfigParser.parse[TestConfigWithVector](gapsConf1.root)
+    val gapsVector2 = ConfigParser.parse[TestConfigWithVector](gapsConf2.root)
+    val dupesVector = ConfigParser.parse[TestConfigWithVector](dupesConf.root)
+    val emptyVector = ConfigParser.parse[TestConfigWithVector](emptyConf.root)
+
+    inside(gapsVector1) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}") }
+    inside(gapsVector2) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(dupesVector) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(emptyVector) { case Right(success) => success.field shouldBe empty }
   }
 
   "withEnvVarOverrides" should "overwrite keys from the environment" in {
