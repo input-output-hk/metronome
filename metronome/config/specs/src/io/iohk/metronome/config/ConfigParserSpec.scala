@@ -53,6 +53,32 @@ class ConfigParserSpec
     json.noSpaces shouldBe """{"nestedStructure":{"barBaz":{"spam":"eggs"},"foo":10}}"""
   }
 
+  "seq,list,vector decoders" should "handle JSON Object with indices successfully" in {
+    import ConfigParserSpec.TestConfigWithJsonArray._
+    val withArray = """{"field":["valueA", "valueB", "valueC"]}"""
+    val withObject = """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
+    val aConf = ConfigFactory.parseString(withArray)
+    val oConf = ConfigFactory.parseString(withObject)
+
+    //seqs
+    val aSeq = ConfigParser.parse[TestConfigWithSeq](aConf.root)
+    val oSeq = ConfigParser.parse[TestConfigWithSeq](oConf.root)
+    aSeq shouldBe a[Right[_,_]]
+    aSeq shouldEqual oSeq
+
+    //lists
+    val aList = ConfigParser.parse[TestConfigWithList](aConf.root)
+    val oList = ConfigParser.parse[TestConfigWithList](oConf.root)
+    aList shouldBe a[Right[_,_]]
+    aList shouldEqual oList
+
+    //vectors
+    val aVector = ConfigParser.parse[TestConfigWithVector](aConf.root)
+    val oVector = ConfigParser.parse[TestConfigWithVector](oConf.root)
+    aVector shouldBe a[Right[_,_]]
+    aVector shouldEqual oVector
+  }
+
   "withEnvVarOverrides" should "overwrite keys from the environment" in {
     val conf = ConfigFactory.load("override.conf")
     val orig = ConfigParser.toJson(conf.getConfig("override").root())
@@ -152,6 +178,16 @@ class ConfigParserSpec
 
 object ConfigParserSpec {
   import io.circe._, io.circe.generic.semiauto._
+
+  object TestConfigWithJsonArray {
+    import ConfigDecoders._
+    case class TestConfigWithSeq(field: Seq[String])
+    case class TestConfigWithList(field: List[String])
+    case class TestConfigWithVector(field: Vector[String])
+    implicit val configWithSeqDecoder: Decoder[TestConfigWithSeq] = deriveDecoder
+    implicit val configWithListDecoder: Decoder[TestConfigWithList] = deriveDecoder
+    implicit val configWithVectorDecoder: Decoder[TestConfigWithVector] = deriveDecoder
+  }
 
   case class TestConfig(
       metrics: TestConfig.Metrics,

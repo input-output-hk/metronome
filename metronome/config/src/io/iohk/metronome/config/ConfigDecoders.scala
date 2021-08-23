@@ -35,6 +35,40 @@ object ConfigDecoders {
       tryParse(_, _ getBoolean _)
     }
 
+  /**
+    * Custom sequence decoder with failover (Map[Int, A]) handles system property overrides
+    *
+    * It turned out that:
+    * ```
+    *   "field": ["valueA", "valueB", "valueC"]
+    *
+    *   // when overridden as:
+    *   ./run -Dfield.0="valueX"
+    *
+    *   // turns into:
+    *   "field": { "0": "valueX" }
+    * ```
+    * Failing the cursor expecting Json array.
+    * However this situation can be handled by reading an Object instead.
+    *
+    * @param aDecoder - decoder for each element
+    * @return Seq (Vector) of A's
+    */
+
+  implicit def seqDecoder[A](implicit aDecoder: Decoder[A]): Decoder[Seq[A]] = {
+    vectorDecoder.map(_.toSeq) // returns vector itself, actually
+  }
+
+  implicit def listDecoder[A](implicit aDecoder: Decoder[A]): Decoder[List[A]] = {
+    vectorDecoder.map(_.toList)
+  }
+
+  implicit def vectorDecoder[A](implicit aDecoder: Decoder[A]): Decoder[Vector[A]] = {
+    Decoder.decodeVector[A] or Decoder[Map[Int, A]].map { srcMap =>
+      srcMap.toVector.sortBy(_._1).map(_._2)
+    }
+  }
+
   /** Parse an object where a discriminant tells us which other key value
     * to deserialise into the target type.
     *
