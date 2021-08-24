@@ -7,6 +7,8 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableDrivenPropertyChecks
 import org.scalatest.Inside
 import scala.concurrent.duration._
+import com.typesafe.config.Config
+import org.scalatest.compatible.Assertion
 
 class ConfigParserSpec
     extends AnyFlatSpec
@@ -82,69 +84,41 @@ class ConfigParserSpec
     aVector shouldEqual oVector
   }
 
-  "seq,list,vector decoders" should "fail on JSON Object key gaps but allow empty object" in {
+  "seq,list,vector decoders" should "fail on JSON Object key gaps" in {
     import ConfigParserSpec.TestConfigWithJsonArray._
+    // format: off
+    val gapsConf1 = ConfigFactory.parseString("""{"field":{"2":"valueC", "0":"valueA"}}""")
+    val gapsConf2 = ConfigFactory.parseString("""{"field":{"2":"valueA"}}""")
 
-    val withGaps1 = """{"field":{"2":"valueC", "0":"valueA"}}"""
-    val withGaps2 = """{"field":{"2":"valueA"}}"""
-    val withDupes = """{"field":{"2":"valueA", "2":"valueB"}}"""
-    val withEmpty = """{"field":{}}"""
+    checkDecoding[TestConfigWithSeq](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
+    checkDecoding[TestConfigWithSeq](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
 
-    val gapsConf1 = ConfigFactory.parseString(withGaps1)
-    val gapsConf2 = ConfigFactory.parseString(withGaps2)
-    val dupesConf = ConfigFactory.parseString(withDupes)
-    val emptyConf = ConfigFactory.parseString(withEmpty)
+    checkDecoding[TestConfigWithList](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
+    checkDecoding[TestConfigWithList](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
 
-    // seqs
-    val gapsSeq1 = ConfigParser.parse[TestConfigWithSeq](gapsConf1.root)
-    val gapsSeq2 = ConfigParser.parse[TestConfigWithSeq](gapsConf2.root)
-    val dupesSeq = ConfigParser.parse[TestConfigWithSeq](dupesConf.root)
-    val emptySeq = ConfigParser.parse[TestConfigWithSeq](emptyConf.root)
+    checkDecoding[TestConfigWithVector](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
+    checkDecoding[TestConfigWithVector](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
+    // format: on
+  }
 
-    inside(gapsSeq1) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}")
-    }
-    inside(gapsSeq2) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
-    }
-    inside(dupesSeq) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
-    }
-    inside(emptySeq) { case Right(success) => success.field shouldBe empty }
+  "seq,list,vector decoders" should "succeed on empty JSON Object" in {
+    import ConfigParserSpec.TestConfigWithJsonArray._
+    // format: off
+    val emptyConf = ConfigFactory.parseString("""{"field":{}}""")
+    checkDecoding[TestConfigWithSeq](emptyConf, Right(_.field shouldBe empty))
+    checkDecoding[TestConfigWithList](emptyConf, Right(_.field shouldBe empty))
+    checkDecoding[TestConfigWithVector](emptyConf, Right(_.field shouldBe empty))
+    // format: on
+  }
 
-    // lists
-    val gapsList1 = ConfigParser.parse[TestConfigWithList](gapsConf1.root)
-    val gapsList2 = ConfigParser.parse[TestConfigWithList](gapsConf2.root)
-    val dupesList = ConfigParser.parse[TestConfigWithList](dupesConf.root)
-    val emptyList = ConfigParser.parse[TestConfigWithList](emptyConf.root)
-
-    inside(gapsList1) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}")
-    }
-    inside(gapsList2) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
-    }
-    inside(dupesList) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
-    }
-    inside(emptyList) { case Right(success) => success.field shouldBe empty }
-
-    // vectors
-    val gapsVector1 = ConfigParser.parse[TestConfigWithVector](gapsConf1.root)
-    val gapsVector2 = ConfigParser.parse[TestConfigWithVector](gapsConf2.root)
-    val dupesVector = ConfigParser.parse[TestConfigWithVector](dupesConf.root)
-    val emptyVector = ConfigParser.parse[TestConfigWithVector](emptyConf.root)
-
-    inside(gapsVector1) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}")
-    }
-    inside(gapsVector2) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
-    }
-    inside(dupesVector) { case Left(Right(err)) =>
-      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
-    }
-    inside(emptyVector) { case Right(success) => success.field shouldBe empty }
+  "seq,list,vector decoders" should "succeed on JSON Object with duplicated keys keeping the last value" in {
+    import ConfigParserSpec.TestConfigWithJsonArray._
+    // format: off
+    val dupesConf = ConfigFactory.parseString("""{"field":{"0":"valueA", "0":"valueB"}}""")
+    checkDecoding[TestConfigWithSeq](dupesConf, Right(_.field shouldBe Seq("valueB")))
+    checkDecoding[TestConfigWithList](dupesConf, Right(_.field shouldBe List("valueB")))
+    checkDecoding[TestConfigWithVector](dupesConf, Right(_.field shouldBe Vector("valueB")))
+    // format: on
   }
 
   "withEnvVarOverrides" should "overwrite keys from the environment" in {
@@ -283,11 +257,11 @@ class ConfigParserSpec
     }
   }
 
-  def withProperty[T](key: String, value: String)(thunk: => T): T = {
+  private def withProperty[T](key: String, value: String)(thunk: => T): T = {
     withProperties(key -> value)(thunk)
   }
 
-  def withProperties[T](props: (String, String)*)(thunk: => T): T = {
+  private def withProperties[T](props: (String, String)*)(thunk: => T): T = {
     val current = props.map { case (k, v) =>
       // it is important to clear property which wasn't set before
       // that is why we're keeping None values in that Map
@@ -302,6 +276,21 @@ class ConfigParserSpec
         case (k, _)       => System.clearProperty(k)
       }
       ConfigFactory.invalidateCaches()
+    }
+  }
+
+  private def checkDecoding[T: Decoder](
+      source: Config,
+      checker: Either[String, T => Assertion]
+  ) = {
+    val result = ConfigParser.parse[T](source.root)
+    checker match {
+      case Left(errorMessage) =>
+        inside(result) { case Left(Right(err)) =>
+          err.message shouldBe errorMessage
+        }
+      case Right(checkFn) =>
+        inside(result) { case Right(value) => checkFn(value) }
     }
   }
 
