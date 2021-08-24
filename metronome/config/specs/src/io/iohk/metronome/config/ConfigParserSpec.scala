@@ -90,14 +90,14 @@ class ConfigParserSpec
     val gapsConf1 = ConfigFactory.parseString("""{"field":{"2":"valueC", "0":"valueA"}}""")
     val gapsConf2 = ConfigFactory.parseString("""{"field":{"2":"valueA"}}""")
 
-    checkDecoding[TestConfigWithSeq](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
-    checkDecoding[TestConfigWithSeq](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
-
-    checkDecoding[TestConfigWithList](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
-    checkDecoding[TestConfigWithList](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
-
-    checkDecoding[TestConfigWithVector](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
-    checkDecoding[TestConfigWithVector](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
+    def check[T : Decoding] = {
+      checkDecoding[T](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
+      checkDecoding[T](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
+    }
+    
+    check[TestConfigWithSeq]
+    check[TestConfigWithList]
+    check[TestConfigWithVector]
     // format: on
   }
 
