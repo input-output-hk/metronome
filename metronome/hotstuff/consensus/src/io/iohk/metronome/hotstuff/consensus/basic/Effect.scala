@@ -43,7 +43,7 @@ object Effect {
     */
   case class CreateBlock[A <: Agreement](
       viewNumber: ViewNumber,
-      highQC: QuorumCertificate[A]
+      highQC: QuorumCertificate[A, Phase.Prepare]
   ) extends Effect[A]
 
   /** Once the Prepare Q.C. has been established for a block,
@@ -67,7 +67,7 @@ object Effect {
     */
   case class ExecuteBlocks[A <: Agreement](
       lastExecutedBlockHash: A#Hash,
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A, Phase.Commit]
   ) extends Effect[A]
 
 }

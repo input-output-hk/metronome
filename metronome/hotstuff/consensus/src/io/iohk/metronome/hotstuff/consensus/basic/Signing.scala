@@ -50,7 +50,7 @@ trait Signing[A <: Agreement] {
 
   def validate(
       federation: Federation[A#PKey],
-      quorumCertificate: QuorumCertificate[A]
+      quorumCertificate: QuorumCertificate[A, VotingPhase]
   ): Boolean =
     validate(
       federation,
