@@ -55,11 +55,11 @@ class ConfigParserSpec
 
   "seq,list,vector decoders" should "handle JSON Object with sequential indices successfully" in {
     import ConfigParserSpec.TestConfigWithJsonArray._
-    val withArray = """{"field":["valueA", "valueB", "valueC"]}"""
+    val withArray  = """{"field":["valueA", "valueB", "valueC"]}"""
     val withObject = """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
-    val expected = Vector("valueA", "valueB", "valueC")
-    val aConf = ConfigFactory.parseString(withArray)
-    val oConf = ConfigFactory.parseString(withObject)
+    val expected   = Vector("valueA", "valueB", "valueC")
+    val aConf      = ConfigFactory.parseString(withArray)
+    val oConf      = ConfigFactory.parseString(withObject)
 
     // seqs
     val aSeq = ConfigParser.parse[TestConfigWithSeq](aConf.root)
@@ -70,7 +70,9 @@ class ConfigParserSpec
     // lists
     val aList = ConfigParser.parse[TestConfigWithList](aConf.root)
     val oList = ConfigParser.parse[TestConfigWithList](oConf.root)
-    inside(aList) { case Right(value) => value.field.toVector shouldBe expected }
+    inside(aList) { case Right(value) =>
+      value.field.toVector shouldBe expected
+    }
     aList shouldEqual oList
 
     // vectors
@@ -87,6 +89,7 @@ class ConfigParserSpec
     val withGaps2 = """{"field":{"2":"valueA"}}"""
     val withDupes = """{"field":{"2":"valueA", "2":"valueB"}}"""
     val withEmpty = """{"field":{}}"""
+
     val gapsConf1 = ConfigFactory.parseString(withGaps1)
     val gapsConf2 = ConfigFactory.parseString(withGaps2)
     val dupesConf = ConfigFactory.parseString(withDupes)
@@ -98,9 +101,15 @@ class ConfigParserSpec
     val dupesSeq = ConfigParser.parse[TestConfigWithSeq](dupesConf.root)
     val emptySeq = ConfigParser.parse[TestConfigWithSeq](emptyConf.root)
 
-    inside(gapsSeq1) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}") }
-    inside(gapsSeq2) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
-    inside(dupesSeq) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(gapsSeq1) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}")
+    }
+    inside(gapsSeq2) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
+    }
+    inside(dupesSeq) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
+    }
     inside(emptySeq) { case Right(success) => success.field shouldBe empty }
 
     // lists
@@ -109,9 +118,15 @@ class ConfigParserSpec
     val dupesList = ConfigParser.parse[TestConfigWithList](dupesConf.root)
     val emptyList = ConfigParser.parse[TestConfigWithList](emptyConf.root)
 
-    inside(gapsList1) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}") }
-    inside(gapsList2) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
-    inside(dupesList) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(gapsList1) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}")
+    }
+    inside(gapsList2) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
+    }
+    inside(dupesList) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
+    }
     inside(emptyList) { case Right(success) => success.field shouldBe empty }
 
     // vectors
@@ -120,9 +135,15 @@ class ConfigParserSpec
     val dupesVector = ConfigParser.parse[TestConfigWithVector](dupesConf.root)
     val emptyVector = ConfigParser.parse[TestConfigWithVector](emptyConf.root)
 
-    inside(gapsVector1) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}") }
-    inside(gapsVector2) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
-    inside(dupesVector) { case Left(Right(err)) => err.message shouldBe (s"Expected [0, 1) sequence, but got {2}") }
+    inside(gapsVector1) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 2) sequence, but got {0, 2}")
+    }
+    inside(gapsVector2) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
+    }
+    inside(dupesVector) { case Left(Right(err)) =>
+      err.message shouldBe (s"Expected [0, 1) sequence, but got {2}")
+    }
     inside(emptyVector) { case Right(success) => success.field shouldBe empty }
   }
 
@@ -197,30 +218,93 @@ class ConfigParserSpec
   it should "work with system property overrides" in {
     import ConfigParserSpec.TestConfig
 
-    withProperty("metronome.metrics.enabled", "true") {
-      withProperty("metronome.network.max-incoming-connections", "50") {
-        val config = ConfigParser.parse[TestConfig](
-          ConfigFactory.load("complex.conf").getConfig("metronome").root()
-        )
+    withProperties(
+      ("metronome.metrics.enabled", "true"),
+      ("metronome.network.max-incoming-connections", "50")
+    ) {
+      val config = ConfigParser.parse[TestConfig](
+        ConfigFactory.load("complex.conf").getConfig("metronome").root()
+      )
 
-        inside(config) { case Right(config) =>
-          config.metrics.enabled shouldBe true
-          config.network.maxIncomingConnections shouldBe 50
-        }
+      inside(config) { case Right(config) =>
+        config.metrics.enabled shouldBe true
+        config.network.maxIncomingConnections shouldBe 50
+      }
+    }
+  }
+
+  it should "work correctly with multiple system property override" in {
+    import ConfigParserSpec.TestConfigWithJsonArray._
+    withProperties(("field.0", "valueX"), ("field.1", "valueY")) {
+      val expected = Seq("valueX", "valueY")
+      val root     = ConfigFactory.load("array.conf").root
+
+      // seqs
+      val configSeq = ConfigParser.parse[TestConfigWithSeq](root)
+      inside(configSeq) { case Right(result) =>
+        result.field.toSeq shouldBe expected
+      }
+
+      // lists
+      val configList = ConfigParser.parse[TestConfigWithList](root)
+      inside(configList) { case Right(result) =>
+        result.field.toList shouldBe expected
+      }
+
+      // vectors
+      val configVector = ConfigParser.parse[TestConfigWithVector](root)
+      inside(configVector) { case Right(result) =>
+        result.field.toVector shouldBe expected
+      }
+    }
+  }
+
+  it should "report a meaningful error text on incorrect array override" in {
+    import ConfigParserSpec.TestConfigWithJsonArray._
+    withProperties(("field.2", "valueX"), ("field.1", "valueY")) {
+      val root = ConfigFactory.load("array.conf").root
+      // seqs
+      val configSeq = ConfigParser.parse[TestConfigWithSeq](root)
+      inside(configSeq) { case Left(Right(err)) =>
+        err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
+      }
+
+      // lists
+      val configList = ConfigParser.parse[TestConfigWithList](root)
+      inside(configList) { case Left(Right(err)) =>
+        err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
+      }
+
+      // vectors
+      val configVector = ConfigParser.parse[TestConfigWithVector](root)
+      inside(configVector) { case Left(Right(err)) =>
+        err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
       }
     }
   }
 
   def withProperty[T](key: String, value: String)(thunk: => T): T = {
-    val maybeCurrent = Option(System.setProperty(key, value))
+    withProperties(key -> value)(thunk)
+  }
+
+  def withProperties[T](props: (String, String)*)(thunk: => T): T = {
+    val current = props.map { case (k, v) =>
+      // it is important to clear property which wasn't set before
+      // that is why we're keeping None values in that Map
+      k -> Option(System.setProperty(k, v))
+    }.toMap
     try {
       ConfigFactory.invalidateCaches()
       thunk
     } finally {
-      maybeCurrent.foreach(System.setProperty(key, _))
+      current.foreach {
+        case (k, Some(v)) => System.setProperty(k, v)
+        case (k, _)       => System.clearProperty(k)
+      }
       ConfigFactory.invalidateCaches()
     }
   }
+
 }
 
 object ConfigParserSpec {
@@ -231,9 +315,12 @@ object ConfigParserSpec {
     case class TestConfigWithSeq(field: Seq[String])
     case class TestConfigWithList(field: List[String])
     case class TestConfigWithVector(field: Vector[String])
-    implicit val configWithSeqDecoder: Decoder[TestConfigWithSeq] = deriveDecoder
-    implicit val configWithListDecoder: Decoder[TestConfigWithList] = deriveDecoder
-    implicit val configWithVectorDecoder: Decoder[TestConfigWithVector] = deriveDecoder
+    implicit val configWithSeqDecoder: Decoder[TestConfigWithSeq] =
+      deriveDecoder
+    implicit val configWithListDecoder: Decoder[TestConfigWithList] =
+      deriveDecoder
+    implicit val configWithVectorDecoder: Decoder[TestConfigWithVector] =
+      deriveDecoder
   }
 
   case class TestConfig(

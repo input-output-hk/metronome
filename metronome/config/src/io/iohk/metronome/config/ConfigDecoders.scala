@@ -35,8 +35,7 @@ object ConfigDecoders {
       tryParse(_, _ getBoolean _)
     }
 
-  /**
-    * Custom sequence decoder with failover (Map[Int, A]) handles system property overrides
+  /** Custom sequence decoder with failover (Map[Int, A]) handles system property overrides
     *
     * It turned out that:
     * ```
@@ -45,7 +44,7 @@ object ConfigDecoders {
     *   // when overridden as:
     *   ./run -Dfield.0="valueX"
     *
-    *   // turns into:
+    *   // becomes:
     *   "field": { "0": "valueX" }
     * ```
     * Failing the cursor expecting Json array.
@@ -59,11 +58,15 @@ object ConfigDecoders {
     vectorDecoder.map(_.toSeq) // returns vector itself, actually
   }
 
-  implicit def listDecoder[A](implicit aDecoder: Decoder[A]): Decoder[List[A]] = {
+  implicit def listDecoder[A](implicit
+      aDecoder: Decoder[A]
+  ): Decoder[List[A]] = {
     vectorDecoder.map(_.toList)
   }
 
-  implicit def vectorDecoder[A](implicit aDecoder: Decoder[A]): Decoder[Vector[A]] = {
+  implicit def vectorDecoder[A](implicit
+      aDecoder: Decoder[A]
+  ): Decoder[Vector[A]] = {
     Decoder.decodeVector[A] or Decoder[Map[Int, A]].emap { srcMap =>
       val sorted = srcMap.toVector.sortBy(_._1)
       if (sorted.isEmpty || sorted.size == sorted.last._1 + 1) {
