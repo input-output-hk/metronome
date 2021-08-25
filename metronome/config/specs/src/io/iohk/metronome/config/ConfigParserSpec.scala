@@ -89,8 +89,10 @@ class ConfigParserSpec
 
     it should "succeed on JSON Object with duplicated keys keeping the last value" in {
       // format: off
-      val dupesConf = ConfigFactory.parseString("""{"field":{"0":"valueA", "0":"valueB"}}""")
-      checkDecoding[T](dupesConf, Right(outer => unwrapper(outer) shouldBe Seq("valueB")))
+      val src = """{"field":{"0":"valueA", "1":"valueB", "0": "valueC", "1": "valueD", "0": "valueE", "1": "valueF"}}"""
+      val dupesConf = ConfigFactory.parseString(src)
+      val expected = Vector("valueE", "valueF")
+      checkDecoding[T](dupesConf, Right(outer => unwrapper(outer) shouldBe expected))
       // format: on
     }
 
