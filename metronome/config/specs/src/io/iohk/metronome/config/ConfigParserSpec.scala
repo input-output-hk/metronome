@@ -55,69 +55,53 @@ class ConfigParserSpec
     json.noSpaces shouldBe """{"nestedStructure":{"barBaz":{"spam":"eggs"},"foo":10}}"""
   }
 
-  "seq,list,vector decoders" should "handle JSON Object with sequential indices successfully" in {
-    import ConfigParserSpec.TestConfigWithJsonArray._
-    val withArray  = """{"field":["valueA", "valueB", "valueC"]}"""
-    val withObject = """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
-    val expected   = Vector("valueA", "valueB", "valueC")
-    val aConf      = ConfigFactory.parseString(withArray)
-    val oConf      = ConfigFactory.parseString(withObject)
+  private def vectorWithFallback[T: Decoder](
+      unwrapper: T => Vector[String]
+  ): Unit = {
 
-    // seqs
-    val aSeq = ConfigParser.parse[TestConfigWithSeq](aConf.root)
-    val oSeq = ConfigParser.parse[TestConfigWithSeq](oConf.root)
-    inside(aSeq) { case Right(value) => value.field.toVector shouldBe expected }
-    aSeq shouldEqual oSeq
-
-    // lists
-    val aList = ConfigParser.parse[TestConfigWithList](aConf.root)
-    val oList = ConfigParser.parse[TestConfigWithList](oConf.root)
-    inside(aList) { case Right(value) =>
-      value.field.toVector shouldBe expected
+    it should "handle JSON Object with sequential indices successfully" in {
+      // format: off
+      val withArray = """{"field":["valueA", "valueB", "valueC"]}"""
+      val withObject = """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
+      val expected = Vector("valueA", "valueB", "valueC")
+      val parsedArray = ConfigParser.parse[T](ConfigFactory.parseString(withArray).root)
+      val parsedObject = ConfigParser.parse[T](ConfigFactory.parseString(withObject).root)
+      inside(parsedArray) { case Right(value) => unwrapper(value) shouldBe expected }
+      inside(parsedObject) { case Right(value) => unwrapper(value) shouldBe expected }
+      // format: on
     }
-    aList shouldEqual oList
 
-    // vectors
-    val aVector = ConfigParser.parse[TestConfigWithVector](aConf.root)
-    val oVector = ConfigParser.parse[TestConfigWithVector](oConf.root)
-    inside(aVector) { case Right(value) => value.field shouldBe expected }
-    aVector shouldEqual oVector
-  }
-
-  "seq,list,vector decoders" should "fail on JSON Object key gaps" in {
-    import ConfigParserSpec.TestConfigWithJsonArray._
-    // format: off
-    val gapsConf1 = ConfigFactory.parseString("""{"field":{"2":"valueC", "0":"valueA"}}""")
-    val gapsConf2 = ConfigFactory.parseString("""{"field":{"2":"valueA"}}""")
-
-    def check[T : Decoder] = {
+    it should "fail on JSON Object key gaps" in {
+      // format: off
+      val gapsConf1 = ConfigFactory.parseString("""{"field":{"2":"valueC", "0":"valueA"}}""")
+      val gapsConf2 = ConfigFactory.parseString("""{"field":{"2":"valueA"}}""")
       checkDecoding[T](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
       checkDecoding[T](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
+      // format: on
     }
-    
-    check[TestConfigWithSeq]
-    check[TestConfigWithList]
-    check[TestConfigWithVector]
-    // format: on
+
+    it should "succeed on empty JSON Object" in {
+      // format: off
+      val emptyConf = ConfigFactory.parseString("""{"field":{}}""")
+      checkDecoding[T](emptyConf, Right(outer => unwrapper(outer) shouldBe empty))
+      // format: on
+    }
+
+    it should "succeed on JSON Object with duplicated keys keeping the last value" in {
+      // format: off
+      val dupesConf = ConfigFactory.parseString("""{"field":{"0":"valueA", "0":"valueB"}}""")
+      checkDecoding[T](dupesConf, Right(outer => unwrapper(outer) shouldBe Seq("valueB")))
+      // format: on
+    }
+
   }
 
-  "seq,list,vector decoders" should "succeed on empty JSON Object" in {
+  {
     import ConfigParserSpec.TestConfigWithJsonArray._
     // format: off
-    val emptyConf = ConfigFactory.parseString("""{"field":{}}""")
-    checkDecoding[TestConfigWithSeq](emptyConf, Right(_.field shouldBe empty))
-    checkDecoding[TestConfigWithList](emptyConf, Right(_.field shouldBe empty))
-    checkDecoding[TestConfigWithVector](emptyConf, Right(_.field shouldBe empty))
-    // format: on
-  }
-
-  "seq,list,vector decoders" should "succeed on JSON Object with duplicated keys keeping the last value" in {
-    import ConfigParserSpec.TestConfigWithJsonArray._
-    // format: off
-    val dupesConf = ConfigFactory.parseString("""{"field":{"0":"valueA", "0":"valueB"}}""")
-    checkDecoding[TestConfigWithSeq](dupesConf, Right(_.field shouldBe Seq("valueB")))
-    checkDecoding[TestConfigWithList](dupesConf, Right(_.field shouldBe List("valueB")))
-    checkDecoding[TestConfigWithVector](dupesConf, Right(_.field shouldBe Vector("valueB")))
+    "Seq decoder" should behave like vectorWithFallback[TestConfigWithSeq](_.field.toVector)
+    "List decoder" should behave like vectorWithFallback[TestConfigWithList](_.field.toVector)
+    "Vector decoder" should behave like vectorWithFallback[TestConfigWithVector](_.field)
     // format: on
   }
 
