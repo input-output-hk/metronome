@@ -104,7 +104,8 @@ object InterpreterServiceSpec {
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
-    ): Task[Option[Block.Body]] = Task.pure(None)
+    ): Task[Option[InterpreterRPC.CreateResult]] =
+      Task.pure(None)
 
     override def validateBlockBody(
         blockBody: Block.Body,

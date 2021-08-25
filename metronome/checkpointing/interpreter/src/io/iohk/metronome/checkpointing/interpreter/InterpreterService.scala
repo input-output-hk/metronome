@@ -54,18 +54,18 @@ object InterpreterService {
             tracer(Error(err))
 
           case req @ CreateBlockBodyRequest(requestId, ledger, mempool) =>
-            respondWith(
-              req,
-              interpreterRpc.createBlockBody(ledger, mempool),
-              CreateBlockBodyResponse(requestId, _)
-            )
+            respondWith(req, interpreterRpc.createBlockBody(ledger, mempool)) {
+              case (body, purgeFromMempool) =>
+                CreateBlockBodyResponse(requestId, body, purgeFromMempool)
+            }
 
           case req @ ValidateBlockBodyRequest(requestId, blockBody, ledger) =>
             respondWith(
               req,
-              interpreterRpc.validateBlockBody(blockBody, ledger),
-              ValidateBlockBodyResponse(requestId, _)
-            )
+              interpreterRpc.validateBlockBody(blockBody, ledger)
+            ) { isValid =>
+              ValidateBlockBodyResponse(requestId, isValid)
+            }
 
           case req @ NewCheckpointCertificateRequest(_, cert) =>
             noResponse(
@@ -79,9 +79,7 @@ object InterpreterService {
         Req <: InterpreterMessage with Request with FromService,
         Res <: InterpreterMessage with Response with FromInterpreter,
         A
-    ](
-        request: Req,
-        maybeResult: F[Option[A]],
+    ](request: Req, maybeResult: F[Option[A]])(
         toResponse: A => Res
     )(implicit ev: RPCPair.Aux[Req, Res]): F[Unit] =
       Concurrent[F].start {

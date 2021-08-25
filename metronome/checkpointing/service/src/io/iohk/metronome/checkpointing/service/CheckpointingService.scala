@@ -61,9 +61,9 @@ class CheckpointingService[F[_]: Sync, N](
       oldLedger <- OptionT(projectLedger(parent))
       mempool   <- OptionT.liftF(projectMempool(highQC.blockHash))
 
-      newBody <- OptionT {
+      (newBody, toPurge) <- OptionT {
         if (mempool.isEmpty && config.expectCheckpointCandidateNotifications)
-          Block.Body.empty.some.pure[F]
+          InterpreterRPC.CreateResult.empty.some.pure[F]
         else
           interpreterClient.createBlockBody(oldLedger, mempool.proposerBlocks)
       }
@@ -72,6 +72,7 @@ class CheckpointingService[F[_]: Sync, N](
       newBlock  = Block.make(parent.header, newLedger.hash, newBody)
 
       _ <- OptionT.liftF(updateLedgerTree(newLedger, newBlock.header))
+      _ <- OptionT.liftF(removeFromMempool(toPurge))
       _ <- OptionT.liftF(tracer(CheckpointingEvent.Proposing(newBlock)))
     } yield newBlock
   ).value
@@ -117,6 +118,7 @@ class CheckpointingService[F[_]: Sync, N](
               }
               .toOptionT[F]
 
+            // TODO: PM-3107: Filter mempool.
             tracer(CheckpointingEvent.NewState(ledger)) >>
               saveLedger(block.header, ledger) >>
               certificateOpt.cataF(
@@ -190,6 +192,14 @@ class CheckpointingService[F[_]: Sync, N](
     */
   private def projectMempool(blockHash: Block.Hash): F[Mempool] =
     mempoolRef.getAndUpdate(_.clearCheckpointCandidate)
+
+  /** Remove items from the mempool that will no longer be included in a block. */
+  private def removeFromMempool(
+      items: Set[Transaction.ProposerBlock]
+  ): F[Unit] =
+    mempoolRef
+      .update(p => p.copy(proposerBlocks = p.proposerBlocks.filterNot(items)))
+      .whenA(items.nonEmpty)
 
   /** Saves a new ledger in the tree only if a parent state exists.
     * Because we're only adding to the tree no locking around it is necessary
