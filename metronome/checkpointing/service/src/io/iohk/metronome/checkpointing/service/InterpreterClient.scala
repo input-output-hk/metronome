@@ -48,7 +48,7 @@ object InterpreterClient {
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
-    ): F[Option[(Block.Body, Set[Transaction.ProposerBlock])]] =
+    ): F[Option[InterpreterRPC.CreateResult]] =
       sendRequest((), CreateBlockBodyRequest(_, ledger, mempool)).map {
         _.map(r => (r.blockBody, r.purgeFromMempool))
       }

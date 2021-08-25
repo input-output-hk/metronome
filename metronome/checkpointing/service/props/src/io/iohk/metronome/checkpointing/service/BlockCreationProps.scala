@@ -14,6 +14,7 @@ import monix.eval.Task
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.{all, forAll, propBoolean}
 import org.scalacheck.{Gen, Properties}
+import io.iohk.metronome.checkpointing.interpreter.InterpreterRPC
 
 /** Props for CheckpointingService focusing on `createBlock` */
 object BlockCreationProps extends Properties("BlockCreation") {
@@ -44,10 +45,10 @@ object BlockCreationProps extends Properties("BlockCreation") {
       override def createBlockBody(
           ledger: Ledger,
           mempool: Seq[ProposerBlock]
-      ) =
+      ): Task[Option[InterpreterRPC.CreateResult]] =
         recordedArguments
           .set((ledger, mempool).some)
-          .as(createdBody.map(_ -> Set.empty))
+          .as(createdBody.map(InterpreterRPC.CreateResult(_)))
     }
 
     override val interpreterClientResource: Resource[Task, InterpreterClient] =

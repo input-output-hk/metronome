@@ -63,7 +63,7 @@ class CheckpointingService[F[_]: Sync, N](
 
       (newBody, toPurge) <- OptionT {
         if (mempool.isEmpty && config.expectCheckpointCandidateNotifications)
-          (Block.Body.empty, Set.empty[Transaction.ProposerBlock]).some.pure[F]
+          InterpreterRPC.CreateResult.empty.some.pure[F]
         else
           interpreterClient.createBlockBody(oldLedger, mempool.proposerBlocks)
       }
