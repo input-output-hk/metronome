@@ -118,6 +118,27 @@ class ConfigParserSpec
       )
     }
 
+    it should "work correctly with multiple system property override" in {
+      withProperties(("field.0", "valueX"), ("field.1", "valueY")) {
+        val expected = Vector("valueX", "valueY")
+        val root     = ConfigFactory.load("array.conf").root
+        val config   = ConfigParser.parse[T](root)
+        inside(config) { case Right(result) =>
+          unwrapper(result) shouldBe expected
+        }
+      }
+    }
+
+    it should "report a meaningful error text on incorrect array override" in {
+      withProperties(("field.2", "valueX"), ("field.1", "valueY")) {
+        val root   = ConfigFactory.load("array.conf").root
+        val config = ConfigParser.parse[T](root)
+        inside(config) { case Left(Right(err)) =>
+          err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
+        }
+      }
+    }
+
   }
 
   {
@@ -215,56 +236,6 @@ class ConfigParserSpec
       inside(config) { case Right(config) =>
         config.metrics.enabled shouldBe true
         config.network.maxIncomingConnections shouldBe 50
-      }
-    }
-  }
-
-  it should "work correctly with multiple system property override" in {
-    import ConfigParserSpec.TestConfigWithJsonArray._
-    withProperties(("field.0", "valueX"), ("field.1", "valueY")) {
-      val expected = Seq("valueX", "valueY")
-      val root     = ConfigFactory.load("array.conf").root
-
-      // seqs
-      val configSeq = ConfigParser.parse[TestConfigWithSeq](root)
-      inside(configSeq) { case Right(result) =>
-        result.field.toSeq shouldBe expected
-      }
-
-      // lists
-      val configList = ConfigParser.parse[TestConfigWithList](root)
-      inside(configList) { case Right(result) =>
-        result.field.toList shouldBe expected
-      }
-
-      // vectors
-      val configVector = ConfigParser.parse[TestConfigWithVector](root)
-      inside(configVector) { case Right(result) =>
-        result.field.toVector shouldBe expected
-      }
-    }
-  }
-
-  it should "report a meaningful error text on incorrect array override" in {
-    import ConfigParserSpec.TestConfigWithJsonArray._
-    withProperties(("field.2", "valueX"), ("field.1", "valueY")) {
-      val root = ConfigFactory.load("array.conf").root
-      // seqs
-      val configSeq = ConfigParser.parse[TestConfigWithSeq](root)
-      inside(configSeq) { case Left(Right(err)) =>
-        err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
-      }
-
-      // lists
-      val configList = ConfigParser.parse[TestConfigWithList](root)
-      inside(configList) { case Left(Right(err)) =>
-        err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
-      }
-
-      // vectors
-      val configVector = ConfigParser.parse[TestConfigWithVector](root)
-      inside(configVector) { case Left(Right(err)) =>
-        err.message shouldBe "Expected [0, 2) sequence, but got {1, 2}"
       }
     }
   }
