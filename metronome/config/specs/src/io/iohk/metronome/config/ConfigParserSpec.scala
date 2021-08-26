@@ -55,56 +55,82 @@ class ConfigParserSpec
     json.noSpaces shouldBe """{"nestedStructure":{"barBaz":{"spam":"eggs"},"foo":10}}"""
   }
 
-  private def vectorWithFallback[T: Decoder](
+  private def vectorFallback[T: Decoder](
       unwrapper: T => Vector[String]
   ): Unit = {
 
     it should "handle JSON Object with sequential indices successfully" in {
-      // format: off
       val withArray = """{"field":["valueA", "valueB", "valueC"]}"""
-      val withObject = """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
+      val withObject =
+        """{"field":{"2":"valueC", "0": "valueA", "1":"valueB"}}"""
       val expected = Vector("valueA", "valueB", "valueC")
-      val parsedArray = ConfigParser.parse[T](ConfigFactory.parseString(withArray).root)
-      val parsedObject = ConfigParser.parse[T](ConfigFactory.parseString(withObject).root)
-      inside(parsedArray) { case Right(value) => unwrapper(value) shouldBe expected }
-      inside(parsedObject) { case Right(value) => unwrapper(value) shouldBe expected }
-      // format: on
+      val parsedArray =
+        ConfigParser.parse[T](ConfigFactory.parseString(withArray).root)
+      val parsedObject =
+        ConfigParser.parse[T](ConfigFactory.parseString(withObject).root)
+      inside(parsedArray) { case Right(value) =>
+        unwrapper(value) shouldBe expected
+      }
+      inside(parsedObject) { case Right(value) =>
+        unwrapper(value) shouldBe expected
+      }
     }
 
     it should "fail on JSON Object key gaps" in {
-      // format: off
-      val gapsConf1 = ConfigFactory.parseString("""{"field":{"2":"valueC", "0":"valueA"}}""")
+      val gapsConf1 =
+        ConfigFactory.parseString("""{"field":{"2":"valueC", "0":"valueA"}}""")
       val gapsConf2 = ConfigFactory.parseString("""{"field":{"2":"valueA"}}""")
-      checkDecoding[T](gapsConf1, Left(s"Expected [0, 2) sequence, but got {0, 2}"))
-      checkDecoding[T](gapsConf2, Left(s"Expected [0, 1) sequence, but got {2}"))
-      // format: on
+      checkDecoding[T](
+        gapsConf1,
+        Left(s"Expected [0, 2) sequence, but got {0, 2}")
+      )
+      checkDecoding[T](
+        gapsConf2,
+        Left(s"Expected [0, 1) sequence, but got {2}")
+      )
     }
 
     it should "succeed on empty JSON Object" in {
-      // format: off
       val emptyConf = ConfigFactory.parseString("""{"field":{}}""")
-      checkDecoding[T](emptyConf, Right(outer => unwrapper(outer) shouldBe empty))
-      // format: on
+      checkDecoding[T](
+        emptyConf,
+        Right(outer => unwrapper(outer) shouldBe empty)
+      )
     }
 
     it should "succeed on JSON Object with duplicated keys keeping the last value" in {
-      // format: off
-      val src = """{"field":{"0":"valueA", "1":"valueB", "0": "valueC", "1": "valueD", "0": "valueE", "1": "valueF"}}"""
+      val src =
+        """|{
+           |  "field":{
+           |    "0": "valueA", 
+           |    "1": "valueB", 
+           |    "0": "valueC", 
+           |    "1": "valueD", 
+           |    "0": "valueE", 
+           |    "1": "valueF"
+           |  }
+           |}""".stripMargin
       val dupesConf = ConfigFactory.parseString(src)
-      val expected = Vector("valueE", "valueF")
-      checkDecoding[T](dupesConf, Right(outer => unwrapper(outer) shouldBe expected))
-      // format: on
+      val expected  = Vector("valueE", "valueF")
+      checkDecoding[T](
+        dupesConf,
+        Right(outer => unwrapper(outer) shouldBe expected)
+      )
     }
 
   }
 
   {
     import ConfigParserSpec.TestConfigWithJsonArray._
-    // format: off
-    "Seq decoder" should behave like vectorWithFallback[TestConfigWithSeq](_.field.toVector)
-    "List decoder" should behave like vectorWithFallback[TestConfigWithList](_.field.toVector)
-    "Vector decoder" should behave like vectorWithFallback[TestConfigWithVector](_.field)
-    // format: on
+    "Seq decoder" should behave like vectorFallback[TestConfigWithSeq](
+      _.field.toVector
+    )
+    "List decoder" should behave like vectorFallback[TestConfigWithList](
+      _.field.toVector
+    )
+    "Vector decoder" should behave like vectorFallback[TestConfigWithVector](
+      _.field
+    )
   }
 
   "withEnvVarOverrides" should "overwrite keys from the environment" in {
