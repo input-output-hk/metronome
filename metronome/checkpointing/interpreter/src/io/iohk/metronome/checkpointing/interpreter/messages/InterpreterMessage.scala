@@ -222,6 +222,14 @@ object InterpreterMessage extends RPCMessageCompanion {
       with Request
       with FromInterpreter
 
+  /** The chain replies to the interpreter with a boolean value indicating the relationship */
+  case class AncestryResponse(
+      requestId: RequestId,
+      isAncestry: Boolean
+  ) extends InterpreterMessage
+      with Response
+      with FromChain
+
   /** After extension check, the chain sends block metadata to the interpreter for it to detect any checkpoint
     * candidate. This message is required because previously the interpreter only knows about the block hash as well
     * as the chain number.
@@ -238,14 +246,6 @@ object InterpreterMessage extends RPCMessageCompanion {
       with Request
       with FromChain
       with NoResponse
-
-  /** The chain replies to the interpreter with a boolean value indicating the relationship */
-  case class AncestryResponse(
-      requestId: RequestId,
-      isAncestry: Boolean
-  ) extends InterpreterMessage
-      with Response
-      with FromChain
 
   /** Once the interpreter have received a new checkpoint certificate from the service,
     * it transmits the certificate to the chain in order to reorg the chain's structure if
@@ -286,4 +286,14 @@ object InterpreterMessage extends RPCMessageCompanion {
 
   implicit val validateBlockBodyPair =
     pair[ValidateBlockBodyRequest, ValidateBlockBodyResponse]
+
+  implicit val validateExtensionPair =
+    pair[ValidExtensionRequest, ValidExtensionResponse]
+
+  implicit val ancestryPair =
+    pair[AncestryRequest, AncestryResponse]
+
+  implicit val PenUltimateCheckpointPair =
+    pair[PenUltimateCheckpointRequest, PenUltimateCheckpointResponse]
+
 }
