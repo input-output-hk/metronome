@@ -222,6 +222,23 @@ object InterpreterMessage extends RPCMessageCompanion {
       with Request
       with FromInterpreter
 
+  /** After extension check, the chain sends block metadata to the interpreter for it to detect any checkpoint
+    * candidate. This message is required because previously the interpreter only knows about the block hash as well
+    * as the chain number.
+    *
+    * TODO: The metadata structure should be defined in another file:
+    * 1. For advocate or normal ETC checkpointing, this field should be (block hash, height)
+    * 2. For prism, this field should be different
+    */
+
+  case class NewBlockMetadata(
+      requestId: RequestId,
+      blockMetadata: (Block.Hash, BigInt)
+  ) extends InterpreterMessage
+      with Request
+      with FromChain
+      with NoResponse
+
   /** The chain replies to the interpreter with a boolean value indicating the relationship */
   case class AncestryResponse(
       requestId: RequestId,
@@ -230,6 +247,15 @@ object InterpreterMessage extends RPCMessageCompanion {
       with Response
       with FromChain
 
+  /** Once the interpreter have received a new checkpoint certificate from the service,
+    * it transmits the certificate to the chain in order to reorg the chain's structure if
+    * necessary.
+    *
+    * In the document, the interpreter forwards the entire certificate to the chain which I
+    * think is not necessary. What's key about it is the list of checkpointed block hashes.
+    * Hence, I would suggest the content of this message be a list of hashes instead and there is
+    * no need to worry about the verification because the interpreter checks that ahead.
+    */
   case class NewCheckpointCertificate(
       requestId: RequestId,
       certificate: CheckpointCertificate
@@ -237,6 +263,23 @@ object InterpreterMessage extends RPCMessageCompanion {
       with Request
       with FromInterpreter
       with NoResponse
+
+  /** During the chain reorganizing its structure under a new checkpoint certificate, it needs
+    * to acquire the second last checkpointed block from the interpreter as the starting point.
+    */
+  case class PenUltimateCheckpointRequest(
+      requestId: RequestId
+  ) extends InterpreterMessage
+      with Request
+      with FromChain
+
+  /** The message serves as the reply to @PenUltimateCheckpointRequest sent by the chain */
+  case class PenUltimateCheckpointResponse(
+      requestId: RequestId,
+      prevCheckpointBlock: Block.Hash
+  ) extends InterpreterMessage
+      with Response
+      with FromInterpreter
 
   implicit val createBlockBodyPair =
     pair[CreateBlockBodyRequest, CreateBlockBodyResponse]

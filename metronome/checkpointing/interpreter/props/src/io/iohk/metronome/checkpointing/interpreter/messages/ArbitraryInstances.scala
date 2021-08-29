@@ -101,6 +101,14 @@ object ArbitraryInstances {
       } yield AncestryResponse(requestId, isAncestry)
     }
 
+  implicit val arbNewBlockMetadata: Arbitrary[NewBlockMetadata] =
+    Arbitrary {
+      for {
+        requestId     <- arbitrary[UUID]
+        blockMetadata <- arbitrary[(Block.Hash, BigInt)]
+      } yield NewBlockMetadata(requestId, blockMetadata)
+    }
+
   implicit val arbNewCheckpointCertificate
       : Arbitrary[NewCheckpointCertificate] =
     Arbitrary {
@@ -108,6 +116,23 @@ object ArbitraryInstances {
         requestId             <- arbitrary[UUID]
         checkpointCertificate <- arbitrary[CheckpointCertificate]
       } yield NewCheckpointCertificate(requestId, checkpointCertificate)
+    }
+
+  implicit val arbPenUltimateCheckpointRequest
+      : Arbitrary[PenUltimateCheckpointRequest] =
+    Arbitrary {
+      for {
+        requestId <- arbitrary[UUID]
+      } yield PenUltimateCheckpointRequest(requestId)
+    }
+
+  implicit val arbPenUltimateCheckpointResponse
+      : Arbitrary[PenUltimateCheckpointResponse] =
+    Arbitrary {
+      for {
+        requestId           <- arbitrary[UUID]
+        prevCheckpointBlock <- arbitrary[Block.Hash]
+      } yield PenUltimateCheckpointResponse(requestId, prevCheckpointBlock)
     }
 
   implicit val arbInterpreterMessage: Arbitrary[InterpreterMessage] =
@@ -124,7 +149,10 @@ object ArbitraryInstances {
         arbitrary[ValidExtensionResponse],
         arbitrary[AncestryRequest],
         arbitrary[AncestryResponse],
-        arbitrary[NewCheckpointCertificate]
+        arbitrary[NewBlockMetadata],
+        arbitrary[NewCheckpointCertificate],
+        arbitrary[PenUltimateCheckpointRequest],
+        arbitrary[PenUltimateCheckpointResponse]
       )
     }
 }
