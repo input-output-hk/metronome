@@ -21,8 +21,13 @@ object InterpreterMessage extends RPCMessageCompanion {
   /** Messages from the Interpreter to the Service. */
   sealed trait FromInterpreter
 
+  /** Messages from the Chain to the Interpreter */
+  sealed trait FromChain
+
   /** Mark requests that require no response. */
   sealed trait NoResponse { self: Request => }
+
+  /** Service <=> Interpreter */
 
   /** The Interpreter notifies the Service about a new
     * proposer block that should be added to the mempool.
@@ -171,6 +176,66 @@ object InterpreterMessage extends RPCMessageCompanion {
   ) extends InterpreterMessage
       with Request
       with FromService
+      with NoResponse
+
+  /** Interpreter <=> Chain */
+
+  /** The chain requests the interpreter to perform a check about whether its latest
+    * received block extends from the latest checkpointed block.
+    *
+    * This extension validation should be called after the block parent is verified to
+    * exist the chain.
+    */
+  case class ValidExtensionRequest(
+      requestId: RequestId,
+      blockHeader: Block.Header
+  ) extends InterpreterMessage
+      with Request
+      with FromChain
+
+  /** The interpreter replies to the chain with a boolean value indicating the relationship */
+
+  case class ValidExtensionResponse(
+      requestId: RequestId,
+      isExtended: Boolean
+  ) extends InterpreterMessage
+      with Response
+      with FromInterpreter
+
+  /** The interpreter asks the chain whether the target block is an immediate family of
+    * the checkpointed block. This message communication takes place after the interpreter gets
+    * @ValidExtensionRequest and it is needed because the interpreter stores all checkpointing records
+    * but do have information about the chain. Furthermore, duplicate the chain's metadata is not necessary
+    * because the interpreter serves as a plugin and it is assumed that the local message passing between
+    * the interpreter and the chain is quick and safe.
+    *
+    * targetBlockInfo and checkpointBlockInfo both are a tuple of values. The first one is the block hash and
+    * the second one here is defined as the chain number. In ETC, it is always set to be -1, but in Prism, the
+    * value is variant.
+    */
+
+  case class AncestryRequest(
+      requestId: RequestId,
+      targetBlockInfo: (Block.Hash, Int),
+      checkpointBlockInfo: (Block.Hash, Int)
+  ) extends InterpreterMessage
+      with Request
+      with FromInterpreter
+
+  /** The chain replies to the interpreter with a boolean value indicating the relationship */
+  case class AncestryResponse(
+      requestId: RequestId,
+      isAncestry: Boolean
+  ) extends InterpreterMessage
+      with Response
+      with FromChain
+
+  case class NewCheckpointCertificate(
+      requestId: RequestId,
+      certificate: CheckpointCertificate
+  ) extends InterpreterMessage
+      with Request
+      with FromInterpreter
       with NoResponse
 
   implicit val createBlockBodyPair =

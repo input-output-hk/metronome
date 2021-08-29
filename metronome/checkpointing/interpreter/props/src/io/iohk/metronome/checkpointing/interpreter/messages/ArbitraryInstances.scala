@@ -68,6 +68,48 @@ object ArbitraryInstances {
     } yield NewCheckpointCertificateRequest(requestId, checkpointCertificate)
   }
 
+  implicit val arbValidExtensionRequest: Arbitrary[ValidExtensionRequest] =
+    Arbitrary {
+      for {
+        requestId   <- arbitrary[UUID]
+        blockHeader <- arbitrary[Block.Header]
+      } yield ValidExtensionRequest(requestId, blockHeader)
+    }
+
+  implicit val arbValidExtensionResponse: Arbitrary[ValidExtensionResponse] =
+    Arbitrary {
+      for {
+        requestId  <- arbitrary[UUID]
+        isExtended <- arbitrary[Boolean]
+      } yield ValidExtensionResponse(requestId, isExtended)
+    }
+
+  implicit val arbAncestryRequest: Arbitrary[AncestryRequest] =
+    Arbitrary {
+      for {
+        requestId           <- arbitrary[UUID]
+        targetBlockInfo     <- arbitrary[(Block.Hash, Int)]
+        checkpointBlockInfo <- arbitrary[(Block.Hash, Int)]
+      } yield AncestryRequest(requestId, targetBlockInfo, checkpointBlockInfo)
+    }
+
+  implicit val arbAncestryResponse: Arbitrary[AncestryResponse] =
+    Arbitrary {
+      for {
+        requestId  <- arbitrary[UUID]
+        isAncestry <- arbitrary[Boolean]
+      } yield AncestryResponse(requestId, isAncestry)
+    }
+
+  implicit val arbNewCheckpointCertificate
+      : Arbitrary[NewCheckpointCertificate] =
+    Arbitrary {
+      for {
+        requestId             <- arbitrary[UUID]
+        checkpointCertificate <- arbitrary[CheckpointCertificate]
+      } yield NewCheckpointCertificate(requestId, checkpointCertificate)
+    }
+
   implicit val arbInterpreterMessage: Arbitrary[InterpreterMessage] =
     Arbitrary {
       Gen.oneOf(
@@ -77,7 +119,12 @@ object ArbitraryInstances {
         arbitrary[CreateBlockBodyResponse],
         arbitrary[ValidateBlockBodyRequest],
         arbitrary[ValidateBlockBodyResponse],
-        arbitrary[NewCheckpointCertificateRequest]
+        arbitrary[NewCheckpointCertificateRequest],
+        arbitrary[ValidExtensionRequest],
+        arbitrary[ValidExtensionResponse],
+        arbitrary[AncestryRequest],
+        arbitrary[AncestryResponse],
+        arbitrary[NewCheckpointCertificate]
       )
     }
 }
