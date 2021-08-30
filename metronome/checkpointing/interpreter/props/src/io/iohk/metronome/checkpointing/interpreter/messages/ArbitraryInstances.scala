@@ -68,6 +68,22 @@ object ArbitraryInstances {
     } yield NewCheckpointCertificateRequest(requestId, checkpointCertificate)
   }
 
+  implicit val arbCheckpointBlockRequest: Arbitrary[CheckpointBlockRequest] =
+    Arbitrary {
+      for {
+        requestId   <- arbitrary[UUID]
+        blockNumber <- arbitrary[Long]
+      } yield CheckpointBlockRequest(requestId, blockNumber)
+    }
+
+  implicit val arbCheckpointBlockResponse: Arbitrary[CheckpointBlockResponse] =
+    Arbitrary {
+      for {
+        requestId     <- arbitrary[UUID]
+        blockMetadata <- arbitrary[Block.Header]
+      } yield CheckpointBlockResponse(requestId, blockMetadata)
+    }
+
   implicit val arbValidExtensionRequest: Arbitrary[ValidExtensionRequest] =
     Arbitrary {
       for {
@@ -88,8 +104,8 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId           <- arbitrary[UUID]
-        targetBlockInfo     <- arbitrary[(Block.Hash, Int)]
-        checkpointBlockInfo <- arbitrary[(Block.Hash, Int)]
+        targetBlockInfo     <- arbitrary[Block.Hash]
+        checkpointBlockInfo <- arbitrary[Block.Hash]
       } yield AncestryRequest(requestId, targetBlockInfo, checkpointBlockInfo)
     }
 
@@ -105,7 +121,7 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId     <- arbitrary[UUID]
-        blockMetadata <- arbitrary[(Block.Hash, BigInt)]
+        blockMetadata <- arbitrary[Block.Header]
       } yield NewBlockMetadata(requestId, blockMetadata)
     }
 
@@ -145,6 +161,8 @@ object ArbitraryInstances {
         arbitrary[ValidateBlockBodyRequest],
         arbitrary[ValidateBlockBodyResponse],
         arbitrary[NewCheckpointCertificateRequest],
+        arbitrary[CheckpointBlockRequest],
+        arbitrary[CheckpointBlockResponse],
         arbitrary[ValidExtensionRequest],
         arbitrary[ValidExtensionResponse],
         arbitrary[AncestryRequest],

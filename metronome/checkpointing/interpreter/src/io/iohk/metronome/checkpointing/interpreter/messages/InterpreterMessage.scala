@@ -180,6 +180,24 @@ object InterpreterMessage extends RPCMessageCompanion {
 
   /** Interpreter <=> Chain */
 
+  /** The interpreter requests the chain for block at target height in order to construct
+    * the service block
+    */
+  case class CheckpointBlockRequest(
+      requestId: RequestId,
+      blockNumber: Long
+  ) extends InterpreterMessage
+      with Request
+      with FromInterpreter
+
+  /** The chain replies to @CheckpointBlockRequest with block metadata */
+  case class CheckpointBlockResponse(
+      requestId: RequestId,
+      blockMetadata: Block.Header
+  ) extends InterpreterMessage
+      with Response
+      with FromChain
+
   /** The chain requests the interpreter to perform a check about whether its latest
     * received block extends from the latest checkpointed block.
     *
@@ -208,16 +226,12 @@ object InterpreterMessage extends RPCMessageCompanion {
     * but do have information about the chain. Furthermore, duplicate the chain's metadata is not necessary
     * because the interpreter serves as a plugin and it is assumed that the local message passing between
     * the interpreter and the chain is quick and safe.
-    *
-    * targetBlockInfo and checkpointBlockInfo both are a tuple of values. The first one is the block hash and
-    * the second one here is defined as the chain number. In ETC, it is always set to be -1, but in Prism, the
-    * value is variant.
     */
 
   case class AncestryRequest(
       requestId: RequestId,
-      targetBlockInfo: (Block.Hash, Int),
-      checkpointBlockInfo: (Block.Hash, Int)
+      targetBlockInfo: Block.Hash,
+      checkpointBlockInfo: Block.Hash
   ) extends InterpreterMessage
       with Request
       with FromInterpreter
@@ -233,15 +247,11 @@ object InterpreterMessage extends RPCMessageCompanion {
   /** After extension check, the chain sends block metadata to the interpreter for it to detect any checkpoint
     * candidate. This message is required because previously the interpreter only knows about the block hash as well
     * as the chain number.
-    *
-    * TODO: The metadata structure should be defined in another file:
-    * 1. For advocate or normal ETC checkpointing, this field should be (block hash, height)
-    * 2. For prism, this field should be different
     */
 
   case class NewBlockMetadata(
       requestId: RequestId,
-      blockMetadata: (Block.Hash, BigInt)
+      blockMetadata: Block.Header
   ) extends InterpreterMessage
       with Request
       with FromChain
@@ -286,6 +296,9 @@ object InterpreterMessage extends RPCMessageCompanion {
 
   implicit val validateBlockBodyPair =
     pair[ValidateBlockBodyRequest, ValidateBlockBodyResponse]
+
+  implicit val checkpointBlockPair =
+    pair[CheckpointBlockRequest, CheckpointBlockResponse]
 
   implicit val validateExtensionPair =
     pair[ValidExtensionRequest, ValidExtensionResponse]
