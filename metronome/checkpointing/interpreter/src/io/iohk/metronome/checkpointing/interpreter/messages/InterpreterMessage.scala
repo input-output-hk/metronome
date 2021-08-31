@@ -1,11 +1,13 @@
 package io.iohk.metronome.checkpointing.interpreter.messages
 
+import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.core.messages.{RPCMessage, RPCMessageCompanion}
 import io.iohk.metronome.checkpointing.models.{
-  Transaction,
-  Ledger,
   Block,
-  CheckpointCertificate
+  CheckpointCertificate,
+  ETCBlock,
+  Ledger,
+  Transaction
 }
 
 /** Messages exchanged between the Checkpointing Service
@@ -185,7 +187,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     */
   case class CheckpointBlockRequest(
       requestId: RequestId,
-      blockNumber: Long
+      blockNumber: BigInt
   ) extends InterpreterMessage
       with Request
       with FromInterpreter
@@ -193,7 +195,7 @@ object InterpreterMessage extends RPCMessageCompanion {
   /** The chain replies to @CheckpointBlockRequest with block metadata */
   case class CheckpointBlockResponse(
       requestId: RequestId,
-      blockMetadata: Block.Header
+      blockMetadata: ETCBlock.Header
   ) extends InterpreterMessage
       with Response
       with FromChain
@@ -206,7 +208,7 @@ object InterpreterMessage extends RPCMessageCompanion {
     */
   case class ValidExtensionRequest(
       requestId: RequestId,
-      blockHeader: Block.Header
+      block: Hash
   ) extends InterpreterMessage
       with Request
       with FromChain
@@ -230,8 +232,8 @@ object InterpreterMessage extends RPCMessageCompanion {
 
   case class AncestryRequest(
       requestId: RequestId,
-      targetBlockInfo: Block.Hash,
-      checkpointBlockInfo: Block.Hash
+      targetBlockInfo: Hash,
+      checkpointBlockInfo: Hash
   ) extends InterpreterMessage
       with Request
       with FromInterpreter
@@ -251,7 +253,7 @@ object InterpreterMessage extends RPCMessageCompanion {
 
   case class NewBlockMetadata(
       requestId: RequestId,
-      blockMetadata: Block.Header
+      blockMetadata: ETCBlock.Header
   ) extends InterpreterMessage
       with Request
       with FromChain
@@ -286,7 +288,7 @@ object InterpreterMessage extends RPCMessageCompanion {
   /** The message serves as the reply to @PenUltimateCheckpointRequest sent by the chain */
   case class PenUltimateCheckpointResponse(
       requestId: RequestId,
-      prevCheckpointBlock: Block.Hash
+      prevCheckpointBlock: Hash
   ) extends InterpreterMessage
       with Response
       with FromInterpreter

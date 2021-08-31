@@ -1,9 +1,16 @@
 package io.iohk.metronome.checkpointing.interpreter.messages
 
+import io.iohk.metronome.crypto.hash.Hash
 import io.iohk.metronome.checkpointing.models.ArbitraryInstances._
-import io.iohk.metronome.checkpointing.models.{Transaction, Ledger, Block}
+import io.iohk.metronome.checkpointing.models.{
+  Block,
+  ETCBlock,
+  Ledger,
+  Transaction
+}
 import org.scalacheck._
 import org.scalacheck.Arbitrary.arbitrary
+
 import java.util.UUID
 import io.iohk.metronome.checkpointing.models.CheckpointCertificate
 
@@ -72,7 +79,7 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId   <- arbitrary[UUID]
-        blockNumber <- arbitrary[Long]
+        blockNumber <- arbitrary[BigInt]
       } yield CheckpointBlockRequest(requestId, blockNumber)
     }
 
@@ -80,16 +87,16 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId     <- arbitrary[UUID]
-        blockMetadata <- arbitrary[Block.Header]
+        blockMetadata <- arbitrary[ETCBlock.Header]
       } yield CheckpointBlockResponse(requestId, blockMetadata)
     }
 
   implicit val arbValidExtensionRequest: Arbitrary[ValidExtensionRequest] =
     Arbitrary {
       for {
-        requestId   <- arbitrary[UUID]
-        blockHeader <- arbitrary[Block.Header]
-      } yield ValidExtensionRequest(requestId, blockHeader)
+        requestId     <- arbitrary[UUID]
+        blockMetadata <- arbitrary[Hash]
+      } yield ValidExtensionRequest(requestId, blockMetadata)
     }
 
   implicit val arbValidExtensionResponse: Arbitrary[ValidExtensionResponse] =
@@ -104,8 +111,8 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId           <- arbitrary[UUID]
-        targetBlockInfo     <- arbitrary[Block.Hash]
-        checkpointBlockInfo <- arbitrary[Block.Hash]
+        targetBlockInfo     <- arbitrary[Hash]
+        checkpointBlockInfo <- arbitrary[Hash]
       } yield AncestryRequest(requestId, targetBlockInfo, checkpointBlockInfo)
     }
 
@@ -121,7 +128,7 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId     <- arbitrary[UUID]
-        blockMetadata <- arbitrary[Block.Header]
+        blockMetadata <- arbitrary[ETCBlock.Header]
       } yield NewBlockMetadata(requestId, blockMetadata)
     }
 
@@ -147,7 +154,7 @@ object ArbitraryInstances {
     Arbitrary {
       for {
         requestId           <- arbitrary[UUID]
-        prevCheckpointBlock <- arbitrary[Block.Hash]
+        prevCheckpointBlock <- arbitrary[Hash]
       } yield PenUltimateCheckpointResponse(requestId, prevCheckpointBlock)
     }
 

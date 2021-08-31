@@ -93,11 +93,37 @@ object ArbitraryInstances
       } yield Block.makeUnsafe(header, body)
     }
 
+  implicit val arbETCBlock: Arbitrary[ETCBlock] =
+    Arbitrary {
+      for {
+        parentHash   <- arbitrary[Hash]
+        blockNumber  <- Gen.posNum[BigInt]
+        hash         <- arbitrary[Hash]
+        transactions <- arbitrary[Seq[Hash]]
+        header = ETCBlock.Header(
+          parentHash,
+          hash,
+          blockNumber
+        )
+        body = ETCBlock.Body(
+          transactions
+        )
+      } yield ETCBlock.makeUnsafe(header, body)
+    }
+
   implicit val arbBlockHeader: Arbitrary[Block.Header] =
     Arbitrary(arbitrary[Block].map(_.header))
 
   implicit val arbBlockBody: Arbitrary[Block.Body] =
     Arbitrary(arbitrary[Block].map(_.body))
+
+  implicit val arETCBlockHeader: Arbitrary[ETCBlock.Header] = {
+    Arbitrary(arbitrary[ETCBlock].map(_.header))
+  }
+
+  implicit val arETCBlockBody: Arbitrary[ETCBlock.Body] = {
+    Arbitrary(arbitrary[ETCBlock].map(_.body))
+  }
 
   implicit val arbECDSASignature: Arbitrary[ECDSASignature] =
     Arbitrary {
