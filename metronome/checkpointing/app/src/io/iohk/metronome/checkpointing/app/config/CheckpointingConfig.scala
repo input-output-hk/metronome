@@ -7,14 +7,16 @@ import scala.concurrent.duration.FiniteDuration
 case class CheckpointingConfig(
     federation: CheckpointingConfig.Federation,
     network: CheckpointingConfig.Network,
-    db: CheckpointingConfig.Database
+    db: CheckpointingConfig.Database,
+    consensus: CheckpointingConfig.Consensus
 )
 
 object CheckpointingConfig {
   case class Federation(
-      others: List[Node],
       self: Node,
-      privateKey: ECPrivateKey
+      privateKey: ECPrivateKey,
+      others: List[Node],
+      maxFaulty: Option[Int]
   )
   case class Node(
       host: String,
@@ -22,8 +24,8 @@ object CheckpointingConfig {
       publicKey: ECPublicKey
   )
   case class Network(
-      bindHost: String,
-      bindPort: Int,
+      host: String,
+      port: Int,
       timeout: FiniteDuration
   )
   case class Database(
@@ -31,5 +33,10 @@ object CheckpointingConfig {
       stateHistorySize: Int,
       blockHistorySize: Int,
       pruneInterval: FiniteDuration
+  )
+  case class Consensus(
+      minTimeout: FiniteDuration,
+      maxTimeout: FiniteDuration,
+      timeoutFactor: Double
   )
 }

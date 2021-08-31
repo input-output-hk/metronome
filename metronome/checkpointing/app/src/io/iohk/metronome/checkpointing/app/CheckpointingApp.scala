@@ -1,6 +1,7 @@
 package io.iohk.metronome.checkpointing.app
 
 import cats.effect.ExitCode
+import com.typesafe.config.ConfigFactory
 import monix.eval.{Task, TaskApp}
 import io.iohk.metronome.checkpointing.app.config.{
   CheckpointingConfig,
@@ -10,7 +11,7 @@ import io.iohk.metronome.checkpointing.app.config.{
 
 object CheckpointingApp extends TaskApp {
   override def run(args: List[String]): Task[ExitCode] = {
-    CheckpointingConfigParser.parse match {
+    CheckpointingConfigParser.parse(ConfigFactory.load()) match {
       case Left(error) =>
         Task
           .delay(println(s"Error parsing configuration: $error"))

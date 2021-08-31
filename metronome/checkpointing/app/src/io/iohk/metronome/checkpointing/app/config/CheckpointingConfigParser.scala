@@ -1,6 +1,6 @@
 package io.iohk.metronome.checkpointing.app.config
 
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.Config
 import io.iohk.metronome.config.{ConfigParser, ConfigDecoders}
 import io.iohk.metronome.crypto.{ECPublicKey, ECPrivateKey}
 import io.circe._, io.circe.generic.semiauto._
@@ -9,9 +9,9 @@ import scodec.bits.ByteVector
 import scala.util.Try
 
 object CheckpointingConfigParser {
-  def parse: ConfigParser.Result[CheckpointingConfig] = {
+  def parse(root: Config): ConfigParser.Result[CheckpointingConfig] = {
     ConfigParser.parse[CheckpointingConfig](
-      ConfigFactory.load().getConfig("metronome.checkpointing").root(),
+      root.getConfig("metronome.checkpointing").root(),
       prefix = "METRONOME_CHECKPOINTING"
     )
   }
@@ -47,6 +47,9 @@ object CheckpointingConfigParser {
     Decoder[String].map(Path.of(_))
 
   implicit val dbDecoder: Decoder[CheckpointingConfig.Database] =
+    deriveDecoder
+
+  implicit val consensusDecoder: Decoder[CheckpointingConfig.Consensus] =
     deriveDecoder
 
   implicit val configDecoder: Decoder[CheckpointingConfig] = deriveDecoder
