@@ -122,6 +122,26 @@ object RLPCodecs {
       }
     )
 
+  implicit val rlpETCBlockBody: RLPCodec[ETCBlock.Body] =
+    deriveLabelledGenericRLPCodec
+
+  implicit val rlpETCBlockHeader: RLPCodec[ETCBlock.Header] =
+    deriveLabelledGenericRLPCodec
+
+  implicit val rlpETCBlock: RLPCodec[ETCBlock] =
+    RLPCodec.instance[ETCBlock](
+      block =>
+        RLPList(
+          RLPEncoder.encode(block.header),
+          RLPEncoder.encode(block.header)
+        ),
+      { case RLPList(header, body) =>
+        val h = header.decodeAs[ETCBlock.Header]("ETCHeader")
+        val b = body.decodeAs[ETCBlock.Body]("ETCBody")
+        ETCBlock.makeUnsafe(h, b)
+      }
+    )
+
   implicit val rlpMerkleProof: RLPCodec[MerkleTree.Proof] =
     deriveLabelledGenericRLPCodec
 
