@@ -58,7 +58,7 @@ To run tests, use the wild cards again and the `.test` postix:
 
 ```console
 mill __.test
-mill --watch metronome[2.13.4].rocksdb.test
+mill --watch metronome[2.13.4].rocksdb.props.test
 ```
 
 To run a single test class, use the `.single` method with the full path to the spec. Note that `ScalaTest` tests are in the `specs` subdirectories while `ScalaCheck` ones are in `props`.

@@ -392,6 +392,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}",
         ivy"com.github.scopt::scopt:${VersionOf.scopt}"
       )
+
+      object specs extends SpecsModule
     }
   }
 

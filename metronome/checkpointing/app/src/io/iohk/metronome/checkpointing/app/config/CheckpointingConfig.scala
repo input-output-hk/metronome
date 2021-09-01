@@ -10,7 +10,7 @@ case class CheckpointingConfig(
     consensus: CheckpointingConfig.Consensus,
     remote: CheckpointingConfig.RemoteNetwork,
     local: CheckpointingConfig.LocalNetwork,
-    db: CheckpointingConfig.Database
+    database: CheckpointingConfig.Database
 )
 
 object CheckpointingConfig {
