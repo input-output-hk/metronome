@@ -4,6 +4,7 @@ import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.Inside
 import org.scalatest.matchers.should.Matchers
+import java.nio.file.Path
 
 class CheckpointingConfigParserSpec
     extends AnyFlatSpec
@@ -24,6 +25,19 @@ class CheckpointingConfigParserSpec
       CheckpointingConfigParser.parse(ConfigFactory.load("test.conf"))
     ) { case Right(config) =>
       config.remote.listen.port shouldBe config.federation.self.port
+      config.federation.self.privateKey.isLeft shouldBe true
+    }
+  }
+
+  it should "parse when the private key is a path" in {
+    inside(
+      CheckpointingConfigParser.parse {
+        ConfigFactory.parseString(
+          "metronome.checkpointing.federation.self.private-key=./node.key"
+        ) withFallback ConfigFactory.load("test.conf")
+      }
+    ) { case Right(config) =>
+      config.federation.self.privateKey shouldBe Right(Path.of("./node.key"))
     }
   }
 }

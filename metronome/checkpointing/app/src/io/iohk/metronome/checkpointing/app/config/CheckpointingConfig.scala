@@ -21,9 +21,8 @@ object CheckpointingConfig {
   }
 
   case class Federation(
-      self: Node,
-      privateKey: ECPrivateKey,
-      others: List[Node],
+      self: LocalNode,
+      others: List[RemoteNode],
       maxFaulty: Option[Int]
   )
 
@@ -33,10 +32,16 @@ object CheckpointingConfig {
       timeoutFactor: Double
   )
 
-  case class Node(
+  case class RemoteNode(
       val host: String,
       val port: Int,
       publicKey: ECPublicKey
+  ) extends HasAddress
+
+  case class LocalNode(
+      val host: String,
+      val port: Int,
+      privateKey: Either[ECPrivateKey, Path]
   ) extends HasAddress
 
   case class Socket(

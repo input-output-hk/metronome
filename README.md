@@ -153,9 +153,8 @@ metronome {
       self {
         host = $(dig +short myip.opendns.com @resolver4.opendns.com)
         port = 40000
-        public-key = $(jq -r ".publicKey" keys.json)
+        private-key = $(jq -r ".privateKey" keys.json)
       }
-      private-key = $(jq -r ".privateKey" keys.json)
 
       # Append here other the other nodes you create.
       others = [

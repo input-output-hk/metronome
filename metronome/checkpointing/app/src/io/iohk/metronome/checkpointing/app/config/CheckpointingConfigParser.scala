@@ -34,7 +34,16 @@ object CheckpointingConfigParser {
   implicit val ecPrivateKeyDecoder: Decoder[ECPrivateKey] =
     hexDecoder(ECPrivateKey(_))
 
-  implicit val nodeDecoder: Decoder[CheckpointingConfig.Node] =
+  implicit val pathDecoder: Decoder[Path] =
+    Decoder[String].map(Path.of(_))
+
+  implicit val ecPrivateKeyOrPathDecoder: Decoder[Either[ECPrivateKey, Path]] =
+    ecPrivateKeyDecoder.map(Left(_)) or pathDecoder.map(Right(_))
+
+  implicit val localNodeDecoder: Decoder[CheckpointingConfig.LocalNode] =
+    deriveDecoder
+
+  implicit val remoteNodeDecoder: Decoder[CheckpointingConfig.RemoteNode] =
     deriveDecoder
 
   implicit val federationDecoder: Decoder[CheckpointingConfig.Federation] =
@@ -51,9 +60,6 @@ object CheckpointingConfigParser {
 
   implicit val localDecoder: Decoder[CheckpointingConfig.LocalNetwork] =
     deriveDecoder
-
-  implicit val pathDecoder: Decoder[Path] =
-    Decoder[String].map(Path.of(_))
 
   implicit val dbDecoder: Decoder[CheckpointingConfig.Database] =
     deriveDecoder
