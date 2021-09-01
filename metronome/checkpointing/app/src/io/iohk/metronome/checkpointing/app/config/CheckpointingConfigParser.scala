@@ -40,16 +40,22 @@ object CheckpointingConfigParser {
   implicit val federationDecoder: Decoder[CheckpointingConfig.Federation] =
     deriveDecoder
 
-  implicit val networkDecoder: Decoder[CheckpointingConfig.Network] =
+  implicit val consensusDecoder: Decoder[CheckpointingConfig.Consensus] =
+    deriveDecoder
+
+  implicit val socketDecoder: Decoder[CheckpointingConfig.Socket] =
+    deriveDecoder
+
+  implicit val remoteDecoder: Decoder[CheckpointingConfig.RemoteNetwork] =
+    deriveDecoder
+
+  implicit val localDecoder: Decoder[CheckpointingConfig.LocalNetwork] =
     deriveDecoder
 
   implicit val pathDecoder: Decoder[Path] =
     Decoder[String].map(Path.of(_))
 
   implicit val dbDecoder: Decoder[CheckpointingConfig.Database] =
-    deriveDecoder
-
-  implicit val consensusDecoder: Decoder[CheckpointingConfig.Consensus] =
     deriveDecoder
 
   implicit val configDecoder: Decoder[CheckpointingConfig] = deriveDecoder
