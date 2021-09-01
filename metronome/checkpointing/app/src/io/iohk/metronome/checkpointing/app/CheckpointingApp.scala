@@ -4,7 +4,6 @@ import cats.effect.ExitCode
 import com.typesafe.config.ConfigFactory
 import monix.eval.{Task, TaskApp}
 import io.iohk.metronome.checkpointing.app.config.{
-  CheckpointingConfig,
   CheckpointingConfigParser,
   CheckpointingOptions
 }

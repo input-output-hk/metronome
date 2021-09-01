@@ -3,7 +3,6 @@ package io.iohk.metronome.checkpointing.app
 import monix.eval.Task
 import io.iohk.metronome.crypto.ECKeyPair
 import io.circe.Json
-import java.security.SecureRandom
 
 /** Generate an ECDSA key pair and print it on the console.
   *

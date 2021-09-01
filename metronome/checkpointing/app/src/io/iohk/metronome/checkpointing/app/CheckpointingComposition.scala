@@ -1,9 +1,6 @@
 package io.iohk.metronome.checkpointing.app
 
-import io.iohk.metronome.checkpointing.app.config.{
-  CheckpointingConfig,
-  CheckpointingOptions
-}
+import io.iohk.metronome.checkpointing.app.config.CheckpointingConfig
 import cats.effect.Resource
 import monix.eval.Task
 
