@@ -123,3 +123,55 @@ $ tail -f ~/.metronome/examples/robot/logs/node-0.log
 ```
 
 To clear out everything before a restart, just run `rm -rf ~/.metronome/examples/robot`.
+
+
+## Running the Checkpointing Service
+
+First generate some ECDSA keys to be used by the federation:
+
+```console
+$ mill metronome[2.13.4].checkpointing.app.run keygen > keys.json
+[424/424] metronome[2.13.4].checkpointing.app.run
+$ cat keys.json
+{
+  "publicKey" : "ab5944b35a12f87133b5cf525b7a2ecc698a059b4d46898c4f58970e73069aeebeb55765ade41d781120c27ef8a88ae1cb2ff5c2e70345373b524dcfcb6636d5",
+  "privateKey" : "057b39a793c06683b4ebec95456f576be4c44e4404e126f0a46689d259209a75"
+}
+```
+
+The results can be parsed for example with [jq](https://stedolan.github.io/jq/), as seen in the example below.
+
+Create a config file to provide the necessary settings which the default `application.conf` doesn't have. For example:
+
+```shell
+cat <<EOF >example.conf
+include "/application.conf"
+
+metronome {
+  checkpointing {
+    federation {
+      self {
+        host = $(dig +short myip.opendns.com @resolver4.opendns.com)
+        port = 40000
+        public-key = $(jq -r ".publicKey" keys.json)
+      }
+      private-key = $(jq -r ".privateKey" keys.json)
+
+      # Append here other the other nodes you create.
+      others = [
+      ]
+    }
+  }
+}
+EOF
+```
+
+Start the service by pointing it at the example configuration:
+
+```shell
+SCALA_VER=2.13.4
+ASSEMBLY_JAR=${PWD}/out/metronome/${SCALA_VER}/checkpointing/app/assembly/dest/out.jar
+mill metronme[$SCALA_VER].checkpointing.app.assembly
+
+java -cp $ASSEMBLY_JAR -Dconfig.file=example.conf io.iohk.metronome.checkpointing.app.CheckpointingApp service -n node-0
+```
