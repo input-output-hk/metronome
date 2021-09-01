@@ -4,16 +4,35 @@ import scopt.OParser
 import ch.qos.logback.classic.Level
 
 case class CheckpointingOptions(
-    nodeName: String,
+    mode: CheckpointingOptions.Mode,
     logLevel: Level
-)
+) {
+  import CheckpointingOptions.{Service, KeyGen}
+
+  def mapService(f: Service => Service) =
+    mode match {
+      case m: Service => copy(mode = f(m))
+      case _          => this
+    }
+
+  def logFileName: String =
+    mode match {
+      case m: Service => m.nodeName
+      case KeyGen     => "keygen"
+    }
+}
 
 object CheckpointingOptions {
 
-  val default = CheckpointingOptions(
-    nodeName = "checkpointing-service",
-    logLevel = Level.INFO
-  )
+  sealed trait Mode
+
+  case class Service(
+      nodeName: String
+  ) extends Mode
+
+  case object KeyGen extends Mode
+
+  private val DefaultName = "checkpointing-service"
 
   private val LogLevels = List(
     Level.OFF,
@@ -24,33 +43,33 @@ object CheckpointingOptions {
     Level.TRACE
   )
 
+  val default = CheckpointingOptions(
+    mode = Service(DefaultName),
+    logLevel = Level.INFO
+  )
+
   /** Parse the options. Return `None` if there was an error,
     * which has already been printed to the console.
     */
   def parse(
-      config: CheckpointingConfig,
       args: List[String]
   ): Option[CheckpointingOptions] =
     OParser.parse(
-      CheckpointingOptions.oparser(config),
+      CheckpointingOptions.oparser,
       args,
       CheckpointingOptions.default
     )
 
-  private def oparser(config: CheckpointingConfig) = {
+  private val oparser = {
     val builder = OParser.builder[CheckpointingOptions]
     import builder._
 
     OParser.sequence(
-      programName("checkpointing-service"),
-      opt[String]('n', "node-name")
-        .action((x, opts) => opts.copy(nodeName = x))
-        .text("unique name for the node")
-        .required(),
+      programName("checkpointing"),
       opt[String]('l', "log-level")
         .action((x, opts) => opts.copy(logLevel = Level.toLevel(x)))
         .text(
-          s"log level; one of [${LogLevels.map(_.toString).mkString(" | ")}]"
+          s"log level; one of [${LogLevels.map(_.toString).mkString("|")}]"
         )
         .optional()
         .validate(x =>
@@ -59,7 +78,19 @@ object CheckpointingOptions {
             (),
             s"Must be between one of ${LogLevels.map(_.toString)}"
           )
-        )
+        ),
+      cmd("service")
+        .text("run the checkpointing service")
+        .action((_, opts) => opts.copy(mode = Service(DefaultName)))
+        .children(
+          opt[String]('n', "node-name")
+            .action((x, opts) => opts.mapService(_.copy(nodeName = x)))
+            .text("unique name for the node")
+            .required()
+        ),
+      cmd("keygen")
+        .text("generate an ECDSA key pair")
+        .action((_, opts) => opts.copy(mode = KeyGen))
     )
   }
 }

@@ -9,9 +9,10 @@ import monix.eval.Task
 
 trait CheckpointingComposition {
   def compose(
-      opts: CheckpointingOptions,
       config: CheckpointingConfig
-  ): Resource[Task, Unit] = ???
+  ): Resource[Task, Unit] =
+    ???
+
 }
 
 object CheckpointingComposition extends CheckpointingComposition
