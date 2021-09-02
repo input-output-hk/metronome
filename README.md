@@ -174,3 +174,5 @@ mill metronme[$SCALA_VER].checkpointing.app.assembly
 
 java -cp $ASSEMBLY_JAR -Dconfig.file=example.conf io.iohk.metronome.checkpointing.app.CheckpointingApp service -n node-0
 ```
+
+Detailed logs should appear in `~/.metronome/checkpointing/logs/node-0.log
