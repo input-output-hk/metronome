@@ -67,8 +67,7 @@ trait CheckpointingComposition {
 
   /** Wire together the Checkpointing Service. */
   def compose(
-      config: CheckpointingConfig,
-      opts: CheckpointingOptions.Service
+      config: CheckpointingConfig
   ): Resource[Task, Unit] = {
 
     implicit val networkTracers: NTS  = makeNetworkTracers
@@ -81,7 +80,7 @@ trait CheckpointingComposition {
 
       (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
 
-      db <- makeRocksDBStore(config, opts)
+      db <- makeRocksDBStore(config)
       implicit0(storeRunner: KVStoreRunner[Task, NS]) = makeKVStoreRunner(db)
 
     } yield ()
@@ -217,11 +216,10 @@ trait CheckpointingComposition {
   }
 
   protected def makeRocksDBStore(
-      config: CheckpointingConfig,
-      opts: CheckpointingOptions.Service
+      config: CheckpointingConfig
   ) = {
     val dbConfig = RocksDBStore.Config.default(
-      config.database.path.resolve(opts.nodeName)
+      config.database.path.resolve(config.name)
     )
     for {
       dir <- Resource.liftF {

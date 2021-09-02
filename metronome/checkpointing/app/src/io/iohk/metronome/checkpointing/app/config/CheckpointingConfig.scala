@@ -6,6 +6,7 @@ import java.net.InetSocketAddress
 import scala.concurrent.duration.FiniteDuration
 
 case class CheckpointingConfig(
+    name: String,
     federation: CheckpointingConfig.Federation,
     consensus: CheckpointingConfig.Consensus,
     remote: CheckpointingConfig.RemoteNetwork,

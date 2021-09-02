@@ -172,7 +172,7 @@ SCALA_VER=2.13.4
 ASSEMBLY_JAR=${PWD}/out/metronome/${SCALA_VER}/checkpointing/app/assembly/dest/out.jar
 mill metronme[$SCALA_VER].checkpointing.app.assembly
 
-java -cp $ASSEMBLY_JAR -Dconfig.file=example.conf io.iohk.metronome.checkpointing.app.CheckpointingApp service -n node-0
+java -cp $ASSEMBLY_JAR -Dconfig.file=example.conf io.iohk.metronome.checkpointing.app.CheckpointingApp service
 ```
 
-Detailed logs should appear in `~/.metronome/checkpointing/logs/node-0.log
+Detailed logs should appear in `~/.metronome/checkpointing/logs/service.log

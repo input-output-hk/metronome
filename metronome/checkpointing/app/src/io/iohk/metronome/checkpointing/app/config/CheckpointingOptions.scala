@@ -6,33 +6,13 @@ import ch.qos.logback.classic.Level
 case class CheckpointingOptions(
     mode: CheckpointingOptions.Mode,
     logLevel: Level
-) {
-  import CheckpointingOptions.{Service, KeyGen}
-
-  def mapService(f: Service => Service) =
-    mode match {
-      case m: Service => copy(mode = f(m))
-      case _          => this
-    }
-
-  def logFileName: String =
-    mode match {
-      case m: Service => m.nodeName
-      case KeyGen     => "keygen"
-    }
-}
+)
 
 object CheckpointingOptions {
 
   sealed trait Mode
-
-  case class Service(
-      nodeName: String
-  ) extends Mode
-
-  case object KeyGen extends Mode
-
-  private val DefaultName = "checkpointing-service"
+  case object Service extends Mode
+  case object KeyGen  extends Mode
 
   private val LogLevels = List(
     Level.OFF,
@@ -44,7 +24,7 @@ object CheckpointingOptions {
   )
 
   val default = CheckpointingOptions(
-    mode = Service(DefaultName),
+    mode = Service,
     logLevel = Level.INFO
   )
 
@@ -81,13 +61,7 @@ object CheckpointingOptions {
         ),
       cmd("service")
         .text("run the checkpointing service")
-        .action((_, opts) => opts.copy(mode = Service(DefaultName)))
-        .children(
-          opt[String]('n', "node-name")
-            .action((x, opts) => opts.mapService(_.copy(nodeName = x)))
-            .text("unique name for the node")
-            .required()
-        ),
+        .action((_, opts) => opts.copy(mode = Service)),
       cmd("keygen")
         .text("generate an ECDSA key pair")
         .action((_, opts) => opts.copy(mode = KeyGen))
