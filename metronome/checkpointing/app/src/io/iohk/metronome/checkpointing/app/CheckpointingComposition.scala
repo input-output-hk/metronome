@@ -1,7 +1,7 @@
 package io.iohk.metronome.checkpointing.app
 
 import cats.implicits._
-import cats.effect.Resource
+import cats.effect.{Resource, Blocker}
 import io.iohk.metronome.crypto.{
   ECKeyPair,
   ECPublicKey,
@@ -12,7 +12,8 @@ import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.app.codecs.CheckpointingCodecs
 import io.iohk.metronome.checkpointing.app.config.{
   CheckpointingConfig,
-  CheckpointingConfigParser
+  CheckpointingConfigParser,
+  CheckpointingOptions
 }
 import io.iohk.metronome.checkpointing.app.tracing._
 import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
@@ -32,6 +33,14 @@ import io.iohk.metronome.networking.{
   Network
 }
 import io.iohk.metronome.rocksdb.RocksDBStore
+import io.iohk.metronome.storage.{
+  KVStoreRunner,
+  KVStoreRead,
+  KVStore,
+  KVCollection,
+  KVRingBuffer,
+  KVTree
+}
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
 import io.circe.Json
 import java.security.SecureRandom
@@ -58,7 +67,8 @@ trait CheckpointingComposition {
 
   /** Wire together the Checkpointing Service. */
   def compose(
-      config: CheckpointingConfig
+      config: CheckpointingConfig,
+      opts: CheckpointingOptions.Service
   ): Resource[Task, Unit] = {
 
     implicit val networkTracers: NTS  = makeNetworkTracers
@@ -70,6 +80,9 @@ trait CheckpointingComposition {
       connectionManager <- makeConnectionManager(config)
 
       (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
+
+      db <- makeRocksDBStore(config, opts)
+      implicit0(storeRunner: KVStoreRunner[Task, NS]) = makeKVStoreRunner(db)
 
     } yield ()
   }
@@ -201,6 +214,40 @@ trait CheckpointingComposition {
         }
       )
     } yield (hotstuffNetwork, applicationNetwork)
+  }
+
+  protected def makeRocksDBStore(
+      config: CheckpointingConfig,
+      opts: CheckpointingOptions.Service
+  ) = {
+    val dbConfig = RocksDBStore.Config.default(
+      config.database.path.resolve(opts.nodeName)
+    )
+    for {
+      dir <- Resource.liftF {
+        Task {
+          Files.createDirectories(dbConfig.path)
+        }
+      }
+      blocker <- makeDBBlocker
+      db      <- RocksDBStore[Task](dbConfig, CheckpointingNamespaces.all, blocker)
+    } yield db
+  }
+
+  protected def makeDBBlocker =
+    Blocker[Task]
+
+  protected def makeKVStoreRunner(
+      db: RocksDBStore[Task]
+  ) = {
+    new KVStoreRunner[Task, NS] {
+      override def runReadOnly[A](
+          query: KVStoreRead[NS, A]
+      ): Task[A] = db.runReadOnly(query)
+
+      override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
+        db.runWithBatching(query)
+    }
   }
 
 }

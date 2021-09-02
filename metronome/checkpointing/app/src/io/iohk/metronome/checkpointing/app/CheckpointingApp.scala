@@ -25,7 +25,7 @@ object CheckpointingApp extends TaskApp {
         // Not parsing the configuration for this as it may be incomplete without the keys.
         CheckpointingKeyGen.generateAndPrint.as(ExitCode.Success)
 
-      case _: CheckpointingOptions.Service =>
+      case mode: CheckpointingOptions.Service =>
         val root = ConfigFactory.load().getObject("metronome")
         println(root.toString())
 
@@ -37,7 +37,7 @@ object CheckpointingApp extends TaskApp {
 
           case Right(config) =>
             CheckpointingComposition
-              .compose(config)
+              .compose(config, mode)
               .use(_ => Task.never.as(ExitCode.Success))
         }
     }
