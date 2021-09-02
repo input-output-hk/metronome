@@ -15,8 +15,8 @@ object CheckpointingServiceTracers {
   import io.circe.syntax._
 
   implicit val serviceEventHybridLog: HybridLog[Task, CheckpointingEvent] = {
-    implicit val blockHashEncoder: Encoder[Block.Header.Hash] =
-      Encoder[String].contramap[Block.Header.Hash](_.toHex)
+    implicit val blockHashEncoder: Encoder[Block.Hash] =
+      Encoder[String].contramap[Block.Hash](_.toHex)
 
     implicit val ledgerHashEncoder: Encoder[Ledger.Hash] =
       Encoder[String].contramap[Ledger.Hash](_.toHex)

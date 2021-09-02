@@ -38,6 +38,9 @@ object CheckpointingCodecs
   override implicit lazy val blockCodec: Codec[Block] =
     codecFromRLPCodec[Block]
 
+  implicit lazy val ledgerCodec: Codec[Ledger] =
+    codecFromRLPCodec[Ledger]
+
   implicit lazy val getStateRequestCodec
       : Codec[CheckpointingMessage.GetStateRequest] =
     Codec.deriveLabelledGeneric

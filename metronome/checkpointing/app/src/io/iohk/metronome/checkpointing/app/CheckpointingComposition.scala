@@ -17,6 +17,17 @@ import io.iohk.metronome.checkpointing.app.config.{
 }
 import io.iohk.metronome.checkpointing.app.tracing._
 import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
+import io.iohk.metronome.checkpointing.models.{Block, Ledger}
+import io.iohk.metronome.hotstuff.consensus.{
+  Federation,
+  LeaderSelection,
+  ViewNumber
+}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  QuorumCertificate,
+  Phase,
+  ProtocolState
+}
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
@@ -24,6 +35,10 @@ import io.iohk.metronome.hotstuff.service.messages.{
 import io.iohk.metronome.hotstuff.service.tracing.{
   ConsensusTracers,
   SyncTracers
+}
+import io.iohk.metronome.hotstuff.service.storage.{
+  BlockStorage,
+  ViewStateStorage
 }
 import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
@@ -83,6 +98,9 @@ trait CheckpointingComposition {
       db <- makeRocksDBStore(config)
       implicit0(storeRunner: KVStoreRunner[Task, NS]) = makeKVStoreRunner(db)
 
+      blockStorage     <- makeBlockStorage(Block.genesis)
+      viewStateStorage <- makeViewStateStorage(Block.genesis)
+      stateStorage     <- makeStateStorage(config, Ledger.empty)
     } yield ()
   }
 
@@ -246,6 +264,79 @@ trait CheckpointingComposition {
       override def runReadWrite[A](query: KVStore[NS, A]): Task[A] =
         db.runWithBatching(query)
     }
+  }
+
+  protected def makeBlockStorage(genesis: Block)(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = {
+    implicit def `Codec[Set[T]]`[T: Codec] = {
+      import scodec.codecs.implicits._
+      Codec[List[T]].xmap[Set[T]](_.toSet, _.toList)
+    }
+
+    val blockStorage = new BlockStorage[NS, CheckpointingAgreement](
+      blockColl =
+        new KVCollection[NS, Block.Hash, Block](CheckpointingNamespaces.Block),
+      blockMetaColl =
+        new KVCollection[NS, Block.Hash, KVTree.NodeMeta[Block.Hash]](
+          CheckpointingNamespaces.BlockMeta
+        ),
+      parentToChildrenColl = new KVCollection[NS, Block.Hash, Set[Block.Hash]](
+        CheckpointingNamespaces.BlockToChildren
+      )
+    )
+
+    // (Re)insert genesis. It's okay if it has been pruned before,
+    // but if the application is just starting it will need it.
+    Resource
+      .liftF {
+        storeRunner.runReadWrite {
+          blockStorage.put(genesis)
+        }
+      }
+      .as(blockStorage)
+  }
+
+  protected def makeViewStateStorage(genesis: Block)(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = Resource.liftF {
+    val genesisQC = QuorumCertificate[CheckpointingAgreement, Phase.Prepare](
+      phase = Phase.Prepare,
+      viewNumber = ViewNumber(0),
+      blockHash = genesis.hash,
+      signature = GroupSignature(Nil)
+    )
+    storeRunner.runReadWrite {
+      ViewStateStorage[NS, CheckpointingAgreement](
+        CheckpointingNamespaces.ViewState,
+        genesis = ViewStateStorage.Bundle.fromGenesisQC(genesisQC)
+      )
+    }
+  }
+
+  protected def makeStateStorage(
+      config: CheckpointingConfig,
+      genesisState: Ledger
+  )(implicit
+      storeRunner: KVStoreRunner[Task, NS]
+  ) = Resource.liftF {
+    for {
+      coll <- Task.pure {
+        new KVCollection[NS, Ledger.Hash, Ledger](CheckpointingNamespaces.State)
+      }
+      // Insert the genesis state straight into the underlying collection,
+      // not the ringbuffer, so it doesn't get evicted if we restart the
+      // app a few times.
+      _ <- storeRunner.runReadWrite {
+        coll.put(genesisState.hash, genesisState)
+      }
+      stateStorage =
+        new KVRingBuffer[NS, Ledger.Hash, Ledger](
+          coll,
+          metaNamespace = CheckpointingNamespaces.StateMeta,
+          maxHistorySize = config.database.stateHistorySize
+        )
+    } yield stateStorage
   }
 
 }

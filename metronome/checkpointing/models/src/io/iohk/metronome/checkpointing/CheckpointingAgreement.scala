@@ -12,7 +12,7 @@ import io.iohk.metronome.checkpointing.models.RLPCodecs._
 
 object CheckpointingAgreement extends Secp256k1Agreement {
   override type Block = models.Block
-  override type Hash  = models.Block.Header.Hash
+  override type Hash  = models.Block.Hash
 
   implicit val block: consensus.basic.Block[CheckpointingAgreement] =
     new consensus.basic.Block[CheckpointingAgreement] {
