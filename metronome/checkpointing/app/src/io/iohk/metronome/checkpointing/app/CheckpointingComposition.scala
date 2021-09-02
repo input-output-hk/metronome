@@ -14,6 +14,7 @@ import io.iohk.metronome.checkpointing.app.config.{
   CheckpointingConfig,
   CheckpointingConfigParser
 }
+import io.iohk.metronome.checkpointing.app.tracing._
 import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
@@ -60,7 +61,10 @@ trait CheckpointingComposition {
       config: CheckpointingConfig
   ): Resource[Task, Unit] = {
 
-    implicit val networkTracers: NTS = makeNetworkTracers
+    implicit val networkTracers: NTS  = makeNetworkTracers
+    implicit val consesusTracers: CTS = makeConsensusTracers
+    implicit val syncTracers: STS     = makeSyncTracers
+    implicit val serviceTracer        = makeServiceTracer
 
     for {
       connectionManager <- makeConnectionManager(config)
@@ -148,7 +152,17 @@ trait CheckpointingComposition {
         } yield privateKey
     }
 
-  protected def makeNetworkTracers: NTS = ???
+  protected def makeNetworkTracers =
+    CheckpointingNetworkTracers.networkHybridLogTracers
+
+  protected def makeConsensusTracers =
+    CheckpointingConsensusTracers.consensusHybridLogTracers
+
+  protected def makeSyncTracers =
+    CheckpointingSyncTracers.syncHybridLogTracers
+
+  protected def makeServiceTracer =
+    CheckpointingServiceTracers.serviceEventHybridLogTracer
 
 }
 
