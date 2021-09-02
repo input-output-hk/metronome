@@ -68,8 +68,23 @@ trait CheckpointingComposition {
 
     for {
       connectionManager <- makeConnectionManager(config)
+
+      (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
+
     } yield ()
   }
+
+  protected def makeNetworkTracers =
+    CheckpointingNetworkTracers.networkHybridLogTracers
+
+  protected def makeConsensusTracers =
+    CheckpointingConsensusTracers.consensusHybridLogTracers
+
+  protected def makeSyncTracers =
+    CheckpointingSyncTracers.syncHybridLogTracers
+
+  protected def makeServiceTracer =
+    CheckpointingServiceTracers.serviceEventHybridLogTracer
 
   protected def makeConnectionManager(
       config: CheckpointingConfig
@@ -152,17 +167,41 @@ trait CheckpointingComposition {
         } yield privateKey
     }
 
-  protected def makeNetworkTracers =
-    CheckpointingNetworkTracers.networkHybridLogTracers
+  protected def makeNetworks(
+      connectionManager: RemoteConnectionManager[
+        Task,
+        ECPublicKey,
+        NetworkMessage
+      ]
+  ) = {
+    val network = Network
+      .fromRemoteConnnectionManager[
+        Task,
+        CheckpointingAgreement.PKey,
+        NetworkMessage
+      ](
+        connectionManager
+      )
 
-  protected def makeConsensusTracers =
-    CheckpointingConsensusTracers.consensusHybridLogTracers
-
-  protected def makeSyncTracers =
-    CheckpointingSyncTracers.syncHybridLogTracers
-
-  protected def makeServiceTracer =
-    CheckpointingServiceTracers.serviceEventHybridLogTracer
+    for {
+      (hotstuffNetwork, applicationNetwork) <- Network.splitter[
+        Task,
+        CheckpointingAgreement.PKey,
+        NetworkMessage,
+        HotStuffMessage[CheckpointingAgreement],
+        CheckpointingMessage
+      ](network)(
+        split = {
+          case DuplexMessage.AgreementMessage(m)   => Left(m)
+          case DuplexMessage.ApplicationMessage(m) => Right(m)
+        },
+        merge = {
+          case Left(m)  => DuplexMessage.AgreementMessage(m)
+          case Right(m) => DuplexMessage.ApplicationMessage(m)
+        }
+      )
+    } yield (hotstuffNetwork, applicationNetwork)
+  }
 
 }
 
