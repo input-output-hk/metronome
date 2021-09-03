@@ -19,7 +19,11 @@ import io.iohk.metronome.checkpointing.service.CheckpointingService
 import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
 import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
 import io.iohk.metronome.checkpointing.service.storage.LedgerStorage
-import io.iohk.metronome.checkpointing.models.{Block, Ledger}
+import io.iohk.metronome.checkpointing.models.{
+  Block,
+  Ledger,
+  CheckpointingSigning
+}
 import io.iohk.metronome.checkpointing.interpreter.InterpreterConnection
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.interpreter.codecs.DefaultInterpreterCodecs
@@ -499,7 +503,7 @@ trait CheckpointingComposition {
       syncTracers: STS
   ) = {
     implicit val leaderSelection = LeaderSelection.Hashing
-    //implicit val signing         = new RobotSigning(genesis.hash)
+    implicit val signing         = new CheckpointingSigning(genesis.hash)
 
     for {
       federation <- Resource.liftF {

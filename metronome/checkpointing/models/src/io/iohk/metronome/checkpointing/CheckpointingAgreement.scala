@@ -3,12 +3,8 @@ package io.iohk.metronome.checkpointing
 import io.iohk.metronome.hotstuff.consensus
 import io.iohk.metronome.hotstuff.consensus.basic.{
   Agreement,
-  Secp256k1Agreement,
-  Signing
+  Secp256k1Agreement
 }
-import scodec.bits.ByteVector
-import io.iohk.ethereum.rlp
-import io.iohk.metronome.checkpointing.models.RLPCodecs._
 
 object CheckpointingAgreement extends Secp256k1Agreement {
   override type Block = models.Block
@@ -25,14 +21,6 @@ object CheckpointingAgreement extends Secp256k1Agreement {
       override def isValid(b: models.Block) =
         models.Block.isValid(b)
     }
-
-  // TODO: Deal with genesis validation.
-  implicit val signing: Signing[CheckpointingAgreement] =
-    Signing.secp256k1((phase, viewNumber, hash) =>
-      ByteVector(
-        rlp.encode(phase) ++ rlp.encode(viewNumber) ++ rlp.encode(hash)
-      )
-    )
 
   type GroupSignature = Agreement.GroupSignature[CheckpointingAgreement]
 }
