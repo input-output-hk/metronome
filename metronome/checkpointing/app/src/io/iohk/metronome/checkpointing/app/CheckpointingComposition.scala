@@ -23,8 +23,17 @@ import io.iohk.metronome.checkpointing.models.{Block, Ledger}
 import io.iohk.metronome.checkpointing.interpreter.InterpreterConnection
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.interpreter.codecs.DefaultInterpreterCodecs
-import io.iohk.metronome.hotstuff.consensus.{ViewNumber}
-import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
+import io.iohk.metronome.hotstuff.consensus.{
+  ViewNumber,
+  Federation,
+  LeaderSelection
+}
+import io.iohk.metronome.hotstuff.consensus.basic.{
+  QuorumCertificate,
+  Phase,
+  ProtocolState
+}
+import io.iohk.metronome.hotstuff.service.{HotStuffService, ConsensusService}
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
@@ -87,9 +96,9 @@ trait CheckpointingComposition {
 
     implicit val remoteNetworkTracers = makeRemoteNetworkTracers
     implicit val localNetworkTracers  = makeLocalNetworkTracers
-    // implicit val consesusTracers = makeConsensusTracers
-    // implicit val syncTracers     = makeSyncTracers
-    implicit val serviceTracer = makeServiceTracer
+    implicit val consesusTracers      = makeConsensusTracers
+    implicit val syncTracers          = makeSyncTracers
+    implicit val serviceTracer        = makeServiceTracer
 
     for {
       keyPair <- Resource.liftF(readPrivateKey(config)).map { privateKey =>
@@ -134,6 +143,16 @@ trait CheckpointingComposition {
         blockStorage,
         viewStateStorage,
         ledgerStorage
+      )
+
+      _ <- makeHotstuffService(
+        config,
+        keyPair,
+        Block.genesis,
+        hotstuffNetwork,
+        appService,
+        blockStorage,
+        viewStateStorage
       )
 
     } yield ()
@@ -460,6 +479,88 @@ trait CheckpointingComposition {
         networkTimeout = config.remote.timeout
       )
     )
+  }
+
+  protected def makeHotstuffService(
+      config: CheckpointingConfig,
+      keyPair: ECKeyPair,
+      genesis: Block,
+      hotstuffNetwork: Network[
+        Task,
+        CheckpointingAgreement.PKey,
+        HotStuffMessage[CheckpointingAgreement]
+      ],
+      appService: CheckpointingService[Task, NS],
+      blockStorage: BlockStorage[NS, CheckpointingAgreement],
+      viewStateStorage: ViewStateStorage[NS, CheckpointingAgreement]
+  )(implicit
+      storeRunner: KVStoreRunner[Task, NS],
+      consensusTracers: CTS,
+      syncTracers: STS
+  ) = {
+    implicit val leaderSelection = LeaderSelection.Hashing
+    //implicit val signing         = new RobotSigning(genesis.hash)
+
+    for {
+      federation <- Resource.liftF {
+        Task.fromEither((e: String) => new IllegalArgumentException(e)) {
+          val orderedPublicKeys =
+            (keyPair.pub +: config.federation.others.map(_.publicKey))
+              .sortBy(_.bytes.toHex)
+              .toVector
+
+          config.federation.maxFaulty match {
+            case None            => Federation(orderedPublicKeys)
+            case Some(maxFaulty) => Federation(orderedPublicKeys, maxFaulty)
+          }
+        }
+      }
+
+      (viewState, preparedBlock) <- Resource.liftF {
+        storeRunner.runReadOnly {
+          for {
+            bundle        <- viewStateStorage.getBundle
+            maybePrepared <- blockStorage.get(bundle.prepareQC.blockHash)
+            prepared = maybePrepared.getOrElse {
+              throw new IllegalStateException(
+                s"Cannot get the last prepared block from storage."
+              )
+            }
+          } yield (bundle, prepared)
+        }
+      }
+
+      // Start from the next view number, so we aren't in Prepare state when it was, say, PreCommit before.
+      protocolState = ProtocolState[CheckpointingAgreement](
+        viewNumber = viewState.viewNumber.next,
+        phase = Phase.Prepare,
+        publicKey = keyPair.pub,
+        signingKey = keyPair.prv,
+        federation = federation,
+        prepareQC = viewState.prepareQC,
+        lockedQC = viewState.lockedQC,
+        commitQC = viewState.commitQC,
+        preparedBlock = preparedBlock,
+        timeout = config.consensus.minTimeout,
+        votes = Set.empty,
+        newViews = Map.empty
+      )
+
+      _ <- HotStuffService[Task, NS, CheckpointingAgreement](
+        hotstuffNetwork,
+        appService,
+        blockStorage,
+        viewStateStorage,
+        protocolState,
+        consensusConfig = ConsensusService.Config(
+          timeoutPolicy = ConsensusService.TimeoutPolicy.exponential(
+            factor = config.consensus.timeoutFactor,
+            minTimeout = config.consensus.minTimeout,
+            maxTimeout = config.consensus.maxTimeout
+          )
+        )
+      )
+    } yield ()
   }
 
 }

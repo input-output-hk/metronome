@@ -133,6 +133,8 @@ trait RobotComposition {
       viewStateStorage <- makeViewStateStorage(genesis)
       stateStorage     <- makeStateStorage(config, genesisState)
 
+      _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
+
       appService <- makeApplicationService(
         config,
         opts,
@@ -151,8 +153,6 @@ trait RobotComposition {
         blockStorage,
         viewStateStorage
       )
-
-      _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
 
     } yield Storages(blockStorage, viewStateStorage, stateStorage)
   }
