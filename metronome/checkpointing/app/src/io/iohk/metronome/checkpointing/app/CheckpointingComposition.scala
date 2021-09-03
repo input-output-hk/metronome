@@ -1,7 +1,7 @@
 package io.iohk.metronome.checkpointing.app
 
 import cats.implicits._
-import cats.effect.{Resource, Blocker}
+import cats.effect.{Resource, Blocker, Concurrent}
 import io.iohk.metronome.crypto.{
   ECKeyPair,
   ECPublicKey,
@@ -12,22 +12,13 @@ import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.app.codecs.CheckpointingCodecs
 import io.iohk.metronome.checkpointing.app.config.{
   CheckpointingConfig,
-  CheckpointingConfigParser,
-  CheckpointingOptions
+  CheckpointingConfigParser
 }
 import io.iohk.metronome.checkpointing.app.tracing._
 import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
 import io.iohk.metronome.checkpointing.models.{Block, Ledger}
-import io.iohk.metronome.hotstuff.consensus.{
-  Federation,
-  LeaderSelection,
-  ViewNumber
-}
-import io.iohk.metronome.hotstuff.consensus.basic.{
-  QuorumCertificate,
-  Phase,
-  ProtocolState
-}
+import io.iohk.metronome.hotstuff.consensus.{ViewNumber}
+import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.messages.{
   DuplexMessage,
   HotStuffMessage
@@ -38,7 +29,8 @@ import io.iohk.metronome.hotstuff.service.tracing.{
 }
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
-  ViewStateStorage
+  ViewStateStorage,
+  BlockPruning
 }
 import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
@@ -85,10 +77,10 @@ trait CheckpointingComposition {
       config: CheckpointingConfig
   ): Resource[Task, Unit] = {
 
-    implicit val networkTracers: NTS  = makeNetworkTracers
-    implicit val consesusTracers: CTS = makeConsensusTracers
-    implicit val syncTracers: STS     = makeSyncTracers
-    implicit val serviceTracer        = makeServiceTracer
+    implicit val networkTracers: NTS = makeNetworkTracers
+    // implicit val consesusTracers: CTS = makeConsensusTracers
+    // implicit val syncTracers: STS     = makeSyncTracers
+    // implicit val serviceTracer        = makeServiceTracer
 
     for {
       connectionManager <- makeConnectionManager(config)
@@ -101,6 +93,9 @@ trait CheckpointingComposition {
       blockStorage     <- makeBlockStorage(Block.genesis)
       viewStateStorage <- makeViewStateStorage(Block.genesis)
       stateStorage     <- makeStateStorage(config, Ledger.empty)
+
+      _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
+
     } yield ()
   }
 
@@ -338,6 +333,24 @@ trait CheckpointingComposition {
         )
     } yield stateStorage
   }
+
+  protected def makeBlockPruner(
+      config: CheckpointingConfig,
+      blockStorage: BlockStorage[NS, CheckpointingAgreement],
+      viewStateStorage: ViewStateStorage[NS, CheckpointingAgreement]
+  )(implicit storeRunner: KVStoreRunner[Task, NS]) =
+    Concurrent[Task].background {
+      storeRunner
+        .runReadWrite {
+          BlockPruning.prune(
+            blockStorage,
+            viewStateStorage,
+            config.database.blockHistorySize
+          )
+        }
+        .delayResult(config.database.pruneInterval)
+        .foreverM
+    }
 
 }
 

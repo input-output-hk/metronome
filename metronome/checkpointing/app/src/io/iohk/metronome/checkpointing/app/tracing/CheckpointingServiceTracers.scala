@@ -3,10 +3,9 @@ package io.iohk.metronome.checkpointing.app.tracing
 import monix.eval.Task
 import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.hotstuff.consensus.ViewNumber
-import io.iohk.metronome.hotstuff.service.tracing.{SyncEvent, SyncTracers}
 import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.iohk.metronome.checkpointing.models.{Block, Ledger}
-import io.circe.{Encoder, JsonObject, Json}
+import io.circe.{Encoder, JsonObject}
 import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
 import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
 

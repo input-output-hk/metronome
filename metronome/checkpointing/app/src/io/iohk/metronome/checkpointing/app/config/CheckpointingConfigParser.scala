@@ -7,7 +7,6 @@ import io.circe._, io.circe.generic.semiauto._
 import java.nio.file.Path
 import scodec.bits.ByteVector
 import scala.util.Try
-import scodec.Attempt
 
 object CheckpointingConfigParser {
   def parse(root: Config): ConfigParser.Result[CheckpointingConfig] = {

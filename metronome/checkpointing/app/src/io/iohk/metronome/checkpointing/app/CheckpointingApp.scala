@@ -7,7 +7,6 @@ import io.iohk.metronome.checkpointing.app.config.{
   CheckpointingConfigParser,
   CheckpointingOptions
 }
-import io.iohk.metronome.checkpointing.app.config.CheckpointingConfig
 
 object CheckpointingApp extends TaskApp {
   override def run(args: List[String]): Task[ExitCode] = {

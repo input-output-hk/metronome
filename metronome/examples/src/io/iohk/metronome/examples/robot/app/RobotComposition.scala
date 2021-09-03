@@ -27,7 +27,8 @@ import io.iohk.metronome.hotstuff.service.messages.{
 }
 import io.iohk.metronome.hotstuff.service.storage.{
   BlockStorage,
-  ViewStateStorage
+  ViewStateStorage,
+  BlockPruning
 }
 import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
@@ -485,29 +486,14 @@ trait RobotComposition {
       viewStateStorage: ViewStateStorage[NS, RobotAgreement]
   )(implicit storeRunner: KVStoreRunner[Task, NS]) =
     Concurrent[Task].background {
-      val query: KVStore[NS, Unit] = for {
-        // Always keep the last executed block.
-        lastExecutedBlock <- viewStateStorage.getLastExecutedBlockHash.lift
-        pathFromRoot      <- blockStorage.getPathFromRoot(lastExecutedBlock).lift
-
-        // Keep the last N blocks.
-        pruneable = pathFromRoot.reverse
-          .drop(config.db.blockHistorySize)
-          .reverse
-
-        // Make the last pruneable block the new root.
-        _ <- pruneable.lastOption match {
-          case Some(newRoot) =>
-            blockStorage.pruneNonDescendants(newRoot) >>
-              viewStateStorage.setRootBlockHash(newRoot)
-
-          case None =>
-            KVStore.instance[NS].unit
-        }
-      } yield ()
-
       storeRunner
-        .runReadWrite(query)
+        .runReadWrite {
+          BlockPruning.prune(
+            blockStorage,
+            viewStateStorage,
+            config.db.blockHistorySize
+          )
+        }
         .delayResult(config.db.pruneInterval)
         .foreverM
     }
