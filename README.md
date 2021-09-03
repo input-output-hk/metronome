@@ -160,6 +160,11 @@ metronome {
       others = [
       ]
     }
+    local {
+      interpreter {
+        public-key = $(jq -r ".publicKey" keys.json)
+      }
+    }
   }
 }
 EOF

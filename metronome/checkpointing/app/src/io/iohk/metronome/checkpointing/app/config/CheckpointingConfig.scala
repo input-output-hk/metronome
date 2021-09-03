@@ -57,8 +57,9 @@ object CheckpointingConfig {
 
   case class LocalNetwork(
       listen: Socket,
-      target: Socket,
-      timeout: FiniteDuration
+      interpreter: RemoteNode,
+      timeout: FiniteDuration,
+      expectCheckpointCandidateNotifications: Boolean
   )
 
   case class Database(

@@ -7,8 +7,11 @@ import cats.implicits._
 import io.iohk.metronome.core.messages.{RPCSupport, RPCTracker}
 import io.iohk.metronome.crypto.ECPublicKey
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
-import io.iohk.metronome.checkpointing.interpreter.InterpreterService.InterpreterConnection
-import io.iohk.metronome.checkpointing.interpreter.{InterpreterRPC, ServiceRPC}
+import io.iohk.metronome.checkpointing.interpreter.{
+  InterpreterRPC,
+  ServiceRPC,
+  InterpreterConnection
+}
 import io.iohk.metronome.checkpointing.models.Transaction.CheckpointCandidate
 import io.iohk.metronome.checkpointing.models.{
   Block,

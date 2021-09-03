@@ -7,6 +7,6 @@ object CheckpointingNamespaces extends NamespaceRegistry {
   val BlockMeta       = register("block-meta")
   val BlockToChildren = register("block-to-children")
   val ViewState       = register("view-state")
-  val State           = register("state")
-  val StateMeta       = register("state-meta")
+  val Ledger          = register("ledger")
+  val LedgerMeta      = register("ledger-meta")
 }

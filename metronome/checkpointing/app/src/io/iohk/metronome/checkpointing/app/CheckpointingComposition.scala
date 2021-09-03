@@ -15,8 +15,14 @@ import io.iohk.metronome.checkpointing.app.config.{
   CheckpointingConfigParser
 }
 import io.iohk.metronome.checkpointing.app.tracing._
+import io.iohk.metronome.checkpointing.service.CheckpointingService
 import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
+import io.iohk.metronome.checkpointing.service.tracing.CheckpointingEvent
+import io.iohk.metronome.checkpointing.service.storage.LedgerStorage
 import io.iohk.metronome.checkpointing.models.{Block, Ledger}
+import io.iohk.metronome.checkpointing.interpreter.InterpreterConnection
+import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
+import io.iohk.metronome.checkpointing.interpreter.codecs.DefaultInterpreterCodecs
 import io.iohk.metronome.hotstuff.consensus.{ViewNumber}
 import io.iohk.metronome.hotstuff.consensus.basic.{QuorumCertificate, Phase}
 import io.iohk.metronome.hotstuff.service.messages.{
@@ -36,6 +42,7 @@ import io.iohk.metronome.networking.{
   EncryptedConnectionProvider,
   ScalanetConnectionProvider,
   RemoteConnectionManager,
+  LocalConnectionManager,
   NetworkTracers,
   Network
 }
@@ -45,7 +52,6 @@ import io.iohk.metronome.storage.{
   KVStoreRead,
   KVStore,
   KVCollection,
-  KVRingBuffer,
   KVTree
 }
 import io.iohk.scalanet.peergroup.dynamictls.DynamicTLSPeerGroup
@@ -55,52 +61,92 @@ import java.nio.file.Files
 import monix.eval.Task
 import monix.execution.Scheduler
 import scodec.Codec
+import io.iohk.metronome.tracer.Tracer
+import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
+import java.net.InetSocketAddress
 
 /** Object composition, allowing overrides in integration tests. */
 trait CheckpointingComposition {
   import CheckpointingCodecs._
+  import DefaultInterpreterCodecs.interpreterMessageCodec
 
-  type NetworkMessage =
+  type RemoteNetworkMessage =
     DuplexMessage[CheckpointingAgreement, CheckpointingMessage]
 
   type ConnectionManager =
-    RemoteConnectionManager[Task, ECPublicKey, NetworkMessage]
+    RemoteConnectionManager[Task, ECPublicKey, RemoteNetworkMessage]
 
   type NS = RocksDBStore.Namespace
 
-  type NTS = NetworkTracers[Task, ECPublicKey, NetworkMessage]
-  type CTS = ConsensusTracers[Task, CheckpointingAgreement]
-  type STS = SyncTracers[Task, CheckpointingAgreement]
+  type RNTS = NetworkTracers[Task, ECPublicKey, RemoteNetworkMessage]
+  type LNTS = NetworkTracers[Task, ECPublicKey, InterpreterMessage]
+  type CTS  = ConsensusTracers[Task, CheckpointingAgreement]
+  type STS  = SyncTracers[Task, CheckpointingAgreement]
 
   /** Wire together the Checkpointing Service. */
   def compose(
       config: CheckpointingConfig
   ): Resource[Task, Unit] = {
 
-    implicit val networkTracers: NTS = makeNetworkTracers
+    implicit val remoteNetworkTracers = makeRemoteNetworkTracers
+    implicit val localNetworkTracers  = makeLocalNetworkTracers
     // implicit val consesusTracers: CTS = makeConsensusTracers
     // implicit val syncTracers: STS     = makeSyncTracers
-    // implicit val serviceTracer        = makeServiceTracer
+    implicit val serviceTracer = makeServiceTracer
 
     for {
-      connectionManager <- makeConnectionManager(config)
+      keyPair <- Resource.liftF(readPrivateKey(config)).map { privateKey =>
+        ECKeyPair(privateKey.underlying)
+      }
 
-      (hotstuffNetwork, applicationNetwork) <- makeNetworks(connectionManager)
+      remoteConnectionProvider <- makeRemoteConnectionProvider(
+        config,
+        keyPair
+      )
+      remoteConnectionManager <- makeRemoteConnectionManager(
+        config,
+        remoteConnectionProvider
+      )
+      (hotstuffNetwork, applicationNetwork) <- makeNetworks(
+        remoteConnectionManager
+      )
+
+      localConnectionProvider <- makeLocalConnectionProvider(
+        config,
+        keyPair
+      )
+      localConnectionManager <- makeLocalConnectionManager(
+        config,
+        localConnectionProvider
+      )
 
       db <- makeRocksDBStore(config)
       implicit0(storeRunner: KVStoreRunner[Task, NS]) = makeKVStoreRunner(db)
 
       blockStorage     <- makeBlockStorage(Block.genesis)
       viewStateStorage <- makeViewStateStorage(Block.genesis)
-      stateStorage     <- makeStateStorage(config, Ledger.empty)
+      ledgerStorage    <- makeLedgerStorage(config, Ledger.empty)
 
       _ <- makeBlockPruner(config, blockStorage, viewStateStorage)
+
+      appService <- makeApplicationService(
+        config,
+        keyPair.pub,
+        applicationNetwork,
+        localConnectionManager,
+        blockStorage,
+        viewStateStorage,
+        ledgerStorage
+      )
 
     } yield ()
   }
 
-  protected def makeNetworkTracers =
-    CheckpointingNetworkTracers.networkHybridLogTracers
+  protected def makeRemoteNetworkTracers =
+    CheckpointingRemoteNetworkTracers.networkHybridLogTracers
+
+  protected def makeLocalNetworkTracers =
+    CheckpointingLocalNetworkTracers.networkHybridLogTracers
 
   protected def makeConsensusTracers =
     CheckpointingConsensusTracers.consensusHybridLogTracers
@@ -111,25 +157,67 @@ trait CheckpointingComposition {
   protected def makeServiceTracer =
     CheckpointingServiceTracers.serviceEventHybridLogTracer
 
-  protected def makeConnectionManager(
-      config: CheckpointingConfig
-  )(implicit
-      networkTracers: NTS
-  ): Resource[Task, ConnectionManager] =
+  protected def makeConnectionProvider[M: Codec](
+      bindAddress: InetSocketAddress,
+      keyPair: ECKeyPair,
+      name: String
+  ) = {
     for {
-      connectionProvider <- makeConnectionProvider(config)
-      connectionManager  <- makeConnectionManager(config, connectionProvider)
-    } yield connectionManager
+      implicit0(scheduler: Scheduler) <- Resource.make(
+        Task(Scheduler.io(s"scalanet-$name"))
+      )(scheduler => Task(scheduler.shutdown()))
 
-  protected def makeConnectionManager(
+      connectionProvider <- ScalanetConnectionProvider[
+        Task,
+        ECPublicKey,
+        M
+      ](
+        bindAddress = bindAddress,
+        nodeKeyPair = keyPair,
+        new SecureRandom(),
+        useNativeTlsImplementation = true,
+        framingConfig = DynamicTLSPeerGroup.FramingConfig
+          .buildStandardFrameConfig(
+            maxFrameLength = 1024 * 1024,
+            lengthFieldLength = 8
+          )
+          .fold(e => sys.error(e.description), identity),
+        maxIncomingQueueSizePerPeer = 100
+      )
+    } yield connectionProvider
+  }
+
+  protected def makeRemoteConnectionProvider(
+      config: CheckpointingConfig,
+      keyPair: ECKeyPair
+  ) = {
+    makeConnectionProvider[RemoteNetworkMessage](
+      bindAddress = config.remote.listen.address,
+      keyPair = keyPair,
+      name = "remote"
+    )
+  }
+
+  protected def makeLocalConnectionProvider(
+      config: CheckpointingConfig,
+      keyPair: ECKeyPair
+  ) = {
+    makeConnectionProvider[InterpreterMessage](
+      bindAddress = config.local.listen.address,
+      keyPair = keyPair,
+      name = "local"
+    )
+  }
+
+  protected def makeRemoteConnectionManager(
       config: CheckpointingConfig,
       connectionProvider: EncryptedConnectionProvider[
         Task,
         ECPublicKey,
-        NetworkMessage
+        RemoteNetworkMessage
       ]
   )(implicit
-      networkTracers: NTS
+      networkTracers: RNTS
   ): Resource[Task, ConnectionManager] = {
 
     val clusterConfig = RemoteConnectionManager.ClusterConfig(
@@ -142,38 +230,30 @@ trait CheckpointingComposition {
     RemoteConnectionManager[
       Task,
       ECPublicKey,
-      NetworkMessage
+      RemoteNetworkMessage
     ](connectionProvider, clusterConfig, retryConfig)
   }
 
-  protected def makeConnectionProvider(
-      config: CheckpointingConfig
-  ) = {
-    for {
-      implicit0(scheduler: Scheduler) <- Resource.make(
-        Task(Scheduler.io("scalanet"))
-      )(scheduler => Task(scheduler.shutdown()))
-
-      privateKey <- Resource.liftF(readPrivateKey(config))
-
-      connectionProvider <- ScalanetConnectionProvider[
+  protected def makeLocalConnectionManager(
+      config: CheckpointingConfig,
+      connectionProvider: EncryptedConnectionProvider[
         Task,
         ECPublicKey,
-        NetworkMessage
-      ](
-        bindAddress = config.remote.listen.address,
-        nodeKeyPair = ECKeyPair(privateKey.underlying),
-        new SecureRandom(),
-        useNativeTlsImplementation = true,
-        framingConfig = DynamicTLSPeerGroup.FramingConfig
-          .buildStandardFrameConfig(
-            maxFrameLength = 1024 * 1024,
-            lengthFieldLength = 8
-          )
-          .fold(e => sys.error(e.description), identity),
-        maxIncomingQueueSizePerPeer = 100
-      )
-    } yield connectionProvider
+        InterpreterMessage
+      ]
+  )(implicit
+      networkTracers: LNTS
+  ): Resource[Task, InterpreterConnection[Task]] = {
+    LocalConnectionManager[
+      Task,
+      ECPublicKey,
+      InterpreterMessage
+    ](
+      connectionProvider,
+      targetKey = config.local.interpreter.publicKey,
+      targetAddress = config.local.interpreter.address,
+      retryConfig = RemoteConnectionManager.RetryConfig.default
+    )
   }
 
   protected def readPrivateKey(
@@ -196,14 +276,14 @@ trait CheckpointingComposition {
       connectionManager: RemoteConnectionManager[
         Task,
         ECPublicKey,
-        NetworkMessage
+        RemoteNetworkMessage
       ]
   ) = {
     val network = Network
       .fromRemoteConnnectionManager[
         Task,
         CheckpointingAgreement.PKey,
-        NetworkMessage
+        RemoteNetworkMessage
       ](
         connectionManager
       )
@@ -212,7 +292,7 @@ trait CheckpointingComposition {
       (hotstuffNetwork, applicationNetwork) <- Network.splitter[
         Task,
         CheckpointingAgreement.PKey,
-        NetworkMessage,
+        RemoteNetworkMessage,
         HotStuffMessage[CheckpointingAgreement],
         CheckpointingMessage
       ](network)(
@@ -309,7 +389,7 @@ trait CheckpointingComposition {
     }
   }
 
-  protected def makeStateStorage(
+  protected def makeLedgerStorage(
       config: CheckpointingConfig,
       genesisState: Ledger
   )(implicit
@@ -317,7 +397,9 @@ trait CheckpointingComposition {
   ) = Resource.liftF {
     for {
       coll <- Task.pure {
-        new KVCollection[NS, Ledger.Hash, Ledger](CheckpointingNamespaces.State)
+        new KVCollection[NS, Ledger.Hash, Ledger](
+          CheckpointingNamespaces.Ledger
+        )
       }
       // Insert the genesis state straight into the underlying collection,
       // not the ringbuffer, so it doesn't get evicted if we restart the
@@ -326,9 +408,9 @@ trait CheckpointingComposition {
         coll.put(genesisState.hash, genesisState)
       }
       stateStorage =
-        new KVRingBuffer[NS, Ledger.Hash, Ledger](
+        new LedgerStorage[NS](
           coll,
-          metaNamespace = CheckpointingNamespaces.StateMeta,
+          ledgerMetaNamespace = CheckpointingNamespaces.LedgerMeta,
           maxHistorySize = config.database.stateHistorySize
         )
     } yield stateStorage
@@ -351,6 +433,38 @@ trait CheckpointingComposition {
         .delayResult(config.database.pruneInterval)
         .foreverM
     }
+
+  protected def makeApplicationService(
+      config: CheckpointingConfig,
+      publicKey: ECPublicKey,
+      applicationNetwork: Network[
+        Task,
+        CheckpointingAgreement.PKey,
+        CheckpointingMessage
+      ],
+      interpreterConnection: InterpreterConnection[Task],
+      blockStorage: BlockStorage[NS, CheckpointingAgreement],
+      viewStateStorage: ViewStateStorage[NS, CheckpointingAgreement],
+      ledgerStorage: LedgerStorage[NS]
+  )(implicit
+      storeRunner: KVStoreRunner[Task, NS],
+      serviceTracers: Tracer[Task, CheckpointingEvent]
+  ) = {
+    CheckpointingService[Task, NS](
+      publicKey = publicKey,
+      network = applicationNetwork,
+      ledgerStorage = ledgerStorage,
+      blockStorage = blockStorage,
+      viewStateStorage = viewStateStorage,
+      interpreterConnection = interpreterConnection,
+      config = CheckpointingService.Config(
+        expectCheckpointCandidateNotifications =
+          config.local.expectCheckpointCandidateNotifications,
+        interpreterTimeout = config.local.timeout,
+        networkTimeout = config.remote.timeout
+      )
+    )
+  }
 
 }
 
