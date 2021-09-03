@@ -73,9 +73,6 @@ trait CheckpointingComposition {
   type RemoteNetworkMessage =
     DuplexMessage[CheckpointingAgreement, CheckpointingMessage]
 
-  type ConnectionManager =
-    RemoteConnectionManager[Task, ECPublicKey, RemoteNetworkMessage]
-
   type NS = RocksDBStore.Namespace
 
   type RNTS = NetworkTracers[Task, ECPublicKey, RemoteNetworkMessage]
@@ -90,8 +87,8 @@ trait CheckpointingComposition {
 
     implicit val remoteNetworkTracers = makeRemoteNetworkTracers
     implicit val localNetworkTracers  = makeLocalNetworkTracers
-    // implicit val consesusTracers: CTS = makeConsensusTracers
-    // implicit val syncTracers: STS     = makeSyncTracers
+    // implicit val consesusTracers = makeConsensusTracers
+    // implicit val syncTracers     = makeSyncTracers
     implicit val serviceTracer = makeServiceTracer
 
     for {
@@ -142,16 +139,16 @@ trait CheckpointingComposition {
     } yield ()
   }
 
-  protected def makeRemoteNetworkTracers =
+  protected def makeRemoteNetworkTracers: RNTS =
     CheckpointingRemoteNetworkTracers.networkHybridLogTracers
 
-  protected def makeLocalNetworkTracers =
+  protected def makeLocalNetworkTracers: LNTS =
     CheckpointingLocalNetworkTracers.networkHybridLogTracers
 
-  protected def makeConsensusTracers =
+  protected def makeConsensusTracers: CTS =
     CheckpointingConsensusTracers.consensusHybridLogTracers
 
-  protected def makeSyncTracers =
+  protected def makeSyncTracers: STS =
     CheckpointingSyncTracers.syncHybridLogTracers
 
   protected def makeServiceTracer =
@@ -218,8 +215,7 @@ trait CheckpointingComposition {
       ]
   )(implicit
       networkTracers: RNTS
-  ): Resource[Task, ConnectionManager] = {
-
+  ) = {
     val clusterConfig = RemoteConnectionManager.ClusterConfig(
       clusterNodes = config.federation.others.map { node =>
         node.publicKey -> node.address
@@ -243,7 +239,7 @@ trait CheckpointingComposition {
       ]
   )(implicit
       networkTracers: LNTS
-  ): Resource[Task, InterpreterConnection[Task]] = {
+  ) = {
     LocalConnectionManager[
       Task,
       ECPublicKey,

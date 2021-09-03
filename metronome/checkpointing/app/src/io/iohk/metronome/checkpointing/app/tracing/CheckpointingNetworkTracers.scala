@@ -2,14 +2,16 @@ package io.iohk.metronome.checkpointing.app.tracing
 
 import monix.eval.Task
 import io.iohk.metronome.checkpointing.CheckpointingAgreement
+import io.iohk.metronome.checkpointing.service.messages.CheckpointingMessage
+import io.iohk.metronome.hotstuff.service.messages.DuplexMessage
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.networking.{NetworkTracers, NetworkEvent}
 import io.iohk.metronome.logging.{HybridLog, HybridLogObject, LogTracer}
 import io.circe.{Encoder, JsonObject}
 
-object CheckpointingLocalNetworkTracers {
+trait CheckpointingNetworkTracers[M] {
   type CheckpointingNetworkEvent =
-    NetworkEvent[CheckpointingAgreement.PKey, InterpreterMessage]
+    NetworkEvent[CheckpointingAgreement.PKey, M]
 
   implicit val networkEventHybridLog
       : HybridLog[Task, CheckpointingNetworkEvent] = {
@@ -61,3 +63,11 @@ object CheckpointingLocalNetworkTracers {
   implicit val networkHybridLogTracers =
     NetworkTracers(networkEventHybridLogTracer)
 }
+
+object CheckpointingLocalNetworkTracers
+    extends CheckpointingNetworkTracers[InterpreterMessage]
+
+object CheckpointingRemoteNetworkTracers
+    extends CheckpointingNetworkTracers[
+      DuplexMessage[CheckpointingAgreement, CheckpointingMessage]
+    ]
