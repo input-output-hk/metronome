@@ -23,12 +23,14 @@ class ConfigParserSpec
   }
 
   "toJsonEscape" should "parse and escape escape.conf to JSON" in {
-    val conf = ConfigFactory.parseString("""{"java_home":"C:\\Program Files\\java\\jdk-8\""}""")
+    val conf = ConfigFactory.parseString(
+      """{"java_home":"C:\\Program Files\\java\\jdk-8\""}"""
+    )
     val orig = ConfigParser.toJson(conf.root())
     val json = ConfigParser.withCamelCase(orig)
 
     val env = Map(
-      "JAVA_HOME"     -> """C:\Program Files\java\jdk-11"""",
+      "JAVA_HOME" -> """C:\Program Files\java\jdk-11""""
     )
 
     val result = ConfigParser.withEnvVarOverrides(json, "", env)
