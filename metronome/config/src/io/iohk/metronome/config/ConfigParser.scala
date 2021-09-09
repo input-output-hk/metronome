@@ -1,10 +1,11 @@
 package io.iohk.metronome.config
 
 import cats.implicits._
-import com.typesafe.config.{ConfigObject, ConfigRenderOptions}
-import io.circe.{Json, JsonObject, ParsingFailure, Decoder, DecodingFailure}
+import com.typesafe.config.{ConfigObject, ConfigRenderOptions, ConfigUtil}
+import io.circe.{Decoder, DecodingFailure, Json, JsonObject, ParsingFailure}
 import io.circe.parser.{parse => parseJson}
-import scala.util.{Try, Success, Failure}
+
+import scala.util.{Failure, Success, Try}
 
 object ConfigParser {
   protected[config] type ParsingResult = Either[ParsingFailure, Json]
@@ -142,9 +143,12 @@ object ConfigParser {
         env
           .get(path)
           .map { value =>
-            val maybeJson = parseJson(value) orElse parseJson(s""""$value"""")
+            val maybeJson = parseJson(value) orElse parseJson(ConfigUtil.quoteString(value))
 
-            maybeJson.flatMap { json =>
+            maybeJson.left.map { err =>
+              val msg = s"Could not parse value for $path: $value"
+              ParsingFailure(msg, err)
+            }.flatMap { json =>
               if (validate(json)) {
                 Right(json)
               } else {
