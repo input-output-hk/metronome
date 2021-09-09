@@ -143,19 +143,22 @@ object ConfigParser {
         env
           .get(path)
           .map { value =>
-            val maybeJson = parseJson(value) orElse parseJson(ConfigUtil.quoteString(value))
+            val maybeJson =
+              parseJson(value) orElse parseJson(ConfigUtil.quoteString(value))
 
-            maybeJson.left.map { err =>
-              val msg = s"Could not parse value for $path: $value"
-              ParsingFailure(msg, err)
-            }.flatMap { json =>
-              if (validate(json)) {
-                Right(json)
-              } else {
-                val msg = s"Invalid value for $path: $value"
-                Left(ParsingFailure(value, new IllegalArgumentException(msg)))
+            maybeJson.left
+              .map { err =>
+                val msg = s"Could not parse value for $path: $value"
+                ParsingFailure(msg, err)
               }
-            }
+              .flatMap { json =>
+                if (validate(json)) {
+                  Right(json)
+                } else {
+                  val msg = s"Invalid value for $path: $value"
+                  Left(ParsingFailure(value, new IllegalArgumentException(msg)))
+                }
+              }
           }
           .getOrElse(Right(default))
 
