@@ -142,6 +142,40 @@ class ConfigParserSpec
     }
   }
 
+  it should "deal with escape characters according to rfc7159 (section-7)" in {
+    val conf = ConfigFactory.parseString("""{"quotation_mark":"",
+        |"reverse_solidus":"",
+        |"solidus":"",
+        |"backspace":"",
+        |"form_feed":"",
+        |"line_feed":"",
+        |"carriage_return":"",
+        |"tab":"",
+        |"java_home":"C:\\Program Files\\java\\jdk-8\\bin"}""".stripMargin)
+
+    val orig = ConfigParser.toJson(conf.root())
+    val json = ConfigParser.withCamelCase(orig)
+
+    val env = Map(
+      "QUOTATION_MARK"  -> "\"",
+      "REVERSE_SOLIDUS" -> "\\",
+      "SOLIDUS"         -> "/",
+      "BACKSPACE"       -> "\b",
+      "FORM_FEED"       -> "\f",
+      "LINE_FEED"       -> "\n",
+      "CARRIAGE_RETURN" -> "\r",
+      "TAB"             -> "\t",
+      "JAVA_HOME"       -> "C:\\Program Files\\java\\jdk-11\\bin"
+    )
+
+    val result = ConfigParser.withEnvVarOverrides(json, "", env)
+
+    inside(result) { case Right(json) =>
+      json.noSpaces shouldBe
+        """{"backspace":"\b","carriageReturn":"\r","formFeed":"\f","javaHome":"C:\\Program Files\\java\\jdk-11\\bin","lineFeed":"\n","quotationMark":"\"","reverseSolidus":"\\","solidus":"/","tab":"\t"}""".stripMargin
+    }
+  }
+
   it should "validate that data types are not altered" in {
     val conf = ConfigFactory.load("override.conf")
     val orig = ConfigParser.toJson(conf.root())
