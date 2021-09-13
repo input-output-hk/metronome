@@ -174,14 +174,14 @@ trait CheckpointingComposition {
   protected def makeSyncTracers: STS =
     CheckpointingSyncTracers.syncHybridLogTracers
 
-  protected def makeServiceTracer =
+  protected def makeServiceTracer: Tracer[Task, CheckpointingEvent] =
     CheckpointingServiceTracers.serviceEventHybridLogTracer
 
   protected def makeConnectionProvider[M: Codec](
       bindAddress: InetSocketAddress,
       keyPair: ECKeyPair,
       name: String
-  ) = {
+  ): Resource[Task, EncryptedConnectionProvider[Task, ECPublicKey, M]] = {
     for {
       implicit0(scheduler: Scheduler) <- Resource.make(
         Task(Scheduler.io(s"scalanet-$name"))
@@ -210,7 +210,11 @@ trait CheckpointingComposition {
   protected def makeRemoteConnectionProvider(
       config: CheckpointingConfig,
       keyPair: ECKeyPair
-  ) = {
+  ): Resource[Task, EncryptedConnectionProvider[
+    Task,
+    ECPublicKey,
+    RemoteNetworkMessage
+  ]] = {
     makeConnectionProvider[RemoteNetworkMessage](
       bindAddress = config.remote.listen.address,
       keyPair = keyPair,
@@ -221,7 +225,11 @@ trait CheckpointingComposition {
   protected def makeLocalConnectionProvider(
       config: CheckpointingConfig,
       keyPair: ECKeyPair
-  ) = {
+  ): Resource[Task, EncryptedConnectionProvider[
+    Task,
+    ECPublicKey,
+    InterpreterMessage
+  ]] = {
     makeConnectionProvider[InterpreterMessage](
       bindAddress = config.local.listen.address,
       keyPair = keyPair,
@@ -238,7 +246,11 @@ trait CheckpointingComposition {
       ]
   )(implicit
       networkTracers: RNTS
-  ) = {
+  ): Resource[Task, RemoteConnectionManager[
+    Task,
+    ECPublicKey,
+    RemoteNetworkMessage
+  ]] = {
     val clusterConfig = RemoteConnectionManager.ClusterConfig(
       clusterNodes = config.federation.others.map { node =>
         node.publicKey -> node.address
@@ -262,7 +274,11 @@ trait CheckpointingComposition {
       ]
   )(implicit
       networkTracers: LNTS
-  ) = {
+  ): Resource[Task, LocalConnectionManager[
+    Task,
+    ECPublicKey,
+    InterpreterMessage
+  ]] = {
     LocalConnectionManager[
       Task,
       ECPublicKey,
@@ -297,7 +313,13 @@ trait CheckpointingComposition {
         ECPublicKey,
         RemoteNetworkMessage
       ]
-  ) = {
+  ): Resource[
+    Task,
+    (
+        Network[Task, ECPublicKey, HotStuffMessage[CheckpointingAgreement]],
+        Network[Task, ECPublicKey, CheckpointingMessage]
+    )
+  ] = {
     val network = Network
       .fromRemoteConnnectionManager[
         Task,
@@ -329,7 +351,7 @@ trait CheckpointingComposition {
 
   protected def makeRocksDBStore(
       config: CheckpointingConfig
-  ) = {
+  ): Resource[Task, RocksDBStore[Task]] = {
     val dbConfig = RocksDBStore.Config.default(
       config.database.path.resolve(config.name)
     )
@@ -344,12 +366,12 @@ trait CheckpointingComposition {
     } yield db
   }
 
-  protected def makeDBBlocker =
+  protected def makeDBBlocker: Resource[Task, Blocker] =
     Blocker[Task]
 
   protected def makeKVStoreRunner(
       db: RocksDBStore[Task]
-  ) = {
+  ): KVStoreRunner[Task, NS] = {
     new KVStoreRunner[Task, NS] {
       override def runReadOnly[A](
           query: KVStoreRead[NS, A]
@@ -362,7 +384,7 @@ trait CheckpointingComposition {
 
   protected def makeBlockStorage(genesis: Block)(implicit
       storeRunner: KVStoreRunner[Task, NS]
-  ) = {
+  ): Resource[Task, BlockStorage[NS, CheckpointingAgreement]] = {
     implicit def `Codec[Set[T]]`[T: Codec] = {
       import scodec.codecs.implicits._
       Codec[List[T]].xmap[Set[T]](_.toSet, _.toList)
@@ -393,27 +415,28 @@ trait CheckpointingComposition {
 
   protected def makeViewStateStorage(genesis: Block)(implicit
       storeRunner: KVStoreRunner[Task, NS]
-  ) = Resource.liftF {
-    val genesisQC = QuorumCertificate[CheckpointingAgreement, Phase.Prepare](
-      phase = Phase.Prepare,
-      viewNumber = ViewNumber(0),
-      blockHash = genesis.hash,
-      signature = GroupSignature(Nil)
-    )
-    storeRunner.runReadWrite {
-      ViewStateStorage[NS, CheckpointingAgreement](
-        CheckpointingNamespaces.ViewState,
-        genesis = ViewStateStorage.Bundle.fromGenesisQC(genesisQC)
+  ): Resource[Task, ViewStateStorage[NS, CheckpointingAgreement]] =
+    Resource.liftF {
+      val genesisQC = QuorumCertificate[CheckpointingAgreement, Phase.Prepare](
+        phase = Phase.Prepare,
+        viewNumber = ViewNumber(0),
+        blockHash = genesis.hash,
+        signature = GroupSignature(Nil)
       )
+      storeRunner.runReadWrite {
+        ViewStateStorage[NS, CheckpointingAgreement](
+          CheckpointingNamespaces.ViewState,
+          genesis = ViewStateStorage.Bundle.fromGenesisQC(genesisQC)
+        )
+      }
     }
-  }
 
   protected def makeLedgerStorage(
       config: CheckpointingConfig,
       genesisState: Ledger
   )(implicit
       storeRunner: KVStoreRunner[Task, NS]
-  ) = Resource.liftF {
+  ): Resource[Task, LedgerStorage[NS]] = Resource.liftF {
     for {
       coll <- Task.pure {
         new KVCollection[NS, Ledger.Hash, Ledger](
@@ -439,7 +462,7 @@ trait CheckpointingComposition {
       config: CheckpointingConfig,
       blockStorage: BlockStorage[NS, CheckpointingAgreement],
       viewStateStorage: ViewStateStorage[NS, CheckpointingAgreement]
-  )(implicit storeRunner: KVStoreRunner[Task, NS]) =
+  )(implicit storeRunner: KVStoreRunner[Task, NS]): Resource[Task, Unit] =
     Concurrent[Task].background {
       storeRunner
         .runReadWrite {
@@ -451,7 +474,7 @@ trait CheckpointingComposition {
         }
         .delayResult(config.database.pruneInterval)
         .foreverM
-    }
+    }.void
 
   protected def makeApplicationService(
       config: CheckpointingConfig,
@@ -468,7 +491,7 @@ trait CheckpointingComposition {
   )(implicit
       storeRunner: KVStoreRunner[Task, NS],
       serviceTracers: Tracer[Task, CheckpointingEvent]
-  ) = {
+  ): Resource[Task, CheckpointingService[Task, NS]] = {
     CheckpointingService[Task, NS](
       publicKey = publicKey,
       network = applicationNetwork,
@@ -501,7 +524,7 @@ trait CheckpointingComposition {
       storeRunner: KVStoreRunner[Task, NS],
       consensusTracers: CTS,
       syncTracers: STS
-  ) = {
+  ): Resource[Task, Unit] = {
     implicit val leaderSelection = LeaderSelection.Hashing
     implicit val signing         = new CheckpointingSigning(genesis.hash)
 
