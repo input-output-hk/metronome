@@ -19,12 +19,11 @@ object BlockPruning {
       pathFromRoot      <- blockStorage.getPathFromRoot(lastExecutedBlock).lift
 
       // Everything but the last N blocks in the chain leading up to the
-      // last executed block can be pruned.
-      pruneable = pathFromRoot.dropRight(blockHistorySize)
+      // last executed block can be pruned. We do so by making the Nth
+      // ancestor of the last executed block the new root of the tree.
+      maybeNewRoot = pathFromRoot.reverse.lift(blockHistorySize - 1)
 
-      // Make the last pruneable block the new root. This gets rid of all
-      // of its ancestors and the orphaned branches along the way.
-      _ <- pruneable.lastOption match {
+      _ <- maybeNewRoot match {
         case Some(newRoot) =>
           blockStorage.pruneNonDescendants(newRoot) >>
             viewStateStorage.setRootBlockHash(newRoot)
