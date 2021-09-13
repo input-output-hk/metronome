@@ -14,7 +14,8 @@ import org.scalatest.matchers.should.Matchers
 import java.security.SecureRandom
 import scodec.bits.ByteVector
 
-/** A single positive case spec to test type interoperability.
+/** Simple test cases to verify type interoperability.
+  *
   * See [[io.iohk.metronome.hotstuff.consensus.basic.Secp256k1SigningProps]] for a more in-depth test
   */
 class CheckpointingSigningSpec extends AnyFlatSpec with Matchers {
