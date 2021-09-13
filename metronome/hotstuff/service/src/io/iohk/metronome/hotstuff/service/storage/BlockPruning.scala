@@ -7,6 +7,7 @@ import cats.implicits._
 
 object BlockPruning {
 
+  /** Prune blocks which are not descendants of the N-th ancestor of the last executed block. */
   def prune[N, A <: Agreement](
       blockStorage: BlockStorage[N, A],
       viewStateStorage: ViewStateStorage[N, A],
@@ -17,12 +18,12 @@ object BlockPruning {
       lastExecutedBlock <- viewStateStorage.getLastExecutedBlockHash.lift
       pathFromRoot      <- blockStorage.getPathFromRoot(lastExecutedBlock).lift
 
-      // Keep the last N blocks.
-      pruneable = pathFromRoot.reverse
-        .drop(blockHistorySize)
-        .reverse
+      // Everything but the last N blocks in the chain leading up to the
+      // last executed block can be pruned.
+      pruneable = pathFromRoot.dropRight(blockHistorySize)
 
-      // Make the last pruneable block the new root.
+      // Make the last pruneable block the new root. This gets rid of all
+      // of its ancestors and the orphaned branches along the way.
       _ <- pruneable.lastOption match {
         case Some(newRoot) =>
           blockStorage.pruneNonDescendants(newRoot) >>
