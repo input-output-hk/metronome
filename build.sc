@@ -65,7 +65,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Developer("KonradStaniec","Konrad Staniec","https://github.com/KonradStaniec"),
         Developer("rtkaczyk", "Radek Tkaczyk", "https://github.com/rtkaczyk"),
         Developer("biandratti", "Maxi Biandratti", "https://github.com/biandratti"),
-        Developer("dmitry-worker", "Dmitry Voronov", "https://github.com/dmitry-worker")
+        Developer("dmitry-worker", "Dmitry Voronov", "https://github.com/dmitry-worker"),
+        Developer("enrique.rodriguez", "Enrique Rodríguez", "https://github.com/enriquerodbe")
       )
       // format: on
     )
