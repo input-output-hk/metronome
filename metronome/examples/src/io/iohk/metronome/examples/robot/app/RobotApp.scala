@@ -36,7 +36,7 @@ object RobotApp extends TaskApp {
   def setLogProperties(opts: RobotOptions): Task[Unit] = Task {
     // Separate log file for each node.
     System.setProperty("log.file.name", s"robot/logs/node-${opts.nodeIndex}")
-    // Not logging to the console so we can display robot position.
+    // Less logging to the console so we can display robot position.
     System.setProperty("log.console.level", s"INFO")
   }.void
 }

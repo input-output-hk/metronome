@@ -26,7 +26,7 @@ trait InterpreterRPC[F[_]] {
   def createBlockBody(
       ledger: Ledger,
       mempool: Seq[Transaction.ProposerBlock]
-  ): F[Option[Block.Body]]
+  ): F[Option[InterpreterRPC.CreateResult]]
 
   def validateBlockBody(
       blockBody: Block.Body,
@@ -36,4 +36,23 @@ trait InterpreterRPC[F[_]] {
   def newCheckpointCertificate(
       checkpointCertificate: CheckpointCertificate
   ): F[Unit]
+}
+
+object InterpreterRPC {
+
+  /** The block body created by the interpreter with an optional
+    * set of items to unconditionally purge from the mempool.
+    */
+  type CreateResult = (Block.Body, Set[Transaction.ProposerBlock])
+
+  object CreateResult {
+    val empty: CreateResult =
+      (Block.Body.empty, Set.empty)
+
+    def apply(
+        blockBody: Block.Body,
+        purgeFromMempool: Set[Transaction.ProposerBlock] = Set.empty
+    ): CreateResult =
+      blockBody -> purgeFromMempool
+  }
 }

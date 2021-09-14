@@ -2,11 +2,9 @@ package io.iohk.metronome.checkpointing.interpreter
 
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Resource}
-import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.interpreter.tracing.InterpreterEvent
 import io.iohk.metronome.checkpointing.models.Transaction
-import io.iohk.metronome.networking.LocalConnectionManager
 import io.iohk.metronome.tracer.Tracer
 import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
@@ -16,13 +14,6 @@ import io.iohk.metronome.core.messages.RPCPair
   * manage the behind-the-scenes messaging with the Checkpointing Service.
   */
 object InterpreterService {
-
-  type InterpreterConnection[F[_]] =
-    LocalConnectionManager[
-      F,
-      CheckpointingAgreement.PKey,
-      InterpreterMessage
-    ]
 
   private class ServiceImpl[F[_]: Concurrent: Timer](
       localConnectionManager: InterpreterConnection[F],
@@ -54,18 +45,18 @@ object InterpreterService {
             tracer(Error(err))
 
           case req @ CreateBlockBodyRequest(requestId, ledger, mempool) =>
-            respondWith(
-              req,
-              interpreterRpc.createBlockBody(ledger, mempool),
-              CreateBlockBodyResponse(requestId, _)
-            )
+            respondWith(req, interpreterRpc.createBlockBody(ledger, mempool)) {
+              case (body, purgeFromMempool) =>
+                CreateBlockBodyResponse(requestId, body, purgeFromMempool)
+            }
 
           case req @ ValidateBlockBodyRequest(requestId, blockBody, ledger) =>
             respondWith(
               req,
-              interpreterRpc.validateBlockBody(blockBody, ledger),
-              ValidateBlockBodyResponse(requestId, _)
-            )
+              interpreterRpc.validateBlockBody(blockBody, ledger)
+            ) { isValid =>
+              ValidateBlockBodyResponse(requestId, isValid)
+            }
 
           case req @ NewCheckpointCertificateRequest(_, cert) =>
             noResponse(
@@ -79,9 +70,7 @@ object InterpreterService {
         Req <: InterpreterMessage with Request with FromService,
         Res <: InterpreterMessage with Response with FromInterpreter,
         A
-    ](
-        request: Req,
-        maybeResult: F[Option[A]],
+    ](request: Req, maybeResult: F[Option[A]])(
         toResponse: A => Res
     )(implicit ev: RPCPair.Aux[Req, Res]): F[Unit] =
       Concurrent[F].start {

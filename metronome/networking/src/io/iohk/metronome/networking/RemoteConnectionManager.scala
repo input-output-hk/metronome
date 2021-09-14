@@ -22,6 +22,14 @@ trait RemoteConnectionManager[F[_], K, M] {
   def getLocalPeerInfo: (K, InetSocketAddress)
   def getAcquiredConnections: F[Set[K]]
   def incomingMessages: Iterant[F, MessageReceived[K, M]]
+
+  /** Send message to a peer, if they are connected.
+    *
+    * If the recipient is the same as the local peer, the message is immediately
+    * delivered to self, so it's important that each recipient has a separate
+    * identifier, e.g. we don't try to use the same public key locally on two
+    * different ports which are supposed to talk to each other.
+    */
   def sendMessage(
       recipient: K,
       message: M

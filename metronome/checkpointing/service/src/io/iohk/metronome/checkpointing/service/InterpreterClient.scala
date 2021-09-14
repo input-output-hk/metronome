@@ -4,8 +4,11 @@ import cats.implicits._
 import cats.effect.{Concurrent, Timer, Resource, Sync}
 import io.iohk.metronome.core.messages.{RPCTracker, RPCSupport}
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
-import io.iohk.metronome.checkpointing.interpreter.{ServiceRPC, InterpreterRPC}
-import io.iohk.metronome.checkpointing.interpreter.InterpreterService.InterpreterConnection
+import io.iohk.metronome.checkpointing.interpreter.{
+  ServiceRPC,
+  InterpreterRPC,
+  InterpreterConnection
+}
 import io.iohk.metronome.checkpointing.models.{
   Block,
   Ledger,
@@ -48,9 +51,9 @@ object InterpreterClient {
     override def createBlockBody(
         ledger: Ledger,
         mempool: Seq[Transaction.ProposerBlock]
-    ): F[Option[Block.Body]] =
+    ): F[Option[InterpreterRPC.CreateResult]] =
       sendRequest((), CreateBlockBodyRequest(_, ledger, mempool)).map {
-        _.map(_.blockBody)
+        _.map(r => (r.blockBody, r.purgeFromMempool))
       }
 
     override def validateBlockBody(
