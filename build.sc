@@ -65,7 +65,8 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
         Developer("KonradStaniec","Konrad Staniec","https://github.com/KonradStaniec"),
         Developer("rtkaczyk", "Radek Tkaczyk", "https://github.com/rtkaczyk"),
         Developer("biandratti", "Maxi Biandratti", "https://github.com/biandratti"),
-        Developer("dmitry-worker", "Dmitry Voronov", "https://github.com/dmitry-worker")
+        Developer("dmitry-worker", "Dmitry Voronov", "https://github.com/dmitry-worker"),
+        Developer("enrique.rodriguez", "Enrique Rodríguez", "https://github.com/enriquerodbe")
       )
       // format: on
     )
@@ -402,8 +403,10 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     * To actually emit logs, a dependant module also has to add
     * a dependency on e.g. logback.
     */
-  object logging extends SubModule {
-    override def moduleDeps: Seq[JavaModule] =
+  object logging extends SubModule with Publishing {
+    override val description = "Tracing abstractions to do structured logging"
+
+    override def moduleDeps: Seq[PublishModule] =
       Seq(tracing)
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
