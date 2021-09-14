@@ -58,7 +58,7 @@ To run tests, use the wild cards again and the `.test` postix:
 
 ```console
 mill __.test
-mill --watch metronome[2.13.4].rocksdb.test
+mill --watch metronome[2.13.4].rocksdb.props.test
 ```
 
 To run a single test class, use the `.single` method with the full path to the spec. Note that `ScalaTest` tests are in the `specs` subdirectories while `ScalaCheck` ones are in `props`.
@@ -123,3 +123,70 @@ $ tail -f ~/.metronome/examples/robot/logs/node-0.log
 ```
 
 To clear out everything before a restart, just run `rm -rf ~/.metronome/examples/robot`.
+
+
+## Running the Checkpointing Service
+
+First generate some ECDSA keys to be used by the federation, as well as one to be
+used by the PoW interpreter (it has to be different from the key used by the service):
+
+```console
+$ mill metronome[2.13.4].checkpointing.app.run keygen > service-keys.json
+[424/424] metronome[2.13.4].checkpointing.app.run
+$ cat service-keys.json
+{
+  "publicKey" : "ab5944b35a12f87133b5cf525b7a2ecc698a059b4d46898c4f58970e73069aeebeb55765ade41d781120c27ef8a88ae1cb2ff5c2e70345373b524dcfcb6636d5",
+  "privateKey" : "057b39a793c06683b4ebec95456f576be4c44e4404e126f0a46689d259209a75"
+}
+$ mill metronome[2.13.4].checkpointing.app.run keygen > interpreter-keys.json
+[424/424] metronome[2.13.4].checkpointing.app.run
+```
+
+The results can be parsed for example with [jq](https://stedolan.github.io/jq/), as seen in the example below.
+
+Create a config file to provide the necessary settings which the default `application.conf` doesn't have. For example:
+
+```shell
+cat <<EOF >example.conf
+include "/application.conf"
+
+metronome {
+  checkpointing {
+    federation {
+      self {
+        host = $(dig +short myip.opendns.com @resolver4.opendns.com)
+        port = 40000
+        private-key = $(jq -r ".privateKey" service-keys.json)
+      }
+
+      # Append here other the other nodes you create.
+      others = [
+      ]
+    }
+    local {
+      interpreter {
+        public-key = $(jq -r ".publicKey" interpreter-keys.json)
+      }
+    }
+  }
+}
+EOF
+```
+
+Build the service into a fat JAR so we can pass system properties when we run it:
+
+```shell
+SCALA_VER=2.13.4
+ASSEMBLY_JAR=${PWD}/out/metronome/${SCALA_VER}/checkpointing/app/assembly/dest/out.jar
+mill metoronme[$SCALA_VER].checkpointing.app.assembly
+```
+
+Start the service by pointing it at the example configuration:
+
+```console
+$ java -cp $ASSEMBLY_JAR -Dconfig.file=example.conf io.iohk.metronome.checkpointing.app.CheckpointingApp service
+13:22:02.853 WARN  i.i.m.h.s.tracing.ConsensusEvent Timeout {"viewNumber":7,"messageCounter":{"past":0,"present":0,"future":0}}
+13:22:02.895 WARN  i.i.m.c.s.tracing.CheckpointingEvent InterpreterUnavailable {"messageType":"CreateBlockBodyRequest"}
+```
+
+Detailed logs should appear in `~/.metronome/checkpointing/logs/service.log`.

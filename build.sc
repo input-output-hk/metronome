@@ -389,8 +389,11 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
 
       override def ivyDeps = super.ivyDeps() ++ Agg(
         ivy"ch.qos.logback:logback-classic:${VersionOf.logback}",
-        ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}"
+        ivy"io.iohk::scalanet-discovery:${VersionOf.scalanet}",
+        ivy"com.github.scopt::scopt:${VersionOf.scopt}"
       )
+
+      object specs extends SpecsModule
     }
   }
 

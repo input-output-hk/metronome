@@ -2,11 +2,9 @@ package io.iohk.metronome.checkpointing.interpreter
 
 import cats.implicits._
 import cats.effect.{Concurrent, Timer, Resource}
-import io.iohk.metronome.checkpointing.CheckpointingAgreement
 import io.iohk.metronome.checkpointing.interpreter.messages.InterpreterMessage
 import io.iohk.metronome.checkpointing.interpreter.tracing.InterpreterEvent
 import io.iohk.metronome.checkpointing.models.Transaction
-import io.iohk.metronome.networking.LocalConnectionManager
 import io.iohk.metronome.tracer.Tracer
 import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
@@ -16,13 +14,6 @@ import io.iohk.metronome.core.messages.RPCPair
   * manage the behind-the-scenes messaging with the Checkpointing Service.
   */
 object InterpreterService {
-
-  type InterpreterConnection[F[_]] =
-    LocalConnectionManager[
-      F,
-      CheckpointingAgreement.PKey,
-      InterpreterMessage
-    ]
 
   private class ServiceImpl[F[_]: Concurrent: Timer](
       localConnectionManager: InterpreterConnection[F],

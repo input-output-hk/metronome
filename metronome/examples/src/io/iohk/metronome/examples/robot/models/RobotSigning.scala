@@ -5,9 +5,9 @@ import io.iohk.metronome.examples.robot.codecs.RobotCodecs
 import io.iohk.metronome.hotstuff.consensus.Federation
 import io.iohk.metronome.hotstuff.consensus.basic.{
   QuorumCertificate,
-  Secp256k1Signing
+  Secp256k1Signing,
+  VotingPhase
 }
-import io.iohk.metronome.hotstuff.consensus.basic.VotingPhase
 
 class RobotSigning(
     genesisHash: RobotAgreement.Hash
@@ -19,7 +19,7 @@ class RobotSigning(
     ) {
 
   /** Override quorum certificate validation rule so we accept the quorum
-    * certificate we can determinsitcially fabricate without a group signature.
+    * certificate we can determinsiticially fabricate without a group signature.
     */
   override def validate(
       federation: Federation[RobotAgreement.PKey],
