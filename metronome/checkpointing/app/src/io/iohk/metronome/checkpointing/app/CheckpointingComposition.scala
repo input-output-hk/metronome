@@ -532,7 +532,7 @@ trait CheckpointingComposition {
       federation <- Resource.liftF {
         Task.fromEither((e: String) => new IllegalArgumentException(e)) {
           val orderedPublicKeys =
-            (keyPair.pub +: config.federation.others.map(_.publicKey))
+            (keyPair.pub +: config.federation.others.map(_.publicKey)).distinct
               .sortBy(_.bytes.toHex)
               .toVector
 
