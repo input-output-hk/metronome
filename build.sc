@@ -182,7 +182,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   }
 
   /** Storage abstractions, e.g. a generic key-value store. */
-  object storage extends SubModule {
+  object storage extends SubModule with Publishing {
     override def ivyDeps = super.ivyDeps() ++ Agg(
       ivy"org.typelevel::cats-free:${VersionOf.cats}",
       ivy"org.scodec::scodec-bits:${VersionOf.`scodec-bits`}",
@@ -427,7 +427,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
   }
 
   /** Implements the storage abstractions using RocksDB. */
-  object rocksdb extends SubModule {
+  object rocksdb extends SubModule with Publishing {
     override def moduleDeps: Seq[JavaModule] =
       Seq(storage)
 
