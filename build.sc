@@ -434,7 +434,7 @@ class MetronomeModule(val crossScalaVersion: String) extends CrossScalaModule {
     override val description =
       "A functional wrapper for RocksDB"
 
-    override def moduleDeps: Seq[JavaModule] =
+    override def moduleDeps: Seq[PublishModule] =
       Seq(storage)
 
     override def ivyDeps = super.ivyDeps() ++ Agg(
