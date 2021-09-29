@@ -87,16 +87,38 @@ Please configure your editor to use `scalafmt` on save. CI will be configured to
 
 ## Publishing
 
-We're using the [VersionFile](https://com-lihaoyi.github.io/mill/page/contrib-modules.html#version-file) plugin to manage versions.
+We're using the [VersionFile](https://com-lihaoyi.github.io/mill/page/contrib-modules.html#version-file) plugin to manage versions in a semi-manual fashion.
 
 The initial version has been written to the file without newlines:
 ```console
 echo -n "0.1.0-SNAPSHOT" > versionFile/version
 ```
 
-Builds on `develop` will publish the snapshot version to Sonatype, which can be overwritten if the version number is not updated.
+Builds on `develop` will publish the snapshot version to Sonatype, which will be overwritten if the version number is not updated with the next PR.
+Thus, this version should not be used in nixified builds, because the hash of the dependency will change with each PR that adds to the snapshot.
 
 During [publishing](https://com-lihaoyi.github.io/mill/page/common-project-layouts.html#publishing) on `master` we will use `mill versionFile.setReleaseVersion` to remove the `-SNAPSHOT` postfix and make a release. After that the version number should be bumped on `develop`, e.g. `mill versionFile.setNextVersion --bump minor`.
+
+With that in mind, the release process of a new feature looks as follows:
+1. Say `develop` is on version `0.1.0-SNAPSHOT`.
+2. Create a feature branch to work on something new, reflecting the ticket number, e.g. `git checkout -b pm-1001-new-feat`. Prefix each commit message by the ticket number.
+3. Open a PR from `pm-1001-new-feat` to `develop`. No need to modify the version in the PR, you an accumulate as many features and fixes as you like in `develop`.
+4. Merge the PR into `develop` by squashing all commits into one, so each ticket becomes one commit in the history.
+6. Go to 2 until ready to release.
+5. To release, open a PR from `develop` to `master`.
+6. Merge the PR into `master` by creating a merge commit, not a squash, so the history of `master` preserves the individual (squashed) ticket commits.
+7. The publishing of master will push `0.1.0` to Sonatype. We should not merge more stuff into `0.1.0-SNAPSHOT`.
+8. Create a branch to bump the the version on `develop` to `0.2.0-SNAPSHOT`, e.g. `git checkout develop; git checkout -b bump-0.2.0; mill versionFile.setNextVersion --bump minor`.
+9. Alternatively this can be done as part of the next PR; after the first major release this will be better if you don't know if the next change is going to be backwards compatible or not.
+
+To do a hotfix, fix the bug on `master` instead of doing another release from `develop`:
+1. Create a hotfix branch, e.g. `git checkout master; git checkout -b fix-nasty-bug`.
+2. Fix the bug, then run `mill versionFile.setNextVersion --bump patch` to increment the patch version to `0.1.1` (assuming this is the first bug after the release above).
+3. Open a PR from `fix-nasty-bug` to `master`.
+4. Merge the PR into `master` by squashing all commits into one.
+5. Open a PR from `master` to `develop`. Make sure the version number stays `0.2.0-SNAPSHOT`, since the next feature release can incorporate the bug fix, and we don't want to push another `0.1.1` to Sonatype.
+6. Merge into `develop` and carry on adding features.
+
 
 ## Example Applications
 
