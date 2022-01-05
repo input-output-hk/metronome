@@ -54,7 +54,7 @@ jobs:
           paths:
             - ~/.ivy2
             - ~/.cache
-          key: v1-dependencies--{{ checksum "build.sc" }}
+          key: v1-dependencies-{{ checksum "build.sc" }}
 
       - when:
           condition:
